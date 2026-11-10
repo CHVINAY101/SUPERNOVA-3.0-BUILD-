@@ -1,0 +1,8 @@
+{
+  "name": "Supernova 3.0 — The National Education Society of Karnataka",
+  "description": "Supernova 3.0: A celebration of science, creativity, innovation and competition across four flagship zones. 20–21 November 2026 at The National College, Basavanagudi.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

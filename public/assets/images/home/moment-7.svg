@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <defs>
+    <linearGradient id="bg7" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F2EEFC" />
+      <stop offset="50%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#E8E3FA" />
+    </linearGradient>
+    <radialGradient id="glow7" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#7C6CF5" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="100%" height="100%" fill="url(#bg7)" />
+  <circle cx="300" cy="180" r="160" fill="url(#glow7)" />
+
+  <!-- Quadrangle Science Expo Setup -->
+  <g transform="translate(300, 160)" stroke="#2E2A8A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <ellipse cx="0" cy="0" rx="48" ry="18" transform="rotate(25)" />
+    <ellipse cx="0" cy="0" rx="48" ry="18" transform="rotate(-25)" />
+    <circle cx="0" cy="0" r="8" fill="#F47B20" stroke="none" />
+  </g>
+
+  <text x="300" y="250" text-anchor="middle" font-family="'Unbounded', sans-serif" font-weight="800" font-size="19" fill="#0B0B1E" letter-spacing="0.02em">
+    Astronomy & Optics Pavilions
+  </text>
+  <text x="300" y="280" text-anchor="middle" font-family="'Montserrat', sans-serif" font-weight="600" font-size="12" fill="#5648B0" letter-spacing="0.08em">
+    HERITAGE QUADRANGLE
+  </text>
+  <rect x="24" y="24" width="115" height="26" rx="13" fill="rgba(46, 42, 138, 0.08)" stroke="rgba(46, 42, 138, 0.2)" />
+  <text x="81" y="41" text-anchor="middle" font-family="'Montserrat', sans-serif" font-weight="700" font-size="10" fill="#2E2A8A">
+    EDITION ARCHIVE
+  </text>
+</svg>

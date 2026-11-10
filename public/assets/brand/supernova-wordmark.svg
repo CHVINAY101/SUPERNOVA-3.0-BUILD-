@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 220" width="100%" height="100%">
+  <defs>
+    <!-- Violet Gradient for 3.0 -->
+    <linearGradient id="violetGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7C6CF5"/>
+      <stop offset="100%" stop-color="#5648B0"/>
+    </linearGradient>
+
+    <!-- Star Glow -->
+    <radialGradient id="starGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#F47B20" stop-opacity="0.8"/>
+      <stop offset="60%" stop-color="#7C6CF5" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#5648B0" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="orbitGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2E2A8A" stop-opacity="0"/>
+      <stop offset="25%" stop-color="#5648B0" stop-opacity="0.8"/>
+      <stop offset="70%" stop-color="#7C6CF5" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#2E2A8A" stop-opacity="0.1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Swooping Orbit Arc -->
+  <path d="M 50,150 Q 320,20 620,80 T 960,110" fill="none" stroke="url(#orbitGrad)" stroke-width="4.5" stroke-dasharray="8 6" opacity="0.85"/>
+  <path d="M 120,180 Q 450,220 820,140" fill="none" stroke="#CFC8F5" stroke-width="2.5" opacity="0.6"/>
+
+  <!-- Four-Point Star "O" Core Aura -->
+  <circle cx="560" cy="110" r="50" fill="url(#starGlow)"/>
+
+  <!-- Wordmark Letters (Separate groups for interactive targeting) -->
+  <g id="letters" font-family="'Unbounded', sans-serif" font-weight="900" font-size="108" fill="#0B0B1E" letter-spacing="4">
+    <!-- S -->
+    <text x="35" y="145" class="wordmark-letter letter-s">S</text>
+    <!-- U -->
+    <text x="135" y="145" class="wordmark-letter letter-u">U</text>
+    <!-- P -->
+    <text x="245" y="145" class="wordmark-letter letter-p">P</text>
+    <!-- E -->
+    <text x="345" y="145" class="wordmark-letter letter-e">E</text>
+    <!-- R -->
+    <text x="445" y="145" class="wordmark-letter letter-r">R</text>
+    <!-- N -->
+    <text x="548" y="145" class="wordmark-letter letter-n">N</text>
+    
+    <!-- Star-O (Four-Point Star) positioned between N and V -->
+    <g id="star-o" transform="translate(680, 108)">
+      <!-- Outer diamond flare -->
+      <path d="M 0,-44 Q 0,-6 38,0 Q 0,6 0,44 Q 0,6 -38,0 Q 0,-6 0,-44 Z" fill="#2E2A8A"/>
+      <!-- Inner star core -->
+      <path d="M 0,-34 Q 0,-4 28,0 Q 0,4 0,34 Q 0,4 -28,0 Q 0,-4 0,-34 Z" fill="#5648B0"/>
+      <!-- Center point spark -->
+      <polygon points="0,-16 4,-4 16,0 4,4 0,16 -4,4 -16,0 -4,-4" fill="#F47B20"/>
+      <circle cx="0" cy="0" r="3.5" fill="#FFFFFF"/>
+    </g>
+
+    <!-- V -->
+    <text x="735" y="145" class="wordmark-letter letter-v">V</text>
+    <!-- A -->
+    <text x="835" y="145" class="wordmark-letter letter-a">A</text>
+  </g>
+
+  <!-- Violet "3.0" Lockup -->
+  <g id="edition-badge" transform="translate(930, 85)">
+    <rect x="-12" y="-22" width="68" height="38" rx="8" fill="rgba(86, 72, 176, 0.12)" stroke="rgba(86, 72, 176, 0.3)" stroke-width="1.5"/>
+    <text x="22" y="3" font-family="'Unbounded', sans-serif" font-weight="900" font-size="24" fill="url(#violetGrad)" text-anchor="middle">3.0</text>
+  </g>
+</svg>

@@ -1,0 +1,1 @@
+DROP POLICY IF EXISTS "anon_read_open_games" ON public.games;

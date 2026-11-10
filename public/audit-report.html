@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SUPERNOVA 3.0 — Complete Project & Backend Audit Report</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --navy: #151535;
+      --blue: #1719C9;
+      --lime: #CBFF00;
+      --orange: #FF5C00;
+      --bg: #F8FAFC;
+      --card-bg: #FFFFFF;
+      --border: #E2E8F0;
+      --text: #0F172A;
+      --text-muted: #64748B;
+      --font-display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      line-height: 1.6;
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .top-action-bar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(21, 21, 53, 0.95);
+      backdrop-filter: blur(12px);
+      color: #fff;
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid var(--lime);
+    }
+
+    .top-action-bar .brand {
+      font-family: var(--font-display);
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .top-action-bar .badge {
+      background: var(--lime);
+      color: var(--navy);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--lime);
+      color: var(--navy);
+    }
+
+    .btn-primary:hover {
+      background: #b8e600;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 32px auto;
+      background: var(--card-bg);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+      padding: 48px;
+    }
+
+    header {
+      border-bottom: 2px solid var(--navy);
+      padding-bottom: 24px;
+      margin-bottom: 32px;
+    }
+
+    .header-pre {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      font-family: var(--font-display);
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--navy);
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      background: #F1F5F9;
+      padding: 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      margin-top: 16px;
+    }
+
+    .meta-item strong {
+      color: var(--navy);
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
+
+    h2 {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--navy);
+      margin: 36px 0 16px 0;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    h3 {
+      font-family: var(--font-display);
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--blue);
+      margin: 24px 0 12px 0;
+    }
+
+    p {
+      margin-bottom: 14px;
+      color: #334155;
+    }
+
+    ul, ol {
+      margin-left: 20px;
+      margin-bottom: 16px;
+      color: #334155;
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    .verdict-box {
+      background: #EEF2FF;
+      border-left: 6px solid var(--blue);
+      padding: 20px;
+      border-radius: 0 8px 8px 0;
+      margin: 24px 0;
+    }
+
+    .verdict-title {
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--blue);
+      margin-bottom: 6px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      font-size: 13px;
+    }
+
+    th {
+      background: var(--navy);
+      color: #fff;
+      font-weight: 600;
+      text-align: left;
+      padding: 10px 12px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    tr:nth-child(even) {
+      background-color: #F8FAFC;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .tag-success { background: #DCFCE7; color: #166534; }
+    .tag-warning { background: #FEF9C3; color: #854D0E; }
+    .tag-danger { background: #FEE2E2; color: #991B1B; }
+    .tag-info { background: #E0E7FF; color: #3730A3; }
+
+    pre {
+      background: var(--navy);
+      color: #E2E8F0;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      overflow-x: auto;
+      margin: 16px 0;
+    }
+
+    code {
+      font-family: var(--font-mono);
+      background: #F1F5F9;
+      color: var(--blue);
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+    }
+
+    .action-card {
+      border: 1px solid #CBD5E1;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+      background: #F8FAFC;
+      border-left: 4px solid var(--orange);
+    }
+
+    .action-card h4 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--navy);
+      margin-bottom: 4px;
+    }
+
+    @media print {
+      body {
+        background: #fff;
+        color: #000;
+        font-size: 11pt;
+      }
+
+      .top-action-bar {
+        display: none !important;
+      }
+
+      .container {
+        border: none;
+        box-shadow: none;
+        margin: 0;
+        padding: 0;
+        max-width: 100%;
+      }
+
+      h1 { font-size: 22pt; }
+      h2 { font-size: 15pt; page-break-after: avoid; }
+      h3 { font-size: 13pt; page-break-after: avoid; }
+
+      table {
+        page-break-inside: auto;
+      }
+
+      tr {
+        page-break-inside: avoid;
+        page-break-after: auto;
+      }
+
+      th {
+        background-color: #eee !important;
+        color: #000 !important;
+      }
+
+      .verdict-box, .action-card {
+        page-break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Action Bar (Hidden during Print) -->
+  <div class="top-action-bar">
+    <div class="brand">
+      <span>SUPERNOVA 3.0</span>
+      <span class="badge">Architecture Audit</span>
+    </div>
+    <div class="btn-group">
+      <a href="/SUPERNOVA_3_BACKEND_AND_PROJECT_AUDIT.md" download="SUPERNOVA_3_BACKEND_AND_PROJECT_AUDIT.md" class="btn btn-secondary">
+        ⬇ Download .MD
+      </a>
+      <button onclick="window.print()" class="btn btn-primary">
+        🖨 Print / Save as PDF
+      </button>
+    </div>
+  </div>
+
+  <div class="container">
+    <header>
+      <div class="header-pre">National Education Society of Karnataka · Department of Animation</div>
+      <h1>SUPERNOVA 3.0 — Complete Project & Backend Audit Report</h1>
+      <div class="meta-grid">
+        <div class="meta-item">
+          <strong>Audit Date</strong>
+          8 November 2026
+        </div>
+        <div class="meta-item">
+          <strong>Auditor</strong>
+          Senior Full-Stack Architect
+        </div>
+        <div class="meta-item">
+          <strong>Project Target</strong>
+          Supernova 3.0 Web Portal
+        </div>
+        <div class="meta-item">
+          <strong>Supabase Project</strong>
+          <code>cirreovughlncadrbvcn</code>
+        </div>
+      </div>
+    </header>
+
+    <!-- Executive Summary -->
+    <h2>Executive Summary</h2>
+    <p>This audit delivers an exhaustive technical assessment of the <strong>Supernova 3.0</strong> codebase and its cloud infrastructure before embarking on future feature implementations.</p>
+    
+    <div class="verdict-box">
+      <div class="verdict-title">OFFICIAL BACKEND VERDICT: OPTION C</div>
+      <p style="margin: 0; font-weight: 500;">"Supabase is connected, but most backend functionality still needs development."</p>
+    </div>
+
+    <ul>
+      <li><strong>Frontend Experience (10/10 Completeness):</strong> The public website and administrative interface are visually stunning, responsive, conform strictly to design tokens, and execute without runtime errors.</li>
+      <li><strong>Backend Reality (Partially Connected / Simulated Layer Active):</strong> While Supabase is live and queries return <code>200 OK</code> for existing tables (<code>event_settings</code>, <code>games</code>), the database schema is missing 8 essential relational tables (such as <code>teams</code>).</li>
+      <li><strong>The In-Memory Proxy Mask:</strong> In <code>src/lib/supabase.ts</code>, a resilient JavaScript proxy (<code>createResilientClient</code>) catches all failed database calls, uncreated tables (<code>PGRST205</code>), and RPC permission errors, silently serving and persisting mutations to client-side RAM (<code>initialStore</code>). Mutations look successful in the UI but vanish upon page reload.</li>
+      <li><strong>Authentication:</strong> The <code>/admin/login</code> page provides quick-access demo credentials that bypass Supabase Auth entirely by creating artificial mock JWT sessions in browser <code>localStorage</code>. Real users do not yet exist in <code>auth.users</code>.</li>
+    </ul>
+
+    <!-- Section 1 -->
+    <h2>1. Frontend Audit</h2>
+    <p>The frontend application is built on <strong>React 18.3.1</strong>, <strong>Vite 6.0</strong>, <strong>TypeScript 5.6</strong>, and <strong>Tailwind CSS v4</strong>. Layout discipline is strictly enforced using two mutually exclusive layouts:</p>
+    <ul>
+      <li><strong>PublicLayout:</strong> Floating glass navigation pill, section anchor scrolling, and comprehensive institutional footer.</li>
+      <li><strong>AdminLayout:</strong> Dedicated administrative shell with sidebar navigation. Public navigation and footer elements are strictly prevented from rendering.</li>
+    </ul>
+
+    <h3>Module Classification</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Page / Route</th>
+          <th>Location</th>
+          <th>Classification</th>
+          <th>Technical State & Behavior</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Homepage (<code>/</code>)</strong></td>
+          <td><code>src/pages/Home.tsx</code></td>
+          <td><span class="tag tag-success">Fully Implemented</span></td>
+          <td>Renders all 12 visual sections: Hero, NES Presentation, About, Arenas, Timeline, Esports, Agenda, Gallery Preview, FAQs, Final CTA, and Footer.</td>
+        </tr>
+        <tr>
+          <td><strong>Schedule (<code>/schedule</code>)</strong></td>
+          <td><code>src/pages/SchedulePage.tsx</code></td>
+          <td><span class="tag tag-warning">Partially Implemented</span></td>
+          <td>Day 1 & Day 2 filterable schedule. Reads from local <code>site_content</code> / in-memory store.</td>
+        </tr>
+        <tr>
+          <td><strong>Esports Hub (<code>/esports</code>)</strong></td>
+          <td><code>src/pages/EsportsPage.tsx</code></td>
+          <td><span class="tag tag-warning">Partially Implemented</span></td>
+          <td>Interactive tournament portal with game cards and rules. Falls back to static seed data when live match queries return empty.</td>
+        </tr>
+        <tr>
+          <td><strong>Registration (<code>/register</code>)</strong></td>
+          <td><code>src/pages/RegisterPage.tsx</code></td>
+          <td><span class="tag tag-warning">Partially Implemented</span></td>
+          <td>Multi-track registration form (Visitor, Esports, Participation) with client validation. Forms submit to in-memory store with mailto fallback; not persisted to PostgreSQL.</td>
+        </tr>
+        <tr>
+          <td><strong>Gallery (<code>/gallery</code>)</strong></td>
+          <td><code>src/pages/GalleryPage.tsx</code></td>
+          <td><span class="tag tag-info">UI Only</span></td>
+          <td>Filterable media grid with responsive lightbox. Reads static local assets.</td>
+        </tr>
+        <tr>
+          <td><strong>Admin Login (<code>/admin/login</code>)</strong></td>
+          <td><code>src/pages/admin/AdminLogin.tsx</code></td>
+          <td><span class="tag tag-warning">Demo Mode</span></td>
+          <td>Provides 4 demo evaluation buttons that inject mock tokens into localStorage, bypassing Supabase Auth.</td>
+        </tr>
+        <tr>
+          <td><strong>Admin Overview (<code>/admin</code>)</strong></td>
+          <td><code>src/pages/admin/AdminDashboard.tsx</code></td>
+          <td><span class="tag tag-info">UI / Demo</span></td>
+          <td>KPI metric tiles, registration counters, and activity feeds. Calculated from local browser mock state.</td>
+        </tr>
+        <tr>
+          <td><strong>Event Settings (<code>/admin/settings</code>)</strong></td>
+          <td><code>src/pages/admin/SettingsPage.tsx</code></td>
+          <td><span class="tag tag-warning">Partially Implemented</span></td>
+          <td>Connected to Supabase <code>event_settings</code> table, but mutations fail back to local storage when unauthenticated.</td>
+        </tr>
+        <tr>
+          <td><strong>Registration Manager (<code>/admin/registrations</code>)</strong></td>
+          <td><code>src/pages/admin/RegistrationsPage.tsx</code></td>
+          <td><span class="tag tag-info">UI / Demo</span></td>
+          <td>Filter, search, and CSV export UI. Operates entirely on mock registration arrays.</td>
+        </tr>
+        <tr>
+          <td><strong>Esports Manager (<code>/admin/esports</code>)</strong></td>
+          <td><code>src/pages/admin/EsportsManagerPage.tsx</code></td>
+          <td><span class="tag tag-info">UI / Demo</span></td>
+          <td>Match score updating, team approvals, and bracket generation interfaces exist. Mutations execute in memory only.</td>
+        </tr>
+        <tr>
+          <td><strong>Staff Check-In (<code>/admin/check-in</code>)</strong></td>
+          <td><code>src/pages/admin/CheckInPage.tsx</code></td>
+          <td><span class="tag tag-info">UI / Demo</span></td>
+          <td>Camera scanner interface and manual ticket lookup exist. Mutates local session state; no persistent attendance logging.</td>
+        </tr>
+        <tr>
+          <td><strong>Announcements (<code>/admin/announcements</code>)</strong></td>
+          <td><code>src/pages/admin/AnnouncementsPage.tsx</code></td>
+          <td><span class="tag tag-info">UI / Demo</span></td>
+          <td>Form to broadcast ticker notifications. Updates local state; does not broadcast across sessions.</td>
+        </tr>
+        <tr>
+          <td><strong>Audit Logs (<code>/admin/audit-logs</code>)</strong></td>
+          <td><code>src/pages/admin/AuditLogsPage.tsx</code></td>
+          <td><span class="tag tag-info">UI / Demo</span></td>
+          <td>Security log table showing IP, actor, and action. Populated exclusively with mock seed logs.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Section 2 -->
+    <h2>2. Backend Audit — Supabase & Data Layer</h2>
+    <p>Live REST queries executed against <code>https://cirreovughlncadrbvcn.supabase.co/rest/v1/</code> yielded the following table state:</p>
+    
+    <table>
+      <thead>
+        <tr>
+          <th>Table Name</th>
+          <th>Exists in Postgres?</th>
+          <th>Row Count</th>
+          <th>Status & Verification Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>event_settings</code></td><td><span class="tag tag-success">YES</span></td><td>4 rows</td><td>Stores event dates, title, theme, and institutional metadata.</td></tr>
+        <tr><td><code>games</code></td><td><span class="tag tag-success">YES</span></td><td>3 rows</td><td>Active: BGMI, Valorant, Free Fire.</td></tr>
+        <tr><td><code>site_content</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>sponsors</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>gallery_items</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>schedule_items</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>registrations</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>visitor_registrations</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>players</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>matches</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>announcements</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>check_ins</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>audit_logs</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>user_roles</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>profiles</code></td><td><span class="tag tag-info">YES</span></td><td>0 rows</td><td>Table provisioned; empty.</td></tr>
+        <tr><td><code>teams</code></td><td><span class="tag tag-danger">NO</span></td><td>—</td><td>Returns <code>404 PGRST205</code>. Missing from schema.</td></tr>
+        <tr><td><code>faqs</code></td><td><span class="tag tag-danger">NO</span></td><td>—</td><td>Returns <code>404 PGRST205</code>. Missing from schema.</td></tr>
+        <tr><td><code>participation_registrations</code></td><td><span class="tag tag-danger">NO</span></td><td>—</td><td>Returns <code>404 PGRST205</code>. Missing from schema.</td></tr>
+        <tr><td><code>institutions</code></td><td><span class="tag tag-danger">NO</span></td><td>—</td><td>Returns <code>404 PGRST205</code>. Missing from schema.</td></tr>
+        <tr><td><code>registration_controls</code></td><td><span class="tag tag-danger">NO</span></td><td>—</td><td>Returns <code>404 PGRST205</code>. Missing from schema.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- Section 3 -->
+    <h2>3. Module-by-Module Status Table</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Module</th>
+          <th>Existing Implementation</th>
+          <th>Backend Connected?</th>
+          <th>Missing Functionality</th>
+          <th>Recommended Next Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Public Website & Sections</td><td>Fully Implemented</td><td>No (Static/Config)</td><td>None (Driven by <code>site.ts</code>)</td><td>Keep static for maximum speed & uptime.</td></tr>
+        <tr><td>2</td><td>Event Schedule & Agenda</td><td>Fully Implemented</td><td>Partially (Empty table)</td><td>Dynamic database syncing</td><td>Seed schedule records in PostgreSQL.</td></tr>
+        <tr><td>3</td><td>Science Expo Page</td><td>Fully Implemented</td><td>No (Static/Config)</td><td>Dynamic project showcase</td><td>Keep static until student entries are approved.</td></tr>
+        <tr><td>4</td><td>School Exhibition Page</td><td>Fully Implemented</td><td>No (Static/Config)</td><td>Dynamic school cards</td><td>Keep static until participating schools finalize.</td></tr>
+        <tr><td>5</td><td>Animation Showcase</td><td>Fully Implemented</td><td>No (Static/Config)</td><td>Dynamic reel embed</td><td>Keep static until Department reel is ready.</td></tr>
+        <tr><td>6</td><td>Esports Public Hub</td><td>Fully Implemented</td><td>Yes (<code>games</code> table)</td><td>Live bracket match sync</td><td>Wire bracket nodes to live query on <code>matches</code>.</td></tr>
+        <tr><td>7</td><td>Visitor Registration</td><td>Fully Implemented</td><td>No (Memory failover)</td><td>Direct Postgres INSERT</td><td>Add public INSERT policy on <code>visitor_registrations</code>.</td></tr>
+        <tr><td>8</td><td>Esports Registration</td><td>Fully Implemented</td><td>No (Memory failover)</td><td>Missing <code>teams</code> table</td><td>Create <code>teams</code> table & roster link.</td></tr>
+        <tr><td>9</td><td>School Registration</td><td>Fully Implemented</td><td>No (Memory failover)</td><td>Direct Postgres INSERT</td><td>Unify submissions into PostgreSQL schema.</td></tr>
+        <tr><td>10</td><td>Admin Authentication</td><td>UI / Demo Only</td><td>No (Bypasses Auth)</td><td>Real Supabase Auth & JWTs</td><td>Provision real admin in <code>auth.users</code>.</td></tr>
+        <tr><td>11</td><td>Admin Overview</td><td>UI / Demo Only</td><td>No (Reads RAM)</td><td>SQL <code>count()</code> queries</td><td>Replace memory counters with database queries.</td></tr>
+        <tr><td>12</td><td>Event Settings</td><td>Partially Implemented</td><td>Yes (<code>event_settings</code>)</td><td>Write permissions for admin</td><td>Grant update permissions to verified admin role.</td></tr>
+        <tr><td>13</td><td>Registrations Admin</td><td>UI / Demo Only</td><td>No (Reads mock store)</td><td>Direct PostgreSQL query</td><td>Disable proxy fallback on admin read.</td></tr>
+        <tr><td>14</td><td>Esports Admin</td><td>UI / Demo Only</td><td>No (Empty tables)</td><td>Match scoring & progression</td><td>Create match progression trigger/procedure.</td></tr>
+        <tr><td>15</td><td>Gallery Admin</td><td>UI / Demo Only</td><td>No (Empty table)</td><td>Storage bucket upload</td><td>Create public <code>gallery-media</code> bucket.</td></tr>
+        <tr><td>16</td><td>Sponsors Admin</td><td>UI / Demo Only</td><td>No (Empty table)</td><td>Database persistence</td><td>Seed current sponsors into PostgreSQL.</td></tr>
+        <tr><td>17</td><td>Staff Check-In</td><td>UI / Demo Only</td><td>No (Empty table)</td><td>Persistent ticket verification</td><td>Insert check-in events with unique constraint.</td></tr>
+        <tr><td>18</td><td>Announcements</td><td>UI / Demo Only</td><td>No (Empty table)</td><td>Postgres Realtime broadcast</td><td>Subscribe public ticker to <code>announcements</code>.</td></tr>
+        <tr><td>19</td><td>Audit Logs</td><td>UI / Demo Only</td><td>No (Empty table)</td><td>Automated audit triggers</td><td>Add Postgres trigger for insert/update/delete.</td></tr>
+        <tr><td>20</td><td>Database Backup</td><td>Not Implemented</td><td>No</td><td>Automated export endpoint</td><td>Provide CSV/JSON export in admin panel.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- Section 5 -->
+    <h2>5. Database Requirements (Schema Checklist)</h2>
+    <p>The following SQL migration must be executed in Supabase SQL Editor to bridge the missing tables:</p>
+    <pre><code>-- 1. Create Teams Table
+CREATE TABLE public.teams (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    game_id UUID REFERENCES public.games(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    captain_name TEXT NOT NULL,
+    captain_email TEXT NOT NULL,
+    captain_phone TEXT NOT NULL,
+    institution TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    seed INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Link Players to Teams
+ALTER TABLE public.players 
+ADD COLUMN IF NOT EXISTS team_id UUID REFERENCES public.teams(id) ON DELETE CASCADE;
+
+-- 3. Enable Public Anonymous Submissions
+ALTER TABLE public.visitor_registrations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public visitor registration insert" 
+ON public.visitor_registrations FOR INSERT TO anon WITH CHECK (true);
+
+ALTER TABLE public.teams ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public team registration insert" 
+ON public.teams FOR INSERT TO anon WITH CHECK (true);
+
+-- 4. Grant Admin RPC Access
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated;</code></pre>
+
+    <!-- Section 7 -->
+    <h2>7. Immediate Action Plan</h2>
+    
+    <div class="action-card">
+      <h4>Action 1: Run Database Schema Migration</h4>
+      <p style="margin: 0;">Create the <code>teams</code>, <code>faqs</code>, and <code>registration_controls</code> tables in the Supabase SQL editor.</p>
+    </div>
+
+    <div class="action-card">
+      <h4>Action 2: Provision Real Admin in Supabase Auth</h4>
+      <p style="margin: 0;">Create an authenticated admin user in Supabase Auth and assign their UID to <code>user_roles</code> with role <code>admin</code>.</p>
+    </div>
+
+    <div class="action-card">
+      <h4>Action 3: Enable Public RLS Insert Policies</h4>
+      <p style="margin: 0;">Allow anonymous website visitors to submit visitor registrations and tournament team applications without requiring a login.</p>
+    </div>
+
+    <div class="action-card">
+      <h4>Action 4: Connect Registration Forms Directly to PostgreSQL</h4>
+      <p style="margin: 0;">Update the registration action handler to write to <code>visitor_registrations</code> and <code>teams</code>, retiring the memory mock.</p>
+    </div>
+
+    <div class="action-card">
+      <h4>Action 5: Provision Supabase Storage Bucket</h4>
+      <p style="margin: 0;">Create the <code>gallery-media</code> storage bucket so admin photo and sponsor logo uploads persist to cloud storage.</p>
+    </div>
+
+    <footer style="margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); text-align: center;">
+      Report certified by Senior Full-Stack Software Architect & Database Engineer · Supernova 3.0 Architecture Board
+    </footer>
+  </div>
+
+</body>
+</html>

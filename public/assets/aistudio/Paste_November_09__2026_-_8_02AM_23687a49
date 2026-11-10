@@ -1,0 +1,1300 @@
+# SUPERNOVA 3.0 — COMPLETE PRODUCTION BUILD, DEMO REMOVAL & LIVE SYSTEM ACTIVATION
+
+## PROJECT MISSION
+
+You are working on the existing Supernova 3.0 event management platform.
+
+Your task is to transform the current demo/prototype implementation into a complete, functional, secure, production-ready event management platform connected to the real Supabase backend.
+
+This is not a request to create another prototype, a design concept, a sample dashboard, or a development roadmap alone.
+
+**Your responsibility is to inspect the entire existing application, preserve everything that is already correctly built, remove demo-only behaviour, complete all missing functionality, connect every module to the real backend, and implement the complete Supernova 3.0 platform in one coordinated development cycle.**
+
+Do not create a new project from scratch.
+
+Do not unnecessarily replace existing designs, components, routes, or working functionality.
+
+Do not stop after creating a plan. Inspect, plan, implement, test, and report.
+
+The final application must have separate, secure experiences for:
+1. Public visitors and participants.
+2. Event administrators.
+3. Operational staff.
+4. Esports management personnel.
+
+All experiences must operate through one connected application architecture and one properly secured central database.
+
+---
+
+# PART 1 — UNDERSTAND THE EXISTING PROJECT FIRST
+
+Before making changes, inspect the complete existing project.
+
+Inspect:
+
+- All source folders and files.
+- React components and page layouts.
+- Routing configuration.
+- Public website pages.
+- Admin dashboard and modules.
+- Staff interfaces.
+- Authentication implementation.
+- Supabase client configuration.
+- Existing database integrations.
+- Existing SQL migrations.
+- Existing database tables and relationships.
+- Database functions, triggers, indexes and constraints.
+- Row Level Security policies.
+- Storage configuration.
+- Existing registration workflows.
+- Existing demo data and fallback mechanisms.
+- Existing design system, typography, colours and responsive behaviour.
+
+Pay particular attention to:
+
+- `src/lib/supabase.ts`
+- `src/lib/auth.tsx`
+- All registration-related files.
+- All admin-related files.
+- All esports-related files.
+- All database and migration files.
+
+The previous audit indicated that the application contains demo authentication, mock operations and a resilient Supabase client that may silently fall back to browser memory when database operations fail.
+
+Verify these findings against the actual code before changing anything.
+
+Create an internal inventory of:
+
+1. Fully implemented features.
+2. Partially implemented features.
+3. Demo-only features.
+4. Features that are only visual interfaces.
+5. Missing features.
+6. Broken integrations.
+7. Security issues.
+8. Database gaps.
+
+Preserve working functionality. Do not rebuild an existing working feature unnecessarily.
+
+---
+
+# PART 2 — REMOVE DEMO BEHAVIOUR AND IMPLEMENT REAL PRODUCTION FUNCTIONALITY
+
+The application must no longer depend on fake authentication, simulated database responses or browser-memory storage for real operations.
+
+## 2.1 Authentication
+
+Replace demo login with genuine Supabase Authentication.
+
+Implement:
+
+- Real administrator login.
+- Real staff login.
+- Secure session management.
+- Session persistence.
+- Logout.
+- Password reset.
+- Authentication error handling.
+- Protected routes.
+- Role-based navigation.
+- Permission-based access control.
+- Session expiry handling.
+- Secure account management.
+
+Remove:
+
+- Fake JWT sessions.
+- Demo role injection.
+- Fake administrator identities.
+- Automatic demo login.
+- Hardcoded production credentials.
+- Authentication bypasses.
+
+Never grant administrator access merely because a user selects an administrator role in the interface.
+
+A user must have an authenticated Supabase identity and an authorised role assigned in the database.
+
+If real administrator accounts do not yet exist, create a safe account-provisioning procedure. Do not invent email addresses, passwords or user identities.
+
+## 2.2 Remove silent database fallbacks
+
+Review the existing resilient Supabase client.
+
+Real production operations must use the actual Supabase backend.
+
+Remove silent browser-memory fallbacks for:
+
+- Registrations.
+- Teams.
+- Players.
+- Approvals.
+- Matches.
+- Scores.
+- Check-ins.
+- Announcements.
+- Sponsors.
+- Website content.
+- Gallery content.
+- Settings.
+- Audit logs.
+- Staff records.
+
+If Supabase is unavailable, show a clear error.
+
+Never display a successful save message unless the backend confirms the operation.
+
+Never silently store a production record in temporary browser memory.
+
+Never display demo data as genuine event data.
+
+Create an explicitly separated development/demo mode if required for testing. It must never be confused with production.
+
+Production mode must be the default for the deployed live application.
+
+---
+
+# PART 3 — DATABASE AND BACKEND COMPLETION
+
+Use the existing Supabase project.
+
+Do not create another Supabase project unless the existing project is demonstrably unusable and you explain why.
+
+First inspect the actual database schema.
+
+Do not assume that table names, column types, relationships or policies match the previous audit.
+
+Create a complete relational database structure for the entire platform.
+
+Inspect and reuse existing tables wherever possible.
+
+The database must support the following areas:
+
+## 3.1 Core event tables
+
+- event_settings
+- games
+- institutions
+- registration_controls
+- form_options
+- profiles
+- user_roles
+- staff_assignments
+
+## 3.2 Registration and team tables
+
+- registrations
+- teams
+- players
+- participation_registrations
+- visitor_registrations
+- registration_documents, if required
+- registration_status_history
+
+## 3.3 Esports and tournament tables
+
+- tournaments
+- tournament_games, if required
+- tournament_rules
+- matches
+- match_participants
+- match_results
+- score_submissions
+- result_verifications
+- tournament_brackets, if required
+
+## 3.4 Event operations tables
+
+- check_ins
+- check_in_desks, if required
+- attendance_records, if required
+- on_spot_registrations
+- operational_tasks, if required
+
+## 3.5 Public website and content tables
+
+- site_content
+- schedule_items
+- faqs
+- announcements
+- sponsors
+- gallery_items
+- media_items
+
+## 3.6 Administration and security tables
+
+- audit_logs
+- system_settings
+- notification_logs
+- email_templates, if required
+- staff_permissions, if required
+
+This is a proposed logical inventory, not an instruction to create duplicate tables. Reconcile it with the existing schema and use appropriate relationships.
+
+Implement:
+
+- Primary keys.
+- Foreign keys.
+- Unique constraints.
+- Required-field validation.
+- Appropriate indexes.
+- Created and updated timestamps.
+- Referential integrity.
+- Database functions where appropriate.
+- Triggers where appropriate.
+- Safe status transitions.
+- Transaction-safe operations where needed.
+
+Generate version-controlled SQL migration files.
+
+Do not blindly run destructive migrations on production.
+
+Back up or verify a recoverable migration path before changing existing production data.
+
+Do not delete existing records merely to make the new schema work.
+
+---
+
+# PART 4 — SECURITY AND PERMISSIONS
+
+Implement proper Row Level Security across every relevant table.
+
+The frontend must never be the only security layer.
+
+Enforce permissions in Supabase policies and secure backend operations.
+
+Use these initial roles:
+
+### Super Admin
+- Complete platform access.
+- Manage administrators and staff.
+- Manage all event modules.
+- Change system settings.
+- Access reports and audit logs.
+- Manage permissions.
+
+### Event Admin
+- Manage event registrations.
+- Review and approve applications.
+- Manage participants.
+- Manage event information.
+- Manage announcements and website content.
+- Access authorised reports.
+
+### Esports Operator
+- Manage esports games.
+- Review esports registrations.
+- Manage teams and players.
+- Manage tournament operations.
+- Manage matches and scores.
+- Perform authorised esports check-ins.
+
+### Check-in Staff
+- Access assigned check-in operations.
+- Search authorised registration records.
+- Record attendance.
+- Prevent duplicate check-ins.
+- View only the information required for their assigned work.
+
+### Content Manager
+- Manage authorised website content.
+- Manage announcements.
+- Manage gallery content.
+- Manage sponsor information.
+- Cannot access sensitive registration or administrative records without explicit permission.
+
+If the existing application already has additional useful roles, inspect them and reconcile them with this structure instead of deleting them automatically.
+
+Create a clear permission matrix.
+
+Test every role against every protected operation.
+
+Never expose service-role keys or other privileged secrets in frontend code.
+
+---
+
+# PART 5 — COMPLETE ADMIN CONTROL CENTRE
+
+Build one connected Admin Control Centre.
+
+Keep the existing visual identity and improve consistency where necessary.
+
+The admin interface must include:
+
+## 5.1 Dashboard
+
+Display real database information:
+
+- Total registrations.
+- Pending applications.
+- Approved registrations.
+- Declined registrations.
+- Incomplete applications.
+- Total esports teams.
+- Game-wise registrations.
+- Player counts.
+- Check-in counts.
+- Upcoming matches.
+- Recent announcements.
+- Recent administrative activity.
+
+All figures must be calculated from actual backend records.
+
+Do not use hardcoded numbers.
+
+Display loading, empty and error states properly.
+
+## 5.2 Registration Management
+
+Administrators must be able to:
+
+- View all registrations.
+- Search by registration ID.
+- Search by team name.
+- Search by captain name.
+- Filter by game.
+- Filter by institution.
+- Filter by registration status.
+- View complete application details.
+- Request corrections.
+- Approve applications.
+- Decline applications with a recorded reason.
+- Add authorised internal notes.
+- View registration history.
+- Export authorised registration information.
+
+All changes must be saved to Supabase.
+
+## 5.3 Team and Player Management
+
+Implement:
+
+- Team directory.
+- Team profiles.
+- Captain details.
+- Institution information.
+- Player rosters.
+- Player identifiers.
+- Game-specific team information.
+- Roster validation.
+- Duplicate player checks where applicable.
+- Team status management.
+- Player status management.
+- Approved roster locking according to event rules.
+
+Do not assume every game has identical roster requirements.
+
+Use configurable game-specific rules.
+
+## 5.4 Event Settings
+
+Administrators must be able to manage:
+
+- Event name.
+- Event dates.
+- Venue.
+- Contact information.
+- Registration status.
+- Registration deadlines.
+- Registration instructions.
+- Public website information.
+- Event notices.
+
+Unknown information must remain marked TBD internally and must not be invented or published.
+
+## 5.5 Staff Management
+
+Implement:
+
+- Staff accounts.
+- Staff role assignments.
+- Staff permissions.
+- Assigned operational areas.
+- Account activation/deactivation.
+- Access history.
+- Secure account provisioning.
+
+Only authorised administrators may manage staff access.
+
+## 5.6 Audit Logs
+
+Record important actions:
+
+- Login and logout events where appropriate.
+- Registration approvals.
+- Registration rejections.
+- Registration corrections.
+- Team changes.
+- Player changes.
+- Match creation.
+- Score submissions.
+- Result verification.
+- Check-ins.
+- Website content changes.
+- Settings changes.
+- Permission changes.
+
+Record actor, action, target record, timestamp and relevant change details.
+
+Audit records must not be casually editable by ordinary administrators.
+
+---
+
+# PART 6 — STAFF OPERATIONS PORTAL
+
+Create a dedicated staff experience.
+
+Staff must not see the full administrator dashboard unless their role permits it.
+
+The staff portal should include:
+
+- Staff dashboard.
+- Assigned duties.
+- Assigned check-in areas.
+- Registration lookup.
+- Participant verification.
+- Attendance recording.
+- Daily attendance status.
+- Operational announcements.
+- Relevant event instructions.
+
+Staff must be able to perform only the operations permitted by their assigned role.
+
+Keep the interface simple and mobile-friendly because staff may use phones at the venue.
+
+---
+
+# PART 7 — COMPLETE ESPORTS MANAGEMENT SYSTEM
+
+This is a major part of Supernova 3.0.
+
+Create a complete esports management module.
+
+The games currently planned are:
+
+- Valorant.
+- BGMI.
+- Free Fire.
+- Mobile Legends.
+
+Game settings must be configurable independently.
+
+Each game should support:
+
+- Game name.
+- Game logo or image.
+- Registration status.
+- Team size.
+- Substitute limit.
+- Eligibility.
+- Rank restrictions.
+- Team limit.
+- Registration fee.
+- Registration deadline.
+- Roster change policy.
+- On-spot registration setting.
+- Tournament format.
+- Match rules.
+- Game-specific instructions.
+
+Do not invent missing values.
+
+Keep unconfirmed values as TBD or unpublished.
+
+## 7.1 Valorant planning values
+
+Use the following as provisional planning values only:
+
+- Team size: 5.
+- Substitutes: 0.
+- Rank restrictions: None.
+- Eligibility: College.
+- Roster changes: Not allowed.
+- Registration: Planned open.
+
+Keep the following as TBD until formally confirmed:
+
+- Team limit.
+- Registration fee.
+- Exact deadline.
+- Tournament format.
+- Detailed match rules.
+
+These values must be editable by authorised administrators.
+
+Do not automatically publish provisional settings as official rules.
+
+## 7.2 Other games
+
+BGMI, Free Fire and Mobile Legends rules must remain configurable and unpublished until confirmed.
+
+Do not copy Valorant rules to the other games.
+
+## 7.3 Esports registration management
+
+Implement:
+
+- Game selection.
+- Team registration.
+- Captain information.
+- Institution information.
+- Player roster.
+- Game-specific player IDs.
+- Validation.
+- Registration status.
+- Admin review.
+- Correction requests.
+- Approval.
+- Unique registration IDs.
+
+## 7.4 Tournament management
+
+Implement:
+
+- Tournament creation.
+- Game assignment.
+- Tournament registration lock.
+- Team eligibility verification.
+- Match creation.
+- Match scheduling.
+- Bracket management.
+- Match status.
+- Score submission.
+- Score verification.
+- Result publishing.
+- Tournament progression.
+- Winner records.
+
+Do not create official match schedules, brackets or scores using invented data.
+
+Use clearly labelled test data only in development mode.
+
+---
+
+# PART 8 — PUBLIC TEAM REGISTRATION
+
+Build a complete working registration experience.
+
+Registration should be easy for a team representative.
+
+The representative submits one team application containing the required team and player information.
+
+Support:
+
+1. Game selection.
+2. Team name.
+3. Institution.
+4. Captain information.
+5. Contact information.
+6. Required player information.
+7. Game-specific player IDs.
+8. Required declarations.
+9. Submission confirmation.
+
+The system must validate the roster against the current configuration for the selected game.
+
+Support an incomplete-registration workflow where the organisers permit it.
+
+Possible registration statuses:
+
+- Draft.
+- Submitted.
+- Incomplete.
+- Under Review.
+- Correction Requested.
+- Approved.
+- Declined.
+
+Submission does not mean approval.
+
+Generate unique registration IDs safely on the backend.
+
+Example format:
+
+SN3-VLR-0001
+
+This is an example format only. Ensure uniqueness using a database-safe method, not frontend counting.
+
+The system must prevent duplicate submissions where appropriate and provide a clear confirmation page.
+
+Do not enable real payments until an authorised payment provider, fee structure and payment workflow have been approved.
+
+## Public registration security
+
+Do not solve public registration by simply allowing unrestricted anonymous access to sensitive tables.
+
+Implement a secure submission mechanism with:
+
+- Server-side validation.
+- Appropriate public submission permissions.
+- Rate limiting or abuse protection.
+- Spam prevention.
+- Duplicate submission checks.
+- Safe handling of personal information.
+- Restricted access to submitted records.
+
+Use an appropriate Supabase Edge Function or another secure backend mechanism where necessary.
+
+Public users must never be able to approve their own registrations or access other teams' private information.
+
+---
+
+# PART 9 — APPROVAL AND NOTIFICATION WORKFLOW
+
+Build the complete application review workflow.
+
+When a registration is submitted:
+
+1. Store the application in Supabase.
+2. Generate a unique registration ID.
+3. Set its initial status.
+4. Display a successful submission confirmation only after database confirmation.
+5. Make it available in the admin review queue.
+
+When an administrator requests corrections:
+
+- Update the status.
+- Store the correction message.
+- Record the administrator and timestamp.
+- Make the correction visible to the relevant applicant.
+
+When approved:
+
+- Update the status.
+- Record the approving administrator.
+- Generate the appropriate confirmation or ticket record.
+- Make the confirmation available to the applicant.
+
+When declined:
+
+- Record the decision and reason.
+- Preserve the application history.
+
+## Email notifications
+
+Prepare a complete email notification system for:
+
+- Registration received.
+- Registration incomplete.
+- Correction requested.
+- Registration approved.
+- Registration declined.
+- Event announcements where appropriate.
+
+Use an actual email provider only after credentials and configuration are supplied.
+
+Track:
+
+- Email type.
+- Recipient.
+- Related registration.
+- Delivery status.
+- Failure reason.
+- Sent timestamp.
+
+Never display "Email sent" unless the provider confirms delivery or acceptance according to its actual response.
+
+If email configuration is unavailable, show a clear pending-configuration state and provide a safe preview/testing mode.
+
+---
+
+# PART 10 — EVENT-DAY CHECK-IN SYSTEM
+
+Create a working event check-in system.
+
+The event dates are:
+
+20 November 2026
+21 November 2026
+
+Support separate daily attendance records.
+
+Implement:
+
+- Registration ID search.
+- Team name search.
+- Captain name search.
+- Participant lookup.
+- Registration verification.
+- Approval verification.
+- Daily check-in.
+- Check-in timestamp.
+- Staff identity.
+- Check-in history.
+- Duplicate check-in prevention.
+- Search filters.
+- Attendance reports.
+
+A participant or team must not be marked checked in twice for the same attendance event.
+
+Where useful, support QR-based lookup.
+
+QR codes must not be treated as proof of authenticity by themselves. Use server-side validation and verify the actual registration record.
+
+The system must remain usable on mobile devices at the event venue.
+
+On-spot registration must be a separate workflow.
+
+An on-spot application must not automatically become an approved registration or a confirmed admission.
+
+---
+
+# PART 11 — PUBLIC EVENT WEBSITE
+
+Preserve and improve the existing public website.
+
+The website must reflect the official Supernova 3.0 identity.
+
+## Official theme
+
+CREATE. CONNECT. CELEBRATE.
+
+From the technology that shaped us to the creativity shaping tomorrow.
+
+The visual identity should communicate:
+
+- Creativity.
+- Innovation.
+- Education.
+- Technology.
+- Collaboration.
+- Celebration.
+- Institutional credibility.
+
+Avoid:
+
+- Cyberpunk styling.
+- Excessive neon.
+- Unnecessary sci-fi graphics.
+- Overused gaming visuals.
+- Generic esports templates.
+- Cluttered layouts.
+
+Maintain a polished, contemporary, institutional and creative design.
+
+## Required public pages
+
+1. Home.
+2. About Supernova 3.0.
+3. Event Information.
+4. Experiences.
+5. Esports.
+6. Team Registration.
+7. Schedule.
+8. Sponsors.
+9. Updates and Announcements.
+10. Gallery.
+11. FAQs.
+12. Contact.
+
+All pages must be responsive.
+
+The public website must read published content from the backend wherever applicable.
+
+Only published content should appear publicly.
+
+Do not expose unpublished announcements, internal notes, draft schedules or private registration information.
+
+## Homepage
+
+Include the event identity, theme, dates, major experiences, event introduction, esports entry point, registration call to action, announcements and sponsors where approved.
+
+Do not invent venue, timings, contact details or other unconfirmed information.
+
+---
+
+# PART 12 — WEBSITE CONTENT MANAGEMENT
+
+Build a functional CMS inside the Admin Control Centre.
+
+Administrators with the correct permissions should be able to manage:
+
+- Homepage sections.
+- Event introduction.
+- About page.
+- Event information.
+- Schedule.
+- FAQs.
+- Announcements.
+- Gallery.
+- Sponsor details.
+- Contact information.
+
+Support:
+
+- Create.
+- Edit.
+- Save drafts.
+- Publish.
+- Unpublish.
+- Preview.
+- Delete with confirmation.
+- Publication timestamps.
+- Author information.
+
+A content change should update the public website from the database.
+
+Do not require code edits for ordinary content updates.
+
+---
+
+# PART 13 — SPONSOR MANAGEMENT
+
+Implement:
+
+- Sponsor records.
+- Sponsor name.
+- Sponsor logo.
+- Sponsor category.
+- Sponsor website.
+- Sponsor description.
+- Display order.
+- Publication status.
+
+Support logo upload using Supabase Storage.
+
+Only authorised users may manage sponsors.
+
+Only approved and published sponsor information should appear on the public website.
+
+Do not invent sponsor names or logos.
+
+---
+
+# PART 14 — GALLERY AND MEDIA MANAGEMENT
+
+Implement:
+
+- Image upload.
+- Media storage.
+- Image metadata.
+- Captions.
+- Categories.
+- Display ordering.
+- Draft and published status.
+- Gallery management.
+- Responsive public gallery.
+
+Use properly configured Supabase Storage buckets and secure upload policies.
+
+Validate file types and sizes.
+
+Do not assume storage is configured merely because an upload interface exists.
+
+---
+
+# PART 15 — ANNOUNCEMENTS AND EVENT UPDATES
+
+Build an announcement management system.
+
+Administrators must be able to:
+
+- Create announcements.
+- Edit announcements.
+- Save drafts.
+- Publish announcements.
+- Unpublish announcements.
+- Schedule publication if supported.
+- Mark important notices.
+- View publication history.
+
+Published announcements must appear on the public website.
+
+Private operational announcements must remain visible only to authorised staff.
+
+Do not claim real-time updates unless the necessary backend functionality is configured and tested.
+
+---
+
+# PART 16 — REPORTS AND EXPORTS
+
+Create reports based on actual database information.
+
+Include:
+
+- Total registration report.
+- Game-wise registration report.
+- Team report.
+- Player report.
+- Institution report.
+- Approval status report.
+- Pending application report.
+- Check-in report.
+- Daily attendance report.
+- Tournament report.
+- Match result report.
+- Sponsor report.
+- Staff activity report.
+
+Support appropriate CSV and spreadsheet exports.
+
+Apply role-based access to exports.
+
+Do not expose private participant information to unauthorised users.
+
+---
+
+# PART 17 — ADMINISTRATIVE SETTINGS
+
+Build a central settings area.
+
+Include:
+
+- Event information.
+- Registration controls.
+- Game configuration.
+- Team limits.
+- Registration deadlines.
+- Approval settings.
+- Check-in settings.
+- Staff permissions.
+- Notification configuration.
+- Website publication settings.
+- Storage configuration.
+- System health information.
+
+Important: changes to rules must not silently alter previously approved applications.
+
+Provide suitable confirmation and change-history mechanisms.
+
+---
+
+# PART 18 — PRODUCTION DATA AND ENVIRONMENT SEPARATION
+
+Implement a clear separation between:
+
+- Development.
+- Testing.
+- Production.
+
+Development data must never appear as real registrations.
+
+Do not insert fictional participants, teams, sponsors, match results or staff accounts into production.
+
+Do not automatically clear the existing database.
+
+Do not replace existing real data with demo records.
+
+Do not use hardcoded dashboard statistics.
+
+Do not allow demo authentication in production.
+
+If the application detects missing production configuration, show a clear setup error rather than silently switching to demo mode.
+
+---
+
+# PART 19 — DESIGN AND USER EXPERIENCE
+
+Preserve the established Supernova 3.0 visual identity.
+
+Keep the public website and internal administration interface visually related but appropriate to their separate purposes.
+
+Improve:
+
+- Alignment.
+- Spacing.
+- Typography.
+- Responsive layouts.
+- Navigation.
+- Forms.
+- Tables.
+- Status indicators.
+- Loading states.
+- Error messages.
+- Empty states.
+- Confirmation dialogs.
+
+Ensure that:
+
+- Public registration works well on mobile.
+- Staff check-in works well on mobile.
+- Admin tables remain usable.
+- Long forms are easy to complete.
+- Destructive operations require confirmation.
+- Users receive clear feedback after every operation.
+
+Do not make a visual redesign that destroys the existing identity.
+
+---
+
+# PART 20 — COMPLETE TESTING
+
+Do not consider the platform complete merely because the pages render.
+
+Run a complete functional test.
+
+## Authentication tests
+
+- Real administrator login.
+- Real staff login.
+- Invalid credentials.
+- Logout.
+- Session persistence.
+- Expired session.
+- Protected routes.
+- Role restrictions.
+
+## Database tests
+
+- Create records.
+- Read records.
+- Update records.
+- Delete records where permitted.
+- Validate relationships.
+- Test required fields.
+- Test duplicate prevention.
+- Test failed database requests.
+- Confirm data persists after refresh.
+
+## Registration tests
+
+- Submit a team.
+- Validate a roster.
+- Generate a registration ID.
+- Check incomplete applications.
+- Request corrections.
+- Approve.
+- Decline.
+- Verify status history.
+- Verify that public users cannot access other applications.
+
+## Esports tests
+
+- Game configuration.
+- Team creation.
+- Player creation.
+- Roster validation.
+- Team approval.
+- Match creation.
+- Score submission.
+- Result verification.
+
+## Check-in tests
+
+- Search for an approved registration.
+- Search for an unapproved registration.
+- Check in on 20 November.
+- Check in on 21 November.
+- Prevent duplicate check-in.
+- Verify staff permissions.
+- Verify attendance reports.
+
+## CMS tests
+
+- Create content.
+- Save draft.
+- Publish.
+- Edit.
+- Unpublish.
+- Verify public website changes.
+
+## Security tests
+
+- Anonymous access.
+- Authenticated access.
+- Role-specific access.
+- RLS enforcement.
+- Privileged key exposure.
+- Unauthorised record access.
+- File upload permissions.
+- Public registration abuse protection.
+
+Do not report a test as passed unless it has actually been executed and verified.
+
+If a test cannot be performed because credentials, provider access or external configuration are missing, label it BLOCKED.
+
+---
+
+# PART 21 — PRODUCTION ACTIVATION AND SAFETY GATES
+
+The objective is a real production-ready platform, not another demo.
+
+However, do not perform destructive or irreversible production actions without explicit authorisation.
+
+Before applying migrations or changing live data:
+
+1. Inspect the existing schema.
+2. Prepare the migration.
+3. Explain its impact.
+4. Identify affected tables and records.
+5. Provide a backup or recovery recommendation.
+6. Check for destructive changes.
+7. Validate that the migration is safe.
+8. Request explicit approval before irreversible production changes.
+
+Do not:
+
+- Delete production records.
+- Reset the database.
+- Replace authentication identities.
+- Expose secrets.
+- Publish provisional rules.
+- Send real emails without configuration and authorisation.
+- Activate payments without approval.
+- Deploy publicly without approval.
+- Claim that deployment or production activation has happened when it has not.
+
+Where safe and supported, complete implementation and verification in the existing project.
+
+Where external credentials or platform actions are required, finish the code and provide the exact remaining setup steps.
+
+---
+
+# PART 22 — REQUIRED FINAL DELIVERABLES
+
+After completing the build, produce a comprehensive final report.
+
+Do not provide a short summary only.
+
+I need to understand exactly what exists in the application after your work.
+
+Use the following structure.
+
+## A. Overall build result
+
+- Overall completion status.
+- Production readiness status.
+- Backend connection status.
+- Authentication status.
+- Database status.
+- Security status.
+- Deployment status.
+
+## B. Complete feature inventory
+
+For every module, state:
+
+- Module name.
+- Existing implementation found.
+- Changes made.
+- New functionality implemented.
+- Database tables used.
+- Authentication requirements.
+- Permissions.
+- Tests performed.
+- Current status.
+
+Use these statuses:
+
+- COMPLETE AND VERIFIED.
+- IMPLEMENTED, NOT FULLY VERIFIED.
+- PARTIALLY IMPLEMENTED.
+- BLOCKED BY EXTERNAL CONFIGURATION.
+- NOT IMPLEMENTED.
+- REQUIRES APPROVAL.
+
+Do not use "complete" merely because a screen exists.
+
+## C. Public website inventory
+
+List every public page and explain exactly what works.
+
+## D. Admin Control Centre inventory
+
+List every admin module, its actions, backend connections and permissions.
+
+## E. Staff Portal inventory
+
+List every staff function and role restriction.
+
+## F. Esports system inventory
+
+List each game, configuration, registration functionality, team functionality and tournament functionality.
+
+Clearly identify provisional values and TBD settings.
+
+## G. Database report
+
+List:
+
+- Existing tables reused.
+- New tables created.
+- Columns added.
+- Relationships added.
+- Functions.
+- Triggers.
+- Indexes.
+- RLS policies.
+- Storage buckets.
+- Migrations created.
+- Migrations applied.
+- Any outstanding database issues.
+
+Do not claim a migration was applied unless it actually was.
+
+## H. Authentication and security report
+
+Explain:
+
+- How real login works.
+- How roles are assigned.
+- How permissions are enforced.
+- How anonymous registration is secured.
+- How RLS is configured.
+- Whether demo authentication has been removed from production.
+- Any outstanding security risks.
+
+## I. Integration report
+
+Explain the state of:
+
+- Supabase.
+- Storage.
+- Email provider.
+- Realtime, if used.
+- Payment integration, if applicable.
+- Other external services.
+
+## J. Testing report
+
+List each test, actual result, and evidence.
+
+Clearly separate passed, failed, skipped and blocked tests.
+
+## K. Remaining work
+
+List every outstanding item, its reason, priority and exact action required.
+
+Separate:
+
+1. Actions I must perform.
+2. Credentials or approvals required.
+3. External services to configure.
+4. Code still requiring implementation.
+5. Database actions still requiring approval.
+6. Deployment actions still requiring approval.
+
+## L. Final production checklist
+
+Provide a final checklist showing exactly what is required before the platform can be considered live.
+
+---
+
+# FINAL EXECUTION INSTRUCTIONS
+
+Work on the complete Supernova 3.0 platform as one coordinated build.
+
+Do not unnecessarily split the project into separate applications.
+
+Do not stop after the initial audit.
+
+Do not stop after producing a plan.
+
+Do not merely improve the UI.
+
+Do not leave buttons connected to mock functions.
+
+Do not create placeholder success messages.
+
+Do not pretend that an unconnected module is functional.
+
+Implement all modules using a shared, secure backend.
+
+Preserve existing working features and design.
+
+Prioritise data integrity, security, reliability and real functionality over visual shortcuts.
+
+If a dependency blocks implementation, complete everything possible around it and identify the exact blocker.
+
+**MOST IMPORTANT: At the end, I want a complete and accurate account of EVERYTHING that has been built, EVERYTHING that was already present, EVERYTHING that was repaired, EVERYTHING that is connected to the real database, EVERYTHING that has been tested, and EVERYTHING that still needs to be done.**
+
+The goal is to turn the existing Supernova 3.0 project into one complete, connected, production-ready event management platform.

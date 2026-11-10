@@ -1,0 +1,1043 @@
+# SUPERNOVA 3.0 — COMPLETE WEBSITE DESIGN, DEVELOPMENT AND ADMIN CMS
+
+## YOUR ROLE
+
+Act as a senior creative director, award-winning interactive web designer, frontend engineer, backend engineer and database architect.
+
+Build a complete, production-ready website for **SUPERNOVA 3.0** from scratch.
+
+This is not a request for a static design, Figma concept, homepage mockup or collection of non-functional components. Build the actual working web application, including its frontend, backend integration, registration system, admin dashboard, database structure and deployment configuration.
+
+Use the attached Design Bomb screenshot as the main visual reference.
+
+Reference website:
+https://www.designbomb.it/
+
+Study its visual language and interaction patterns. Create an original Supernova identity inspired by the reference. Do not copy its exact branding, source code, artwork, text or proprietary assets.
+
+The final website must feel like a professionally art-directed international creative festival.
+
+---
+
+# PART 1 — EVENT IDENTITY AND OFFICIAL CONTENT
+
+Use these event details consistently throughout the website.
+
+**Event name:** SUPERNOVA 3.0
+
+**Main tagline:** WHERE IDEAS COME ALIVE.
+
+**Supporting line:** A celebration of science, creativity, innovation and competition.
+
+**Event dates:** 20–21 November 2026
+
+**Venue:** The National College
+
+**Organiser:** National Education Society of Karnataka
+
+**Participating institutions:**
+1. The National College
+2. National PU College
+3. National English School
+4. National High School
+
+The event brings together four major experiences:
+
+1. Science Expo.
+2. School Kids' Exhibition.
+3. Department of Animation Showcase.
+4. Esports Tournament — Second Edition.
+
+All four experiences must receive equal importance on the website.
+
+Do not make the website exclusively about esports.
+
+Do not invent event timings, sponsor names, speaker names, fees, registration deadlines, eligibility conditions, contact numbers, results or audience figures.
+
+If information is not yet confirmed, display an appropriate editable "To be announced" message.
+
+---
+
+# PART 2 — CREATIVE DIRECTION
+
+## The design concept: SUPERNOVA — A WORLD OF IDEAS IN MOTION
+
+The website should combine:
+
+- The bold typography of a creative design festival.
+- The playful energy of an experimental digital experience.
+- The visual depth of a modern 3D website.
+- The professionalism of a major educational and technology event.
+- The usability of a well-designed registration platform.
+
+### IMPORTANT: LIGHT-THEME DIRECTION
+
+I previously requested a light-themed website.
+
+Therefore, do not reproduce the predominantly black background of the Design Bomb screenshot.
+
+Use a bright, light, colourful and sophisticated visual identity.
+
+Suggested colour palette:
+
+- Warm ivory: #F7F6F2
+- White: #FFFFFF
+- Deep ink: #17171B
+- Cobalt blue: #315BDB
+- Electric violet: #7755D8
+- Coral: #F07855
+- Hot pink: #ED48AD
+- Soft yellow: #F3E59B
+- Mint green: #A9E4C5
+- Pale blue: #E3ECF8
+
+Use deep ink selectively for typography and occasional contrasting sections. Keep the overall website visually light.
+
+Do not use generic purple-blue AI gradients, excessive neon, generic glassmorphism or ordinary corporate website styling.
+
+### TYPOGRAPHY
+
+The typography must be a major part of the website's identity.
+
+Use:
+- Bold, heavy, condensed display typography for SUPERNOVA.
+- Large editorial headings.
+- Tight letter spacing where appropriate.
+- Expressive italic typography for selected labels.
+- Clean sans-serif body text.
+- Contrasting text sizes and intentional line breaks.
+
+The title SUPERNOVA 3.0 must feel like a designed visual identity, not a standard heading.
+
+Use suitable locally hosted or licensed fonts. Provide sensible fallbacks.
+
+---
+
+# PART 3 — INTERACTIVE HOMEPAGE
+
+The homepage must be designed as a complete immersive experience.
+
+Do not make it a conventional sequence of identical cards.
+
+## SECTION 01 — NAVIGATION
+
+Create a clean, minimal, responsive navigation bar.
+
+Left:
+- Original Supernova 3.0 logo.
+- Logo must be taken from the actual supplied project asset if available.
+- Do not invent or redraw the logo.
+- Preserve its original colours and proportions.
+
+Navigation:
+- HOME
+- ABOUT
+- EVENTS
+- SCHEDULE
+- GALLERY
+- CONTACT
+
+Right:
+- A prominent REGISTER NOW action.
+
+The navigation should be sticky or intelligently fixed, with a subtle change in appearance when scrolling.
+
+Add a responsive mobile menu.
+
+## SECTION 02 — THE HERO: MAIN SUPERNOVA EXPERIENCE
+
+This is the most important part of the entire website.
+
+The hero must be distinctive, highly interactive and visually impressive.
+
+Use the attached Design Bomb screenshot as the reference for the scale and arrangement of the main typography.
+
+### Main title
+
+SUPERNOVA
+3.0
+
+Make the two elements visually connected.
+
+Use oversized typography that occupies a substantial part of the viewport.
+
+The title should have an interactive effect:
+- Letters subtly respond to pointer movement.
+- Letters have a staggered entrance animation.
+- Selected letters may move, rotate or shift on hover.
+- The title can have a subtle kinetic effect as the visitor scrolls.
+- The 3.0 should have a distinctive graphic treatment.
+- The effect must remain smooth and readable.
+
+Do not sacrifice readability for animation.
+
+### Background movement
+
+Create an original animated visual environment related to the four Supernova experiences.
+
+Use a carefully art-directed combination of:
+- Floating scientific geometry.
+- Orbiting molecular forms.
+- Abstract 3D objects.
+- Colourful motion-graphics elements.
+- Creative illustrated objects.
+- Subtle particle movement.
+- Animated curved lines and geometric patterns.
+- Small playful mascot-like graphic elements, if original artwork is available.
+
+The objects should move slowly and naturally behind or around the title.
+
+Add subtle pointer-based parallax on desktop.
+
+The movement should be lightweight and must not interfere with reading or navigation.
+
+### Floating graphic stickers
+
+Include playful, floating editorial stickers:
+- 20–21 NOVEMBER 2026.
+- SCIENCE.
+- CREATIVITY.
+- ANIMATION.
+- ESPORTS.
+- THE NATIONAL COLLEGE.
+
+These should look like deliberately designed festival graphics, not random decorative text.
+
+### Hero content
+
+SUPERNOVA 3.0
+
+WHERE IDEAS COME ALIVE.
+
+A celebration of science, creativity, innovation and competition.
+
+20–21 NOVEMBER 2026
+
+THE NATIONAL COLLEGE
+
+Organised by National Education Society of Karnataka.
+
+### Hero actions
+
+EXPLORE THE EVENT
+
+REGISTER NOW
+
+REGISTER NOW must open a visually attractive selection panel with three choices:
+1. Participation.
+2. Visitor.
+3. Esports.
+
+### Bottom marquee
+
+Create a continuous animated horizontal text strip:
+
+SCIENCE EXPO ✳ SCHOOL CREATIVITY ✳ ANIMATION ✳ ESPORTS ✳ INNOVATION ✳ IDEAS IN MOTION
+
+The marquee must pause or reduce movement appropriately for accessibility.
+
+## SECTION 03 — INTRODUCTION
+
+Create an expressive editorial section.
+
+Heading:
+
+NOT JUST AN EVENT.
+A SPACE FOR IDEAS TO COME ALIVE.
+
+Description:
+
+Supernova 3.0 brings together science, creativity, imagination and technology through a celebration of ideas and talent. From scientific exploration and young minds' creativity to animation and competitive gaming, it creates a platform for learning, expression and discovery.
+
+Use a combination of large typography, image compositions, subtle animation and interesting visual elements.
+
+## SECTION 04 — EXPLORE THE EVENTS
+
+This is a major homepage section.
+
+Create four fully populated, visually distinct event showcases.
+
+Never leave blank cards, empty image boxes or unfinished content.
+
+Do not use four identical cards in a basic grid.
+
+Use an asymmetrical editorial layout with different panel sizes, image crops, colour treatments and graphic elements.
+
+### EVENT 01 — SCIENCE EXPO
+
+Visual direction:
+- Scientific installations.
+- Experiments.
+- Robotics.
+- Scientific models.
+- Interactive exhibits.
+- Technology-inspired imagery.
+
+Description:
+
+"Discover the fascinating world of science through experiments, innovative models, interactive demonstrations and ideas that bring learning to life."
+
+Colour identity: Cobalt blue and pale blue.
+
+Route: /science-expo
+
+CTA: EXPLORE SCIENCE EXPO.
+
+### EVENT 02 — SCHOOL KIDS' EXHIBITION
+
+Visual direction:
+- Student creativity.
+- Colourful artwork.
+- Creative projects.
+- School models.
+- Imaginative displays.
+- Playful illustrations.
+
+Description:
+
+"Celebrate the creativity and imagination of young minds as school students present their ideas, projects, artwork and talents."
+
+Colour identity: Coral, yellow and mint.
+
+Route: /school-kids-exhibition
+
+CTA: DISCOVER THE EXHIBITION.
+
+### EVENT 03 — DEPARTMENT OF ANIMATION SHOWCASE
+
+Visual direction:
+- 3D animation.
+- Character design.
+- Visual effects.
+- Graphic design.
+- Motion graphics.
+- Digital illustrations.
+- Cinematic visual storytelling.
+
+Description:
+
+"Step into the world of digital creativity and visual storytelling. Explore animation, graphic design, visual effects and the art of bringing imagination to life."
+
+Colour identity: Lavender, violet and pink.
+
+Route: /animation
+
+CTA: EXPLORE ANIMATION.
+
+### EVENT 04 — ESPORTS TOURNAMENT: SECOND EDITION
+
+Visual direction:
+- Gaming competition.
+- Tournament environments.
+- Gaming peripherals.
+- Team competition.
+- Digital sports.
+- Competitive gaming photography.
+
+Description:
+
+"Experience the excitement of competitive gaming, teamwork, strategy and digital sports at the second edition of the Supernova Esports Tournament."
+
+Colour identity: Deep ink, cobalt blue and controlled coral accents.
+
+Route: /esports
+
+CTA: ENTER ESPORTS.
+
+### Event panel interactions
+
+- Gentle image zoom.
+- Animated event title.
+- Hover-responsive graphic objects.
+- Moving arrow on the CTA.
+- Scroll-triggered entrance.
+- Touch-friendly mobile behaviour.
+
+Use relevant images for each event.
+
+If actual event images are unavailable, use appropriate representative imagery. Never present illustrative images as genuine photographs from a previous Supernova event.
+
+Add a designed fallback image for every image that fails to load.
+
+## SECTION 05 — EVENT DATES AND SCHEDULE
+
+Create a visually striking event-date section.
+
+Display:
+
+20 — 21
+NOVEMBER 2026
+
+THE NATIONAL COLLEGE
+
+Include a two-day schedule interface.
+
+Connect it to editable schedule data.
+
+Do not invent timings or programme details.
+
+When the schedule has not been published, display:
+
+OFFICIAL SCHEDULE COMING SOON.
+
+## SECTION 06 — PARTICIPATING INSTITUTIONS
+
+Heading:
+
+POWERED BY EDUCATION. INSPIRED BY IDEAS.
+
+Organised by:
+
+NATIONAL EDUCATION SOCIETY OF KARNATAKA
+
+Display all four institutions:
+
+- The National College
+- National PU College
+- National English School
+- National High School
+
+Use supplied official logos if available.
+
+Do not invent replacement logos.
+
+## SECTION 07 — GALLERY
+
+Build an image-led gallery with:
+- Large featured photographs.
+- Varied image proportions.
+- Editorial collage layout.
+- Lightbox viewer.
+- Next and previous navigation.
+- Captions and image descriptions.
+- Mobile swipe support.
+
+Gallery images must come from admin-uploaded content.
+
+If no images have been uploaded, show a designed empty state rather than blank boxes.
+
+## SECTION 08 — ANNOUNCEMENTS
+
+Create a dynamic announcement section.
+
+Display:
+- Announcement title.
+- Publication date.
+- Short description.
+- Featured image where available.
+- Read more action.
+
+Retrieve published announcements from the database.
+
+If there are no announcements, show an appropriate upcoming-updates message.
+
+## SECTION 09 — VISITOR INFORMATION
+
+Provide an accessible section for:
+- School students.
+- College students.
+- Teachers and educators.
+- Parents and guardians.
+- Working professionals.
+- General visitors.
+
+Display event date, venue, visitor information and published FAQs.
+
+Do not invent venue directions, opening hours or contact information.
+
+## SECTION 10 — REGISTRATION CALL TO ACTION
+
+Heading:
+
+BE PART OF THE EXPERIENCE.
+
+Create three large, interactive registration choices:
+
+01 — PARTICIPATION
+
+02 — VISITOR
+
+03 — ESPORTS
+
+Each must have a distinctive visual identity and a clear destination.
+
+## SECTION 11 — FOOTER
+
+Include:
+- Supernova logo.
+- Event dates.
+- Venue.
+- Organiser.
+- Participating institutions.
+- Navigation links.
+- Event links.
+- Registration links.
+- Contact information only when officially supplied.
+- Privacy policy.
+- Admin Login.
+
+Admin Login should be visible but not visually dominant.
+
+---
+
+# PART 4 — ALL PUBLIC EVENT PAGES
+
+Create complete pages, not empty routes.
+
+Required pages:
+
+- /
+- /about
+- /science-expo
+- /school-kids-exhibition
+- /animation
+- /esports
+- /schedule
+- /gallery
+- /announcements
+- /visitor-info
+- /register
+- /register/participation
+- /register/visitor
+- /register/esports
+- /contact
+- /privacy
+
+All pages must share the same design system and navigation.
+
+Every CTA must lead to a real page or perform a real action.
+
+Add appropriate breadcrumbs and page transitions.
+
+---
+
+# PART 5 — THREE SEPARATE REGISTRATION SYSTEMS
+
+Create three completely separate registration experiences.
+
+Do not combine the three into one generic form.
+
+## A. PARTICIPATION REGISTRATION
+
+Route: /register/participation
+
+Include:
+- Participant full name.
+- Email.
+- Mobile number.
+- Institution/organisation.
+- Participant category.
+- Participation area.
+- Additional details where required.
+- Privacy and applicable participation consent.
+
+Participation areas should be configurable and may include:
+- Science Expo.
+- School Kids' Exhibition.
+- Department of Animation Showcase.
+
+These are separate event activities. Do not imply that the Department of Animation manages the science expo or school exhibition.
+
+The registration should be configurable by the organiser.
+
+## B. VISITOR REGISTRATION
+
+Route: /register/visitor
+
+Include:
+- Full name.
+- Email.
+- Mobile number.
+- Institution/organisation, optional.
+- Visitor category.
+- Visitor count, if group registration is enabled.
+- Privacy consent.
+
+Visitor categories:
+- School student.
+- College student.
+- Teacher / Educator.
+- Parent / Guardian.
+- Working professional.
+- General visitor.
+- Other.
+
+Make this simple and mobile-friendly.
+
+## C. ESPORTS REGISTRATION
+
+Route: /register/esports
+
+This is a separate team registration system.
+
+The three games and team limits are fixed:
+
+VALORANT — exactly 5 players.
+
+FREE FIRE — exactly 4 players.
+
+BGMI — exactly 4 players.
+
+### Step 1 — Game and team
+
+Include:
+- Game selection.
+- Team name.
+- Institution.
+- Team representative name.
+- Representative email.
+- Representative mobile number.
+
+### Step 2 — Player details
+
+Dynamically generate the correct number of player fields.
+
+If Valorant is selected:
+Show exactly 5 player entries.
+
+If Free Fire is selected:
+Show exactly 4 player entries.
+
+If BGMI is selected:
+Show exactly 4 player entries.
+
+Collect:
+- Player full name.
+- Game-specific player ID, where required.
+
+Do not request account passwords or credentials.
+
+Validate exact player counts on both client and server.
+
+### Step 3 — Review
+
+Display all team and player details.
+
+Allow the representative to edit before submitting.
+
+Require agreement to the approved tournament rules and privacy notice.
+
+### Step 4 — Confirmation
+
+Submit to the database.
+
+Generate a unique reference on the backend.
+
+Only show a successful confirmation after the database confirms that the record was saved.
+
+If submission fails, display a clear error and preserve the entered data.
+
+Do not invent game fees, eligibility, deadlines or tournament rules.
+
+---
+
+# PART 6 — ADMIN DASHBOARD AND CONTENT MANAGEMENT SYSTEM
+
+This is a major requirement.
+
+I need a secure admin dashboard where authorised administrators can manage the entire website without editing code.
+
+Create the admin interface at:
+
+/admin/login
+
+/admin/dashboard
+
+## ADMIN DASHBOARD DESIGN
+
+Create a professional, clean admin interface that is visually related to Supernova but prioritises clarity and usability.
+
+Include:
+- Overview.
+- Participation registrations.
+- Visitor registrations.
+- Esports registrations.
+- Events.
+- Schedule.
+- Gallery.
+- Announcements.
+- Sponsors.
+- FAQs.
+- Institutions.
+- Event settings.
+- Media library.
+- Admin users.
+- Audit logs.
+
+## CONTENT MANAGEMENT
+
+Authorised admins must be able to:
+
+### Events
+- Create new event entries.
+- Edit event names.
+- Edit descriptions.
+- Change images.
+- Change category and display order.
+- Publish or unpublish events.
+- Delete events after confirmation.
+
+### Gallery
+- Upload images.
+- Add captions.
+- Add alternative text.
+- Reorder images.
+- Publish or unpublish images.
+- Delete images.
+
+### Announcements
+- Create announcements.
+- Edit announcements.
+- Add featured images.
+- Set publication dates.
+- Publish or unpublish.
+- Delete announcements.
+
+### Schedule
+- Create schedule entries.
+- Edit dates, times, titles and descriptions.
+- Assign event categories.
+- Reorder schedule items.
+- Publish or unpublish entries.
+
+### Sponsors
+- Add sponsor names.
+- Upload sponsor logos.
+- Edit sponsor information.
+- Change display order.
+- Publish or unpublish.
+- Remove sponsors.
+
+Only show sponsors as confirmed after an authorised admin publishes them.
+
+### FAQs
+- Add questions and answers.
+- Edit existing FAQs.
+- Reorder.
+- Publish or unpublish.
+- Delete.
+
+### Event settings
+Allow authorised administrators to update:
+- Event dates.
+- Venue.
+- Main tagline.
+- Supporting text.
+- Organiser information.
+- Participating institutions.
+- Registration availability.
+- Official contact information.
+- Published schedule status.
+
+## MEDIA LIBRARY
+
+Create a central media library.
+
+Allow administrators to:
+- Upload images.
+- Preview files.
+- Add alt text and captions.
+- Reuse existing uploaded images.
+- Delete unused images.
+- View file size and upload date.
+
+Use secure object storage.
+
+Validate file type and size.
+
+Do not store image binaries directly inside database rows.
+
+If an image is deleted, check whether it is being used by published content before removing it.
+
+## REGISTRATION MANAGEMENT
+
+Create three separate admin registration areas:
+
+1. Participation.
+2. Visitor.
+3. Esports.
+
+Allow authorised admins to:
+- Search submissions.
+- Filter by date and status.
+- View details.
+- Review esports player lists.
+- Mark received.
+- Mark under review.
+- Confirm.
+- Decline.
+- Add internal notes.
+- Export permitted registration data.
+
+Do not expose private registration details to public visitors.
+
+---
+
+# PART 7 — SECURE ADMIN AUTHENTICATION
+
+Create a secure admin authentication system.
+
+There must be no public admin signup.
+
+Use Supabase Auth if the existing Supabase project credentials are provided and verified.
+
+Otherwise, implement a secure configurable authentication integration and document the required setup.
+
+Support:
+- Super Admin.
+- Administrator.
+- Content Editor.
+
+Suggested permissions:
+
+SUPER ADMIN:
+- Full website management.
+- Manage admin accounts.
+- Manage permissions.
+- Manage all content and registrations.
+
+ADMINISTRATOR:
+- Manage event content and registrations.
+- Cannot change Super Admin ownership or security configuration.
+
+CONTENT EDITOR:
+- Manage approved content, gallery, announcements and schedule.
+- Cannot manage admin users or private registration permissions.
+
+Enforce permissions on the backend and in database policies.
+
+### Existing error to investigate
+
+The previous admin system displayed:
+
+"Admin access rejected."
+
+Do not hide the error.
+
+Inspect the actual authentication and authorisation flow.
+
+Investigate:
+- Supabase Auth.
+- User profiles.
+- Role assignments.
+- RLS policies.
+- Admin-check functions.
+- User provisioning.
+- Server-side permissions.
+
+Fix the root cause.
+
+Do not solve it by:
+- Disabling RLS.
+- Giving all authenticated users admin privileges.
+- Allowing users to assign their own roles.
+- Exposing service-role keys in the browser.
+- Creating an unrestricted admin signup page.
+
+The initial Super Admin must be provisioned through a trusted server-side or Supabase administrative process.
+
+Use secure invitation or password setup.
+
+Never hardcode admin passwords.
+
+If the Super Admin email is not supplied, provide a setup process rather than inventing credentials.
+
+---
+
+# PART 8 — TECHNICAL ARCHITECTURE
+
+Build a proper maintainable project.
+
+Preferred stack:
+
+- Next.js with TypeScript.
+- React.
+- Tailwind CSS.
+- Framer Motion for animations.
+- GSAP only where advanced animation is justified.
+- Three.js or React Three Fiber only for lightweight, purposeful 3D visuals.
+- Supabase for authentication, database and media storage.
+- Vercel for deployment.
+
+Keep the application component-based and maintainable.
+
+Suggested structure:
+
+app/
+  page.tsx
+  about/
+  science-expo/
+  school-kids-exhibition/
+  animation/
+  esports/
+  schedule/
+  gallery/
+  announcements/
+  visitor-info/
+  register/
+  admin/
+
+components/
+  navigation/
+  hero/
+  events/
+  gallery/
+  registration/
+  footer/
+  admin/
+
+lib/
+  supabase/
+  auth/
+  validation/
+  permissions/
+
+types/
+  database.ts
+  events.ts
+  registrations.ts
+
+supabase/
+  migrations/
+
+public/
+  images/
+  fonts/
+  logo/
+
+Create a clear README with installation and deployment instructions.
+
+Use environment variables.
+
+Never expose service-role credentials in client-side code.
+
+Do not invent Supabase credentials. If a Supabase project is not connected, create the schema and setup instructions and clearly identify what must be configured.
+
+Use additive database migrations. Do not delete or reset an existing project database.
+
+---
+
+# PART 9 — INTERACTION AND PERFORMANCE
+
+The website must be interactive throughout, not only on the homepage.
+
+Implement:
+- Smooth page transitions.
+- Scroll-triggered animations.
+- Hover-responsive event panels.
+- Interactive hero title.
+- Floating background graphics.
+- Subtle pointer-based movement.
+- Responsive navigation.
+- Interactive gallery lightbox.
+- Animated marquee.
+- Registration step transitions.
+- Loading states.
+- Success and error states.
+- Accessible modals.
+- Keyboard navigation.
+- Reduced-motion support.
+
+Performance requirements:
+- Lazy-load non-critical images.
+- Optimise image sizes.
+- Avoid unnecessary JavaScript.
+- Avoid excessive animation loops.
+- Keep mobile performance a priority.
+- Ensure text remains readable while animations run.
+
+---
+
+# PART 10 — RESPONSIVE DESIGN
+
+Design specifically for:
+
+- Large desktop.
+- Standard laptop.
+- Tablet.
+- Mobile.
+
+Do not simply scale down the desktop design.
+
+On mobile:
+- Rework the hero title composition.
+- Use a compact menu.
+- Simplify decorative movement.
+- Stack event panels intentionally.
+- Make registration actions easy to tap.
+- Ensure forms are easy to complete.
+- Keep all text readable.
+
+---
+
+# PART 11 — TESTING
+
+Do not stop after producing code.
+
+Run and resolve:
+- TypeScript checks.
+- Production build.
+- Route checks.
+- Form validation.
+- Registration database tests.
+- Authentication tests.
+- Role and permission tests.
+- Image upload tests.
+- Content publishing tests.
+- Mobile layout checks.
+- Accessibility checks.
+
+Verify that:
+- All homepage sections have actual content.
+- No empty event cards exist.
+- All event links work.
+- All three registration paths work.
+- Valorant enforces exactly 5 players.
+- Free Fire enforces exactly 4 players.
+- BGMI enforces exactly 4 players.
+- Admins can create, edit and delete authorised event content.
+- Gallery uploads appear on the public gallery after publishing.
+- Announcements appear after publishing.
+- Unauthorised visitors cannot access admin data.
+- No false success messages are shown.
+
+---
+
+# PART 12 — DEPLOYMENT
+
+Prepare the project for Vercel deployment.
+
+Provide:
+- Complete source code.
+- Environment variable example file.
+- Database migrations.
+- Storage setup instructions.
+- README.
+- Build and deployment commands.
+
+Make sure the project can be downloaded and opened in VS Code.
+
+Do not claim the site is deployed until a real deployment URL is returned and verified.
+
+---
+
+# FINAL DESIGN QUALITY REQUIREMENT
+
+The most important requirement is the visual quality of the homepage.
+
+I want visitors to open the website and immediately notice:
+
+1. The huge, distinctive SUPERNOVA 3.0 title.
+2. Interactive movement and animated graphic elements.
+3. A creative visual identity.
+4. A clear sense of a major festival.
+5. Four equally important event experiences.
+6. A polished, modern and professional design.
+
+The website should feel like a creative festival experience, not a college information portal or generic AI website.
+
+Do not create a static landing page and claim that the website is complete.
+
+Build the complete application, inspect the rendered result, test its functionality and provide screenshots of the finished website and admin dashboard.
+
+If any integration requires account credentials or user approval, stop at that integration boundary, explain what is needed, and continue with the parts that can be built independently.

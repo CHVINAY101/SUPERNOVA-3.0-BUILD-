@@ -1,0 +1,200 @@
+{
+  "home": {
+    "heroNebula": {
+      "src": "/assets/images/home/hero-nebula.svg",
+      "alt": "Supernova 3.0 celestial sky backdrop",
+      "aspectRatio": "16/9"
+    },
+    "zones": {
+      "science": {
+        "src": "/assets/images/photos/science-expo.jpg",
+        "alt": "Science Zone — Robotic arm prototypes, astrophysics, and laboratory inventions",
+        "aspectRatio": "16/9",
+        "duotoneOverlay": "rgba(46, 42, 138, 0.2)",
+        "caption": "Experimental apparatus, robotics prototypes, and student physics showcases.",
+        "tag": "ZONE 01 · SCIENCE"
+      },
+      "animation": {
+        "src": "/assets/images/photos/animation-studio.jpg",
+        "alt": "Animation Zone — 3D character design and motion screening theater",
+        "aspectRatio": "16/9",
+        "duotoneOverlay": "rgba(86, 72, 176, 0.2)",
+        "caption": "Character reels, visual effects pipelines, and digital storyboard exhibits.",
+        "tag": "ZONE 02 · ANIMATION"
+      },
+      "technology": {
+        "src": "/assets/images/events/ideas/ideas-main.svg",
+        "alt": "Technology Zone — Autonomous systems, microcontrollers, and neural software",
+        "aspectRatio": "16/9",
+        "duotoneOverlay": "rgba(46, 42, 138, 0.2)",
+        "caption": "Robotics arena, embedded hardware circuits, and software innovation.",
+        "tag": "ZONE 03 · TECHNOLOGY"
+      },
+      "esports": {
+        "src": "/assets/images/photos/esports-arena.jpg",
+        "alt": "E-Sports Zone — Competitive PC battle stations and collegiate championship stage",
+        "aspectRatio": "16/9",
+        "duotoneOverlay": "rgba(86, 72, 176, 0.2)",
+        "caption": "High-octane collegiate brackets, live casters, and tournament showdowns.",
+        "tag": "ZONE 04 · E-SPORTS"
+      }
+    },
+    "venuePortrait": {
+      "src": "/assets/images/photos/campus-quadrangle.jpg",
+      "alt": "The National College, Basavanagudi heritage campus quadrangle during Supernova festival",
+      "aspectRatio": "16/9"
+    },
+    "moments": [
+      {
+        "src": "/assets/images/home/moment-1.svg",
+        "alt": "Students presenting robotics prototype in the quadrangle",
+        "aspectRatio": "4/3",
+        "caption": "Robotics & Microcontroller Prototype Demo"
+      },
+      {
+        "src": "/assets/images/home/moment-2.svg",
+        "alt": "Centenary Auditorium screening session",
+        "aspectRatio": "4/3",
+        "caption": "Centenary Hall Screening Ceremony"
+      },
+      {
+        "src": "/assets/images/home/moment-3.svg",
+        "alt": "E-Sports battle stations during championship match",
+        "aspectRatio": "4/3",
+        "caption": "Championship Stage Finals"
+      },
+      {
+        "src": "/assets/images/home/moment-4.svg",
+        "alt": "Optics and laser dispersion student demonstration",
+        "aspectRatio": "4/3",
+        "caption": "Laser Optics & Wave Refraction Lab"
+      }
+    ]
+  },
+  "partners": [],
+  "about": {
+    "historyCampus": {
+      "src": "/assets/images/photos/campus-quadrangle.jpg",
+      "alt": "Heritage quadrangle of The National College, Basavanagudi festival crowd",
+      "aspectRatio": "16/10"
+    },
+    "collegeLibrary": {
+      "src": "/assets/images/about/library-archives.svg",
+      "alt": "Centenary library and archival scientific instruments",
+      "aspectRatio": "4/3"
+    },
+    "trusteeBuilding": {
+      "src": "/assets/images/about/trustee-hall.svg",
+      "alt": "National Education Society of Karnataka administrative pavilion",
+      "aspectRatio": "4/3"
+    }
+  },
+  "gallery": [
+    {
+      "id": "photo-science",
+      "src": "/assets/images/photos/science-expo.jpg",
+      "title": "Science Expo — Robotics & Physics",
+      "category": "science",
+      "aspectRatio": "16/9",
+      "caption": "Live robotic arm demonstrations and experimental science exhibits in the quadrangle."
+    },
+    {
+      "id": "photo-animation",
+      "src": "/assets/images/photos/animation-studio.jpg",
+      "title": "Animation Studio — 3D Character Design",
+      "category": "animation",
+      "aspectRatio": "16/9",
+      "caption": "Student digital sculpting, character animation reels, and visual effects workstations."
+    },
+    {
+      "id": "photo-esports",
+      "src": "/assets/images/photos/esports-arena.jpg",
+      "title": "Esports Arena — Championship Stage",
+      "category": "esports",
+      "aspectRatio": "16/9",
+      "caption": "High-stakes tournament battlestations with live casters and spectator theater."
+    },
+    {
+      "id": "photo-campus",
+      "src": "/assets/images/photos/campus-quadrangle.jpg",
+      "title": "Basavanagudi Campus Festival Crowd",
+      "category": "technology",
+      "aspectRatio": "16/9",
+      "caption": "The vibrant student and visitor festival crowd gathered at The National College."
+    },
+    {
+      "id": "g-1",
+      "src": "/assets/images/gallery/gallery-1.svg",
+      "title": "Quadrangle Science Displays",
+      "category": "science",
+      "aspectRatio": "4/3",
+      "caption": "Student innovators explaining electromagnetic prototypes"
+    },
+    {
+      "id": "g-2",
+      "src": "/assets/images/gallery/gallery-2.svg",
+      "title": "Animation Screening Gallery",
+      "category": "animation",
+      "aspectRatio": "4/3",
+      "caption": "Students previewing short animated films and visual reels"
+    },
+    {
+      "id": "g-3",
+      "src": "/assets/images/gallery/gallery-3.svg",
+      "title": "Robotics Pit Lane",
+      "category": "technology",
+      "aspectRatio": "4/3",
+      "caption": "Competitors tuning chassis and code logic in the tech pits"
+    },
+    {
+      "id": "g-4",
+      "src": "/assets/images/gallery/gallery-4.svg",
+      "title": "E-Sports Mainstage",
+      "category": "esports",
+      "aspectRatio": "4/3",
+      "caption": "Players focused during grand final collegiate showdown"
+    },
+    {
+      "id": "g-5",
+      "src": "/assets/images/gallery/gallery-5.svg",
+      "title": "Ceremonial Lamp Lighting",
+      "category": "science",
+      "aspectRatio": "4/3",
+      "caption": "Inaugural ceremony at Centenary Hall"
+    },
+    {
+      "id": "g-6",
+      "src": "/assets/images/gallery/gallery-6.svg",
+      "title": "3D Modeling Masterclass",
+      "category": "animation",
+      "aspectRatio": "4/3",
+      "caption": "Industry mentor guiding character topology"
+    }
+  ],
+  "updates": [
+    {
+      "id": "u-1",
+      "title": "Supernova 3.0 Official Poster & Identity Reveal",
+      "date": "2026-10-15",
+      "category": "Identity",
+      "image": "/assets/images/updates/update-1.svg",
+      "snippet": "The National Education Society of Karnataka announces Supernova 3.0, taking place 20–21 November 2026 at The National College, Basavanagudi."
+    },
+    {
+      "id": "u-2",
+      "title": "Four Flagship Zones Defined for Collegiate Teams",
+      "date": "2026-10-22",
+      "category": "Zones",
+      "image": "/assets/images/updates/update-2.svg",
+      "snippet": "Comprehensive tracks in Science, Animation, Technology, and E-Sports set the stage for Karnataka's premier collegiate gathering."
+    },
+    {
+      "id": "u-3",
+      "title": "Campus Preparation Underway at Basavanagudi",
+      "date": "2026-11-01",
+      "category": "Venue",
+      "image": "/assets/images/updates/update-3.svg",
+      "snippet": "Centenary Hall, quadrangle exposition booths, and the high-performance E-Sports arena enter final staging."
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <defs>
+    <linearGradient id="bg8" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="60%" stop-color="#F4F0FF" />
+      <stop offset="100%" stop-color="#ECE6FD" />
+    </linearGradient>
+    <radialGradient id="glow8" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#F47B20" stop-opacity="0.16" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="100%" height="100%" fill="url(#bg8)" />
+  <circle cx="300" cy="180" r="160" fill="url(#glow8)" />
+
+  <!-- Collegiate Winners Ceremony -->
+  <g transform="translate(300, 160)" stroke="#5648B0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M-28 -32 h56 v20 c0 16 -12 28 -28 28 s-28 -12 -28 -28 v-20 Z" />
+    <path d="M-28 -20 c-14 0 -22 8 -22 18 s8 18 22 18" />
+    <path d="M28 -20 c14 0 22 8 22 18 s-8 18 -22 18" />
+    <path d="M0 16 v22 M-18 38 h36" />
+  </g>
+
+  <text x="300" y="250" text-anchor="middle" font-family="'Unbounded', sans-serif" font-weight="800" font-size="19" fill="#0B0B1E" letter-spacing="0.02em">
+    Grand Awards Ceremony
+  </text>
+  <text x="300" y="280" text-anchor="middle" font-family="'Montserrat', sans-serif" font-weight="600" font-size="12" fill="#5648B0" letter-spacing="0.08em">
+    CENTENARY AUDITORIUM
+  </text>
+  <rect x="24" y="24" width="115" height="26" rx="13" fill="rgba(86, 72, 176, 0.08)" stroke="rgba(86, 72, 176, 0.2)" />
+  <text x="81" y="41" text-anchor="middle" font-family="'Montserrat', sans-serif" font-weight="700" font-size="10" fill="#5648B0">
+    EDITION ARCHIVE
+  </text>
+</svg>
