@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import { sendRegistrationConfirmationEmail } from "@/lib/registrationOperations";
 import { LoadingBlock, EmptyState } from "@/components/PageLayout";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
@@ -111,11 +112,22 @@ export default function AdminVisitorRegistrations() {
       setRegistrations((prev) =>
         prev ? prev.map((item) => (item.id === id ? { ...item, status: newStatus } : item)) : null
       );
-      setStatusMsg({
-        type: "success",
-        text: `Reference ${ref} updated to ${newStatus.replace("_", " ")}.`,
-      });
-      setTimeout(() => setStatusMsg(null), 3500);
+
+      if (newStatus === "confirmed") {
+        const emailRes = await sendRegistrationConfirmationEmail(id, "visitor", false);
+        setStatusMsg({
+          type: emailRes.ok ? "success" : "error",
+          text: emailRes.ok
+            ? `Reference ${ref} confirmed and confirmation email sent.`
+            : `Reference ${ref} confirmed, but email failed: ${emailRes.error}`,
+        });
+      } else {
+        setStatusMsg({
+          type: "success",
+          text: `Reference ${ref} updated to ${newStatus.replace("_", " ")}.`,
+        });
+      }
+      setTimeout(() => setStatusMsg(null), 5000);
     } catch (err: any) {
       console.error("Status update error:", err);
       setStatusMsg({ type: "error", text: "Failed to update registration status. Try again." });

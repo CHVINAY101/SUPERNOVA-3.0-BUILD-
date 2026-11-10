@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
+import { LiveRegistrationCounters } from "@/components/admin/LiveRegistrationCounters";
 import type { RegistrationControl, AuditLog, Match } from "@/types/database";
 import { 
   Gamepad2, 
@@ -163,6 +164,9 @@ export default function AdminDashboard() {
           </button>
         </div>
       </div>
+
+      {/* LIVE REGISTRATION STATISTICS */}
+      <LiveRegistrationCounters />
 
       {/* THREE BIG SHORTCUT BUTTONS */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 32 }}>
