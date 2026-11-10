@@ -14,8 +14,7 @@ if (fs.existsSync(".env")) {
       if (eqIdx > 0) {
         const key = trimmed.slice(0, eqIdx).trim();
         const val = trimmed.slice(eqIdx + 1).trim().replace(/^['"](.*)['"]$/, "$1");
-        // If system env is unset or holds a placeholder, overwrite with actual .env value
-        if (val && (!process.env[key] || process.env[key]?.includes("your-project"))) {
+        if (val) {
           process.env[key] = val;
         }
       }

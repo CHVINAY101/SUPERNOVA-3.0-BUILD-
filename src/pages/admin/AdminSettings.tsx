@@ -254,7 +254,7 @@ export default function AdminSettings() {
               >
                 <span>
                   VITE_SUPABASE_URL=https://&lt;your-project&gt;.supabase.co<br />
-                  VITE_SUPABASE_ANON_KEY=eyJ...<br />
+                  VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...<br />
                   VITE_USE_MOCK=false
                 </span>
               </div>

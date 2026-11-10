@@ -16,12 +16,12 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
           </div>
           <h2 style={{ marginBottom: "var(--space-2)", fontSize: "1.4rem", color: "var(--text-primary)" }}>Supabase is not configured</h2>
           <p style={{ color: "var(--ink-soft)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "var(--space-6)" }}>
-            The application cannot connect to the backend database because <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> are missing or placeholder values in your environment configuration.
+            The application cannot connect to the backend database because <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> are missing or placeholder values in your environment configuration.
           </p>
           <div style={{ background: "rgba(0,0,0,0.04)", padding: "14px 18px", borderRadius: "8px", fontSize: "0.82rem", textAlign: "left", marginBottom: "var(--space-6)", fontFamily: "monospace", color: "var(--ink)" }}>
             1. Copy <code>.env.example</code> to <code>.env</code><br />
-            2. Provide your real Supabase project URL and Anon key<br />
-            3. Or set <code>VITE_USE_MOCK=true</code> to test in local demo mode
+            2. Provide your real Supabase project URL and publishable key<br />
+            3. Ensure <code>VITE_USE_MOCK=false</code> is set for production
           </div>
           <Link to="/" className="btn btn-secondary" style={{ width: "100%", justifyContent: "center" }}>
             Return to Public Portal

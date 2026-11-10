@@ -311,33 +311,6 @@ export const RegisterPage: React.FC = () => {
           const refStr = typeof v2Data === "string" ? v2Data : String(v2Data);
           setRegisteredRef(refStr);
           setSubmitSuccess(true);
-          try {
-            const cachedList = JSON.parse(localStorage.getItem("supernova_visitor_registrations_cache") || "[]");
-            cachedList.unshift({
-              id: "local-" + Date.now(),
-              registration_ref: refStr,
-              full_name: visName.trim(),
-              email: visEmail.trim().toLowerCase(),
-              phone: visPhone.trim(),
-              institution: effectiveInstitution,
-              visitor_category: visCategory,
-              student_class: visCategory === "Student" ? visStudentClass : null,
-              student_id: visCategory === "Student" ? visStudentId.trim() : null,
-              designation: visCategory === "Faculty / Staff" ? visDesignation.trim() : null,
-              esports_interest: visCategory === "Student" ? visEsportsInterest : false,
-              preferred_game: visCategory === "Student" && visEsportsInterest ? visPreferredGame : null,
-              esports_intent: visCategory === "Student" && visEsportsInterest ? visEsportsIntent : null,
-              in_game_id: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visInGameId.trim() : null,
-              team_name: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visTeamName.trim() : null,
-              competition_notes: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visCompetitionNotes.trim() : null,
-              days_attending: visDays,
-              status: "pending",
-              submitted_at: new Date().toISOString(),
-            });
-            localStorage.setItem("supernova_visitor_registrations_cache", JSON.stringify(cachedList));
-          } catch {
-            // ignore
-          }
         } else {
           // If v2 is not yet deployed, fallback gracefully to base submit_visitor_registration
           let fallbackCat = "General visitor";
@@ -363,33 +336,6 @@ export const RegisterPage: React.FC = () => {
           const refStr = typeof fallbackData === "string" ? fallbackData : "SN3-26-REG";
           setRegisteredRef(refStr);
           setSubmitSuccess(true);
-          try {
-            const cachedList = JSON.parse(localStorage.getItem("supernova_visitor_registrations_cache") || "[]");
-            cachedList.unshift({
-              id: "local-" + Date.now(),
-              registration_ref: refStr,
-              full_name: visName.trim(),
-              email: visEmail.trim().toLowerCase(),
-              phone: visPhone.trim(),
-              institution: effectiveInstitution,
-              visitor_category: visCategory,
-              student_class: visCategory === "Student" ? visStudentClass : null,
-              student_id: visCategory === "Student" ? visStudentId.trim() : null,
-              designation: visCategory === "Faculty / Staff" ? visDesignation.trim() : null,
-              esports_interest: visCategory === "Student" ? visEsportsInterest : false,
-              preferred_game: visCategory === "Student" && visEsportsInterest ? visPreferredGame : null,
-              esports_intent: visCategory === "Student" && visEsportsInterest ? visEsportsIntent : null,
-              in_game_id: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visInGameId.trim() : null,
-              team_name: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visTeamName.trim() : null,
-              competition_notes: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visCompetitionNotes.trim() : null,
-              days_attending: visDays,
-              status: "pending",
-              submitted_at: new Date().toISOString(),
-            });
-            localStorage.setItem("supernova_visitor_registrations_cache", JSON.stringify(cachedList));
-          } catch {
-            // ignore
-          }
         }
       } else if (selectedType === "esports") {
         if (!selectedGameId) {

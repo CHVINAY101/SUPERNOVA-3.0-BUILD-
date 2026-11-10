@@ -1,6 +1,5 @@
 import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { isMockMode } from "@/lib/supabase";
 import type { AdminRole } from "@/types/database";
 import { 
   LayoutDashboard, 
@@ -20,8 +19,7 @@ import {
   LogOut,
   ExternalLink,
   SlidersHorizontal,
-  ListPlus,
-  AlertTriangle
+  ListPlus
 } from "lucide-react";
 
 interface NavItem {
@@ -193,33 +191,6 @@ export default function AdminLayout() {
       </aside>
 
       <main style={{ flex: 1, overflow: "auto", padding: "32px 40px" }}>
-        {isMockMode && (
-          <div
-            style={{
-              background: "rgba(245, 158, 11, 0.12)",
-              border: "1px solid rgba(245, 158, 11, 0.3)",
-              borderRadius: "var(--radius-sm, 8px)",
-              padding: "12px 18px",
-              marginBottom: 24,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              flexWrap: "wrap",
-              gap: 12,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <AlertTriangle size={18} color="#d97706" />
-              <div style={{ fontSize: "0.85rem", color: "#b45309" }}>
-                <strong style={{ background: "#d97706", color: "#fff", padding: "2px 6px", borderRadius: 4, marginRight: 8, fontSize: "0.72rem", letterSpacing: "0.05em" }}>
-                  DEMO MODE
-                </strong>
-                Data is not saved to persistent storage. Connect live Supabase in <code>.env</code> for production storage.
-              </div>
-            </div>
-            <span style={{ fontSize: "0.76rem", color: "#d97706", fontWeight: 600 }}>In-Memory Client Active</span>
-          </div>
-        )}
         <Outlet />
       </main>
     </div>

@@ -63,163 +63,25 @@ export default function AdminVisitorRegistrations() {
     setLoading(true);
     setError(null);
 
-    // Baseline records for comprehensive filter demonstration
-    const baselineRecords: VisitorRegistrationRecord[] = [
-      {
-        id: "rec-seed-01",
-        registration_ref: "SN3-26-000014",
-        full_name: "Aditya Varma",
-        email: "aditya.varma.test26@example.com",
-        phone: "+91 98450 12345",
-        institution: "The National College, Basavanagudi",
-        visitor_category: "Student",
-        student_class: "PUC Second Year",
-        student_id: "26NCB-VAL-108",
-        esports_interest: true,
-        preferred_game: "VALORANT",
-        esports_intent: "competing",
-        in_game_id: "Aditya#IN1",
-        team_name: "Basavanagudi Vanguards",
-        competition_notes: "5-member squad registered for VALORANT collegiate bracket.",
-        days_attending: "Both Days (Nov 20 & 21)",
-        status: "confirmed",
-        admin_notes: "Verified student ID card. Team roster submitted.",
-        submitted_at: new Date(Date.now() - 3600000).toISOString(),
-      },
-      {
-        id: "rec-seed-02",
-        registration_ref: "SN3-26-000015",
-        full_name: "Sneha Rao",
-        email: "sneha.rao.esports@example.com",
-        phone: "+91 98765 43210",
-        institution: "National High School, Basavanagudi",
-        visitor_category: "Student",
-        student_class: "10th Standard",
-        student_id: "NHS-2026-042",
-        esports_interest: true,
-        preferred_game: "BGMI",
-        esports_intent: "competing",
-        in_game_id: "SnehaSniper99",
-        team_name: "Red Phoenix Squad",
-        competition_notes: "Squad captain. In-game level 68.",
-        days_attending: "Day 1 Only (Nov 20)",
-        status: "pending",
-        admin_notes: null,
-        submitted_at: new Date(Date.now() - 7200000).toISOString(),
-      },
-      {
-        id: "rec-seed-03",
-        registration_ref: "SN3-26-000016",
-        full_name: "Karthik Bhat",
-        email: "karthik.bhat.bms@example.com",
-        phone: "+91 91234 56780",
-        institution: "BMS College of Engineering",
-        visitor_category: "Student",
-        student_class: "Degree",
-        student_id: "BMS-CS-2024-89",
-        esports_interest: true,
-        preferred_game: "Free Fire",
-        esports_intent: "spectating",
-        in_game_id: null,
-        team_name: null,
-        competition_notes: null,
-        days_attending: "Day 2 Only (Nov 21)",
-        status: "confirmed",
-        admin_notes: "Spectator pass approved.",
-        submitted_at: new Date(Date.now() - 10800000).toISOString(),
-      },
-      {
-        id: "rec-seed-04",
-        registration_ref: "SN3-26-000017",
-        full_name: "Rahul Nair",
-        email: "rahul.nair.student@example.com",
-        phone: "+91 94481 23456",
-        institution: "National Public School",
-        visitor_category: "Student",
-        student_class: "9th Standard",
-        student_id: "NPS-9B-12",
-        esports_interest: false,
-        preferred_game: null,
-        esports_intent: null,
-        in_game_id: null,
-        team_name: null,
-        competition_notes: null,
-        days_attending: "Both Days (Nov 20 & 21)",
-        status: "confirmed",
-        admin_notes: "Visiting Science Expo & Animation Arena.",
-        submitted_at: new Date(Date.now() - 14400000).toISOString(),
-      },
-      {
-        id: "rec-seed-05",
-        registration_ref: "SN3-26-000018",
-        full_name: "Dr. Meenakshi Sundaram",
-        email: "m.sundaram@nationalcollege.edu",
-        phone: "+91 94480 98765",
-        institution: "The National College, Basavanagudi",
-        visitor_category: "Faculty / Staff",
-        designation: "Professor & Head, Department of Physics",
-        days_attending: "Both Days (Nov 20 & 21)",
-        status: "confirmed",
-        admin_notes: "Honorary judge for Science Exhibition.",
-        submitted_at: new Date(Date.now() - 18000000).toISOString(),
-      },
-      {
-        id: "rec-seed-06",
-        registration_ref: "SN3-26-000019",
-        full_name: "Vikram Sharma",
-        email: "vikram.sharma.tech@gmail.com",
-        phone: "+91 99001 23456",
-        institution: "Tech Mahindra Innovations",
-        visitor_category: "General Visitor",
-        days_attending: "Day 1 Only (Nov 20)",
-        status: "pending",
-        admin_notes: "Interested in robotics and animation showcase.",
-        submitted_at: new Date(Date.now() - 21600000).toISOString(),
-      },
-    ];
-
     try {
       const { data, error: fetchError } = await supabase
         .from("visitor_registrations")
         .select("*")
         .order("submitted_at", { ascending: false });
 
-      let list: VisitorRegistrationRecord[] = [];
-      if (!fetchError && data && data.length > 0) {
-        list = data as unknown as VisitorRegistrationRecord[];
+      if (fetchError) {
+        throw new Error(fetchError.message || "Failed to fetch registrations from Supabase.");
       }
 
-      // Merge cached submissions from local session
-      try {
-        const cached = JSON.parse(localStorage.getItem("supernova_visitor_registrations_cache") || "[]");
-        if (Array.isArray(cached) && cached.length > 0) {
-          const existingRefs = new Set(list.map((r) => r.registration_ref));
-          for (const item of cached) {
-            if (!existingRefs.has(item.registration_ref)) {
-              list.unshift(item);
-            }
-          }
-        }
-      } catch {
-        // non-fatal
-      }
-
-      // If database returned empty or was blocked by RLS in preview, populate baseline records
-      if (list.length === 0) {
-        list = baselineRecords;
-      }
-
-      setRegistrations(list);
+      setRegistrations((data as unknown as VisitorRegistrationRecord[]) || []);
     } catch (err: any) {
-      console.warn("Notice: Loading visitor registrations with operational fallback:", err);
-      // Fallback to local cache + baseline records
-      try {
-        const cached = JSON.parse(localStorage.getItem("supernova_visitor_registrations_cache") || "[]");
-        const list = Array.isArray(cached) && cached.length > 0 ? [...cached, ...baselineRecords] : baselineRecords;
-        setRegistrations(list);
-      } catch {
-        setRegistrations(baselineRecords);
-      }
+      console.error("Failed to load visitor registrations from Supabase:", err);
+      setError(
+        err?.message
+          ? `Supabase Error: ${err.message}`
+          : "Visitor registrations could not be loaded from Supabase. Please verify your connection and permissions."
+      );
+      setRegistrations([]);
     } finally {
       setLoading(false);
     }

@@ -1,16 +1,15 @@
-/**
- * Supabase Client Export for Supernova 3.0
- * Re-exports the configured client and utilities from @/lib/supabase
- * Supports both VITE_SUPABASE_PUBLISHABLE_KEY and legacy VITE_SUPABASE_ANON_KEY.
- */
+import { createClient } from '@supabase/supabase-js';
 
-export {
-  supabase,
-  isConfigured,
-  isMockAllowed,
-  isMockMode,
-  isMisconfigured,
-  getSupabaseConnectionInfo,
-} from "@/lib/supabase";
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-export default undefined;
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error(
+    'Supabase configuration missing. Check VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'
+  );
+}
+
+export const supabase = createClient(
+  supabaseUrl,
+  supabaseKey
+);
