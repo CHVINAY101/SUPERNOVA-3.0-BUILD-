@@ -1,26 +1,39 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const rawSupabaseUrl = (
-  (import.meta.env.VITE_SUPABASE_URL as string | undefined) ||
-  (import.meta.env.SUPABASE_URL as string | undefined)
-)?.trim();
-
-const rawSupabaseAnonKey = (
-  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
-  (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined) ||
-  (import.meta.env.SUPABASE_PUBLISHABLE_KEY as string | undefined)
-)?.trim();
-
 function normalizeSupabaseUrl(url?: string): string | undefined {
   if (!url) return undefined;
   let clean = url.trim().replace(/\/+$/, "");
   // Strip /rest/v1 if inadvertently included in environment URL
   clean = clean.replace(/\/rest\/v1\/?$/i, "");
+  // Strip auth/v1 well-known endpoint if SUPABASE_URL was set to jwks endpoint
+  clean = clean.replace(/\/auth\/v1\/\.well-known\/jwks\.json\/?$/i, "");
   return clean;
 }
 
-const supabaseUrl = normalizeSupabaseUrl(rawSupabaseUrl);
-const supabaseAnonKey = rawSupabaseAnonKey;
+// 1. Resolve Supabase URL from supported environment variables
+let candidateUrl = normalizeSupabaseUrl(
+  (import.meta.env.VITE_SUPABASE_URL as string | undefined) ||
+  (import.meta.env.SUPABASE_URL as string | undefined)
+);
+
+// If candidate URL contains placeholder 'your-project', inspect JWKS URL for project domain
+if (!candidateUrl || candidateUrl.includes("your-project")) {
+  const jwks = (import.meta.env.SUPABASE_JWKS_URL as string | undefined)?.trim();
+  if (jwks && jwks.startsWith("http") && !jwks.includes("your-project")) {
+    candidateUrl = normalizeSupabaseUrl(jwks);
+  }
+}
+
+// 2. Resolve API Key: support VITE_SUPABASE_PUBLISHABLE_KEY and legacy VITE_SUPABASE_ANON_KEY
+const candidateKey = (
+  (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined) ||
+  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
+  (import.meta.env.SUPABASE_PUBLISHABLE_KEY as string | undefined) ||
+  (import.meta.env.SUPABASE_ANON_KEY as string | undefined)
+)?.trim();
+
+const supabaseUrl = candidateUrl;
+const supabaseAnonKey = candidateKey;
 
 export const isConfigured = Boolean(
   supabaseUrl &&
@@ -34,11 +47,31 @@ export const isMockMode = !isConfigured && isMockAllowed;
 export const isMisconfigured = !isConfigured && !isMockAllowed;
 
 export function getSupabaseConnectionInfo() {
+  const keyType = supabaseAnonKey?.startsWith("sb_publishable_")
+    ? "publishable"
+    : supabaseAnonKey?.startsWith("ey")
+    ? "anon_jwt"
+    : supabaseAnonKey
+    ? "custom"
+    : "none";
+
+  const diagnostic = isConfigured
+    ? `Connected to live Supabase project (${supabaseUrl}) via ${keyType} key`
+    : `Missing configuration: ${
+        !supabaseUrl
+          ? "VITE_SUPABASE_URL is missing"
+          : supabaseUrl.includes("your-project")
+          ? "VITE_SUPABASE_URL contains placeholder value"
+          : "VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY is missing"
+      }`;
+
   return {
     isConfigured,
     isMockMode,
     url: supabaseUrl || null,
     hasAnonKey: Boolean(supabaseAnonKey),
+    keyType,
+    diagnostic,
   };
 }
 
@@ -744,7 +777,7 @@ function createMockClient(): any {
       if (fnName === "is_admin" || fnName === "is_content_admin" || fnName === "is_checkin_staff" || fnName === "is_score_operator") {
         return Promise.resolve({ data: Boolean(currentSession?.user), error: null });
       }
-      if (fnName === "submit_visitor_registration") {
+      if (fnName === "submit_visitor_registration" || fnName === "submit_visitor_registration_v2") {
         const control = store.registration_controls?.find((r) => r.form_type === "visitor");
         if (control && !control.is_open) {
           return Promise.resolve({ data: null, error: { message: `Registrations are closed: ${control.closed_message || "Registrations are currently closed."}` } });
@@ -757,8 +790,18 @@ function createMockClient(): any {
           email: args?.p_email ?? "",
           phone: args?.p_phone ?? "",
           institution: args?.p_institution ?? "",
-          visitor_category: args?.p_visitor_category ?? "student",
+          visitor_category: args?.p_visitor_category ?? "Student",
           visitor_count: args?.p_visitor_count ?? 1,
+          student_class: args?.p_student_class ?? null,
+          student_id: args?.p_student_id ?? null,
+          designation: args?.p_designation ?? null,
+          esports_interest: args?.p_esports_interest ?? false,
+          preferred_game: args?.p_preferred_game ?? null,
+          esports_intent: args?.p_esports_intent ?? null,
+          in_game_id: args?.p_in_game_id ?? null,
+          team_name: args?.p_team_name ?? null,
+          competition_notes: args?.p_competition_notes ?? null,
+          days_attending: args?.p_days_attending ?? "Both",
           status: "pending",
           submitted_at: new Date().toISOString(),
         });
@@ -917,23 +960,34 @@ function createMockClient(): any {
   };
 }
 
-const mockClient = createMockClient();
-
+let mockClientInstance: any = null;
+function getMockClient(): any {
+  if (!mockClientInstance) {
+    mockClientInstance = createMockClient();
+  }
+  return mockClientInstance;
+}
 
 
 function createProductionClient(): SupabaseClient {
-  // If explicitly requested mock mode and not configured, use local stub
   if (!isConfigured) {
+    const diagnostic =
+      "[Supabase Connection Diagnostic] Missing or invalid configuration.\n" +
+      `- VITE_SUPABASE_URL: ${supabaseUrl || "MISSING"} ${supabaseUrl?.includes("your-project") ? "(placeholder)" : ""}\n` +
+      `- Key (VITE_SUPABASE_PUBLISHABLE_KEY / VITE_SUPABASE_ANON_KEY): ${supabaseAnonKey ? "PRESENT" : "MISSING"}\n` +
+      "To connect to live Supabase, provide VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in .env.";
+    console.warn(diagnostic);
     if (isMockAllowed) {
-      console.info("[AI Studio] Supabase credentials not found. Using local test store.");
-      return mockClient as SupabaseClient;
+      console.info("[AI Studio] Supabase live credentials not configured. Using in-memory fallback store.");
+      return getMockClient() as SupabaseClient;
     }
-    console.warn("[AI Studio] Supabase is not configured and mock mode is disallowed.");
-    return mockClient as SupabaseClient;
+    console.error("[AI Studio] Supabase misconfigured and mock mode disallowed (VITE_USE_MOCK=false).");
+    return getMockClient() as SupabaseClient;
   }
 
+  console.info(`[AI Studio] Connected to live Supabase project: ${supabaseUrl}`);
+
   // Real production Supabase Client — direct connection to live Postgres database
-  // Silent in-memory fallbacks removed for data integrity and real persistence.
   return createClient(supabaseUrl!, supabaseAnonKey!, {
     auth: {
       persistSession: true,
@@ -944,4 +998,10 @@ function createProductionClient(): SupabaseClient {
 }
 
 export const supabase: SupabaseClient = createProductionClient();
+
+// Expose connection info on window for browser diagnostics & automated verification
+if (typeof window !== "undefined") {
+  (window as any).__SN3_SUPABASE_INFO__ = getSupabaseConnectionInfo();
+  (window as any).__SN3_SUPABASE_CLIENT__ = supabase;
+}
 

@@ -9,6 +9,7 @@ export default function AdminLogin() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -34,6 +35,35 @@ export default function AdminLogin() {
     }
 
     setLoading(true);
+
+    if (mode === "signup") {
+      try {
+        const { data, error: signUpErr } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+        });
+        setLoading(false);
+
+        if (signUpErr) {
+          setError(signUpErr.message);
+          return;
+        }
+
+        if (data.session) {
+          navigate("/admin");
+        } else {
+          setResetMessage(
+            "Account created successfully in Supabase Auth! Please check your email inbox if confirmation is required, then have a Super Admin assign your operational role in public.user_roles."
+          );
+          setMode("signin");
+        }
+      } catch (err: any) {
+        setLoading(false);
+        setError(err?.message || "Failed to create account.");
+      }
+      return;
+    }
+
     const result = await signIn(email.trim(), password);
     setLoading(false);
 
@@ -43,6 +73,7 @@ export default function AdminLogin() {
       navigate("/admin");
     }
   };
+
 
   const handleResetPassword = async () => {
     setError(null);
@@ -114,11 +145,45 @@ export default function AdminLogin() {
               THE NATIONAL COLLEGE · BASAVANAGUDI
             </span>
             <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-[#191936] leading-tight">
-              Admin Login
+              {mode === "signin" ? "Admin Login" : "Staff Registration"}
             </h1>
             <p className="font-body text-xs sm:text-sm text-[#191936]/75 mt-1.5 leading-relaxed max-w-[340px]">
-              Sign in to manage Supernova 3.0 content, registration approvals, and live event operations.
+              {mode === "signin"
+                ? "Sign in to manage Supernova 3.0 content, registration approvals, and live event operations."
+                : "Create a Supabase Auth identity for operational and administrative access."}
             </p>
+
+            {/* Mode Switcher Tabs */}
+            <div className="mt-4 inline-flex p-1 bg-[#FAF9F4] border-2 border-[#191936] rounded-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("signin");
+                  setError(null);
+                }}
+                className={`px-4 py-1.5 rounded-lg text-xs font-heading font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                  mode === "signin"
+                    ? "bg-[#191936] text-white shadow-[2px_2px_0px_#4549D8]"
+                    : "text-[#191936]/70 hover:text-[#191936]"
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("signup");
+                  setError(null);
+                }}
+                className={`px-4 py-1.5 rounded-lg text-xs font-heading font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                  mode === "signup"
+                    ? "bg-[#191936] text-white shadow-[2px_2px_0px_#4549D8]"
+                    : "text-[#191936]/70 hover:text-[#191936]"
+                }`}
+              >
+                Create Account
+              </button>
+            </div>
           </div>
 
           {/* Feedback & Error Messages */}
@@ -177,14 +242,16 @@ export default function AdminLogin() {
                 >
                   Password
                 </label>
-                <button
-                  type="button"
-                  onClick={handleResetPassword}
-                  disabled={resetLoading}
-                  className="text-[11px] sm:text-xs font-heading font-bold text-[#4549D8] hover:underline cursor-pointer disabled:opacity-50"
-                >
-                  {resetLoading ? "Dispatching link..." : "Forgot password?"}
-                </button>
+                {mode === "signin" && (
+                  <button
+                    type="button"
+                    onClick={handleResetPassword}
+                    disabled={resetLoading}
+                    className="text-[11px] sm:text-xs font-heading font-bold text-[#4549D8] hover:underline cursor-pointer disabled:opacity-50"
+                  >
+                    {resetLoading ? "Dispatching link..." : "Forgot password?"}
+                  </button>
+                )}
               </div>
 
               <div className="relative flex items-center">
@@ -195,7 +262,7 @@ export default function AdminLogin() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
                   required
-                  autoComplete="current-password"
+                  autoComplete={mode === "signin" ? "current-password" : "new-password"}
                   className="w-full h-[50px] sm:h-[52px] pl-11 pr-11 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
                 />
                 <Lock size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
@@ -210,7 +277,7 @@ export default function AdminLogin() {
               </div>
             </div>
 
-            {/* Submit Button (Fresh Lime #D5F542 with Ink Navy border & shadow) */}
+            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
@@ -219,10 +286,10 @@ export default function AdminLogin() {
               {loading ? (
                 <>
                   <Loader2 size={18} className="animate-spin text-[#191936]" />
-                  <span>Authenticating...</span>
+                  <span>{mode === "signin" ? "Authenticating..." : "Creating Account..."}</span>
                 </>
               ) : (
-                <span>Sign In to Operations</span>
+                <span>{mode === "signin" ? "Sign In to Operations" : "Register Staff Account"}</span>
               )}
             </button>
           </form>

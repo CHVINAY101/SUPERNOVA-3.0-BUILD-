@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { SITE_CONTENT } from "../content/site";
-import { CheckCircle2, Plus, Trash2, Copy } from "lucide-react";
+import { CheckCircle2, Plus, Trash2, Copy, GraduationCap, Building2, Users } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 type FormType = "participation" | "visitor" | "esports" | null;
@@ -70,11 +70,30 @@ export const RegisterPage: React.FC = () => {
   const [partCount, setPartCount] = useState("1");
 
   // Visitor Form State
+  const [visCategory, setVisCategory] = useState<"Student" | "General Visitor" | "Faculty / Staff">("Student");
   const [visName, setVisName] = useState("");
   const [visEmail, setVisEmail] = useState("");
   const [visPhone, setVisPhone] = useState("");
+  
+  // Student-specific fields
+  const [visStudentClass, setVisStudentClass] = useState("10th Standard");
+  const [visInstitutionSelect, setVisInstitutionSelect] = useState("The National College, Basavanagudi");
+  const [visInstitutionOther, setVisInstitutionOther] = useState("");
+  const [visStudentId, setVisStudentId] = useState("");
+  const [visEsportsInterest, setVisEsportsInterest] = useState<boolean>(false);
+  const [visPreferredGame, setVisPreferredGame] = useState<"VALORANT" | "BGMI" | "Free Fire">("VALORANT");
+  const [visEsportsIntent, setVisEsportsIntent] = useState<"spectator" | "competing">("spectator");
+  const [visInGameId, setVisInGameId] = useState("");
+  const [visTeamName, setVisTeamName] = useState("");
+  const [visCompetitionNotes, setVisCompetitionNotes] = useState("");
+
+  // Faculty / Staff specific fields
+  const [visDesignation, setVisDesignation] = useState("");
+
+  // General Visitor specific fields
   const [visOrg, setVisOrg] = useState("");
-  const [visType, setVisType] = useState("College student");
+
+  // Common visitor attendance
   const [visDays, setVisDays] = useState("Both");
 
   // Esports Form State
@@ -153,8 +172,27 @@ export const RegisterPage: React.FC = () => {
       body += `Full Name: ${visName}\n`;
       body += `Email: ${visEmail}\n`;
       body += `Phone: ${visPhone}\n`;
-      body += `School/College/Organisation: ${visOrg}\n`;
-      body += `Visitor Type: ${visType}\n`;
+      body += `Visitor Category: ${visCategory}\n`;
+      if (visCategory === "Student") {
+        body += `Class / Standard: ${visStudentClass}\n`;
+        body += `School/College: ${visInstitutionSelect === "Other" ? visInstitutionOther : visInstitutionSelect}\n`;
+        body += `Student Roll No / ID: ${visStudentId}\n`;
+        body += `Esports Interest: ${visEsportsInterest ? "Yes" : "No"}\n`;
+        if (visEsportsInterest) {
+          body += `Preferred Game: ${visPreferredGame}\n`;
+          body += `Participation Intent: ${visEsportsIntent}\n`;
+          if (visEsportsIntent === "competing") {
+            body += `In-Game ID: ${visInGameId}\n`;
+            if (visTeamName) body += `Team Name: ${visTeamName}\n`;
+            if (visCompetitionNotes) body += `Competition Notes: ${visCompetitionNotes}\n`;
+          }
+        }
+      } else if (visCategory === "Faculty / Staff") {
+        body += `Institution: ${visInstitutionSelect === "Other" ? visInstitutionOther : visInstitutionSelect}\n`;
+        body += `Designation / Department: ${visDesignation}\n`;
+      } else {
+        body += `Organisation / Workplace: ${visOrg || "General"}\n`;
+      }
       body += `Days Attending: ${visDays}\n`;
     } else if (selectedType === "esports") {
       body += `Team Name: ${espTeamName}\n`;
@@ -185,7 +223,7 @@ export const RegisterPage: React.FC = () => {
     if (honeypot) return; // bot detected
 
     if (!privacyAgreed) {
-      alert("Please agree to the privacy policy before submitting.");
+      alert("Please agree to the privacy notice before submitting.");
       return;
     }
 
@@ -194,39 +232,165 @@ export const RegisterPage: React.FC = () => {
       return;
     }
 
+    // Conditional Validation for Visitor
+    if (selectedType === "visitor") {
+      if (!visName.trim() || visName.trim().length < 2) {
+        alert("Please enter your full name.");
+        return;
+      }
+      if (!visEmail.trim() || !visEmail.includes("@")) {
+        alert("Please enter a valid email address.");
+        return;
+      }
+      if (!visPhone.trim() || visPhone.trim().length < 10) {
+        alert("Please enter a valid 10-digit mobile number.");
+        return;
+      }
+
+      if (visCategory === "Student") {
+        if (!visStudentClass) {
+          alert("Please select your class/standard.");
+          return;
+        }
+        if (visInstitutionSelect === "Other" && !visInstitutionOther.trim()) {
+          alert("Please enter your school or college name.");
+          return;
+        }
+        if (!visStudentId.trim()) {
+          alert("Please enter your student roll number or student ID.");
+          return;
+        }
+        if (visEsportsInterest && visEsportsIntent === "competing" && !visInGameId.trim()) {
+          alert("Please enter your in-game player ID for tournament registration.");
+          return;
+        }
+      } else if (visCategory === "Faculty / Staff") {
+        if (visInstitutionSelect === "Other" && !visInstitutionOther.trim()) {
+          alert("Please enter your institution name.");
+          return;
+        }
+        if (!visDesignation.trim()) {
+          alert("Please enter your designation or department.");
+          return;
+        }
+      }
+    }
+
     setIsSubmitting(true);
     setSubmitError(null);
 
     try {
       if (selectedType === "visitor") {
-        // Map visitor category to valid constraint strings
-        const categoryMap: Record<string, string> = {
-          "School student": "School student",
-          "College student": "College student",
-          "Teacher": "Teacher or educator",
-          "Teacher or educator": "Teacher or educator",
-          "Parent": "Parent or guardian",
-          "Parent or guardian": "Parent or guardian",
-          "Professional": "Working professional",
-          "Working professional": "Working professional",
-          "General visitor": "General visitor",
-          "Other": "Other",
-        };
-        const mappedCat = categoryMap[visType] || "College student";
+        const effectiveInstitution =
+          visCategory === "Student" || visCategory === "Faculty / Staff"
+            ? (visInstitutionSelect === "Other" ? visInstitutionOther.trim() : visInstitutionSelect.trim())
+            : (visOrg.trim() || "General Visitor");
 
-        const { data, error } = await supabase.rpc("submit_visitor_registration", {
+        // Attempt submit_visitor_registration_v2 with complete conditional fields
+        const { data: v2Data, error: v2Error } = await supabase.rpc("submit_visitor_registration_v2", {
           p_full_name: visName.trim(),
           p_email: visEmail.trim().toLowerCase(),
           p_phone: visPhone.trim(),
-          p_institution: visOrg.trim(),
-          p_visitor_category: mappedCat,
+          p_institution: effectiveInstitution,
+          p_visitor_category: visCategory,
+          p_student_class: visCategory === "Student" ? visStudentClass : null,
+          p_student_id: visCategory === "Student" ? visStudentId.trim() : null,
+          p_designation: visCategory === "Faculty / Staff" ? visDesignation.trim() : null,
+          p_esports_interest: visCategory === "Student" ? visEsportsInterest : false,
+          p_preferred_game: visCategory === "Student" && visEsportsInterest ? visPreferredGame : null,
+          p_esports_intent: visCategory === "Student" && visEsportsInterest ? visEsportsIntent : null,
+          p_in_game_id: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visInGameId.trim() : null,
+          p_team_name: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visTeamName.trim() : null,
+          p_competition_notes: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visCompetitionNotes.trim() : null,
+          p_days_attending: visDays,
           p_consent: true,
           p_website: "",
         });
 
-        if (error) throw error;
-        setRegisteredRef(typeof data === "string" ? data : "SN3-26-REG");
-        setSubmitSuccess(true);
+        if (!v2Error && v2Data) {
+          const refStr = typeof v2Data === "string" ? v2Data : String(v2Data);
+          setRegisteredRef(refStr);
+          setSubmitSuccess(true);
+          try {
+            const cachedList = JSON.parse(localStorage.getItem("supernova_visitor_registrations_cache") || "[]");
+            cachedList.unshift({
+              id: "local-" + Date.now(),
+              registration_ref: refStr,
+              full_name: visName.trim(),
+              email: visEmail.trim().toLowerCase(),
+              phone: visPhone.trim(),
+              institution: effectiveInstitution,
+              visitor_category: visCategory,
+              student_class: visCategory === "Student" ? visStudentClass : null,
+              student_id: visCategory === "Student" ? visStudentId.trim() : null,
+              designation: visCategory === "Faculty / Staff" ? visDesignation.trim() : null,
+              esports_interest: visCategory === "Student" ? visEsportsInterest : false,
+              preferred_game: visCategory === "Student" && visEsportsInterest ? visPreferredGame : null,
+              esports_intent: visCategory === "Student" && visEsportsInterest ? visEsportsIntent : null,
+              in_game_id: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visInGameId.trim() : null,
+              team_name: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visTeamName.trim() : null,
+              competition_notes: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visCompetitionNotes.trim() : null,
+              days_attending: visDays,
+              status: "pending",
+              submitted_at: new Date().toISOString(),
+            });
+            localStorage.setItem("supernova_visitor_registrations_cache", JSON.stringify(cachedList));
+          } catch {
+            // ignore
+          }
+        } else {
+          // If v2 is not yet deployed, fallback gracefully to base submit_visitor_registration
+          let fallbackCat = "General visitor";
+          if (visCategory === "Student") {
+            fallbackCat = (visStudentClass.includes("PUC") || visStudentClass.includes("Degree"))
+              ? "College student"
+              : "School student";
+          } else if (visCategory === "Faculty / Staff") {
+            fallbackCat = "Teacher or educator";
+          }
+
+          const { data: fallbackData, error: fallbackError } = await supabase.rpc("submit_visitor_registration", {
+            p_full_name: visName.trim(),
+            p_email: visEmail.trim().toLowerCase(),
+            p_phone: visPhone.trim(),
+            p_institution: effectiveInstitution,
+            p_visitor_category: fallbackCat,
+            p_consent: true,
+            p_website: "",
+          });
+
+          if (fallbackError) throw fallbackError;
+          const refStr = typeof fallbackData === "string" ? fallbackData : "SN3-26-REG";
+          setRegisteredRef(refStr);
+          setSubmitSuccess(true);
+          try {
+            const cachedList = JSON.parse(localStorage.getItem("supernova_visitor_registrations_cache") || "[]");
+            cachedList.unshift({
+              id: "local-" + Date.now(),
+              registration_ref: refStr,
+              full_name: visName.trim(),
+              email: visEmail.trim().toLowerCase(),
+              phone: visPhone.trim(),
+              institution: effectiveInstitution,
+              visitor_category: visCategory,
+              student_class: visCategory === "Student" ? visStudentClass : null,
+              student_id: visCategory === "Student" ? visStudentId.trim() : null,
+              designation: visCategory === "Faculty / Staff" ? visDesignation.trim() : null,
+              esports_interest: visCategory === "Student" ? visEsportsInterest : false,
+              preferred_game: visCategory === "Student" && visEsportsInterest ? visPreferredGame : null,
+              esports_intent: visCategory === "Student" && visEsportsInterest ? visEsportsIntent : null,
+              in_game_id: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visInGameId.trim() : null,
+              team_name: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visTeamName.trim() : null,
+              competition_notes: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visCompetitionNotes.trim() : null,
+              days_attending: visDays,
+              status: "pending",
+              submitted_at: new Date().toISOString(),
+            });
+            localStorage.setItem("supernova_visitor_registrations_cache", JSON.stringify(cachedList));
+          } catch {
+            // ignore
+          }
+        }
       } else if (selectedType === "esports") {
         if (!selectedGameId) {
           throw new Error("Please select a game for esports registration.");
@@ -569,81 +733,409 @@ export const RegisterPage: React.FC = () => {
                     </div>
                   )}
 
-                  {/* 2. VISITOR FORM FIELDS */}
+                  {/* 2. VISITOR FORM FIELDS (PART A CONDITIONAL IMPLEMENTATION) */}
                   {selectedType === "visitor" && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div className="space-y-6">
+                      {/* Category Selector Tabs */}
                       <div>
-                        <label className="form-label">Full Name *</label>
-                        <input
-                          type="text"
-                          required
-                          value={visName}
-                          onChange={(e) => setVisName(e.target.value)}
-                          placeholder="Your name"
-                          className="form-input"
-                        />
+                        <label className="form-label font-bold text-sm text-[#191936] mb-2 block">
+                          Select Visitor Category *
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {[
+                            { id: "Student", label: "Student", desc: "School, PUC, or Degree students", icon: GraduationCap },
+                            { id: "General Visitor", label: "General Visitor", desc: "Parents, alumni & public guests", icon: Users },
+                            { id: "Faculty / Staff", label: "Faculty / Staff", desc: "Educators, lecturers & academic staff", icon: Building2 },
+                          ].map((cat) => {
+                            const Icon = cat.icon;
+                            const isSelected = visCategory === cat.id;
+                            return (
+                              <button
+                                key={cat.id}
+                                type="button"
+                                onClick={() => setVisCategory(cat.id as any)}
+                                className={`p-4 rounded-2xl text-left border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                                  isSelected
+                                    ? "bg-[#191936] text-white border-[#191936] shadow-[4px_4px_0px_#4549D8]"
+                                    : "bg-[#F8F7FC] text-[#191936] border-[#D8D8E5] hover:border-[#191936]/50"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <Icon size={20} className={isSelected ? "text-[#D5F542]" : "text-[#4549D8]"} />
+                                  {isSelected && <span className="w-2 h-2 rounded-full bg-[#D5F542]" />}
+                                </div>
+                                <div>
+                                  <div className="font-heading font-extrabold text-sm uppercase">{cat.label}</div>
+                                  <div className={`text-[11px] mt-0.5 leading-snug ${isSelected ? "text-white/70" : "text-[#191936]/60"}`}>
+                                    {cat.desc}
+                                  </div>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
 
-                      <div>
-                        <label className="form-label">Email Address *</label>
-                        <input
-                          type="email"
-                          required
-                          value={visEmail}
-                          onChange={(e) => setVisEmail(e.target.value)}
-                          placeholder="name@example.com"
-                          className="form-input"
-                        />
+                      {/* Primary Contact Details (Common to all categories) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+                        <div>
+                          <label className="form-label">Full Name *</label>
+                          <input
+                            type="text"
+                            required
+                            value={visName}
+                            onChange={(e) => setVisName(e.target.value)}
+                            placeholder="Enter your name"
+                            className="form-input"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="form-label">Mobile Number *</label>
+                          <input
+                            type="tel"
+                            required
+                            value={visPhone}
+                            onChange={(e) => setVisPhone(e.target.value)}
+                            placeholder="+91 98765 43210"
+                            className="form-input"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="form-label">Email Address *</label>
+                          <input
+                            type="email"
+                            required
+                            value={visEmail}
+                            onChange={(e) => setVisEmail(e.target.value)}
+                            placeholder="name@example.com"
+                            className="form-input"
+                          />
+                        </div>
                       </div>
 
-                      <div>
-                        <label className="form-label">Phone Number *</label>
-                        <input
-                          type="tel"
-                          required
-                          value={visPhone}
-                          onChange={(e) => setVisPhone(e.target.value)}
-                          placeholder="+91 98765 43210"
-                          className="form-input"
-                        />
-                      </div>
+                      {/* CONDITIONAL SUB-SECTION: STUDENT */}
+                      {visCategory === "Student" && (
+                        <div className="p-5 sm:p-6 rounded-2xl bg-[#F0F2FD] border-2 border-[#4549D8]/30 space-y-5 animate-fadeIn">
+                          <div className="flex items-center gap-2 pb-2 border-b border-[#4549D8]/20">
+                            <GraduationCap size={18} className="text-[#4549D8]" />
+                            <h3 className="font-heading font-extrabold text-sm uppercase text-[#191936] tracking-wide">
+                              Student Academic Details
+                            </h3>
+                          </div>
 
-                      <div>
-                        <label className="form-label">School, College or Organisation *</label>
-                        <input
-                          type="text"
-                          required
-                          value={visOrg}
-                          onChange={(e) => setVisOrg(e.target.value)}
-                          placeholder="Organisation name"
-                          className="form-input"
-                        />
-                      </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {/* Class / Standard Dropdown */}
+                            <div>
+                              <label className="form-label">Class / Standard *</label>
+                              <select
+                                value={visStudentClass}
+                                onChange={(e) => setVisStudentClass(e.target.value)}
+                                className="form-input bg-white"
+                              >
+                                <option value="8th Standard">8th Standard</option>
+                                <option value="9th Standard">9th Standard</option>
+                                <option value="10th Standard">10th Standard</option>
+                                <option value="PUC First Year">PUC First Year</option>
+                                <option value="PUC Second Year">PUC Second Year</option>
+                                <option value="Degree">Degree</option>
+                                <option value="Other">Other</option>
+                              </select>
+                            </div>
 
-                      <div>
-                        <label className="form-label">Visitor Type *</label>
-                        <select
-                          value={visType}
-                          onChange={(e) => setVisType(e.target.value)}
-                          className="form-input"
-                        >
-                          <option value="Student">Student</option>
-                          <option value="Teacher">Teacher</option>
-                          <option value="Parent">Parent</option>
-                          <option value="Other">Other</option>
-                        </select>
-                      </div>
+                            {/* Student Roll No / ID */}
+                            <div>
+                              <label className="form-label">Student Roll Number / Student ID *</label>
+                              <input
+                                type="text"
+                                required
+                                value={visStudentId}
+                                onChange={(e) => setVisStudentId(e.target.value)}
+                                placeholder="e.g. 24NCB1042 or Roll 42"
+                                className="form-input bg-white"
+                              />
+                            </div>
 
+                            {/* School / College Dropdown */}
+                            <div className="sm:col-span-2">
+                              <label className="form-label">School / College Name *</label>
+                              <select
+                                value={visInstitutionSelect}
+                                onChange={(e) => setVisInstitutionSelect(e.target.value)}
+                                className="form-input bg-white"
+                              >
+                                <option value="The National College, Basavanagudi">The National College, Basavanagudi</option>
+                                <option value="National PU College, Jayanagar">National PU College, Jayanagar</option>
+                                <option value="National PU College, Basavanagudi">National PU College, Basavanagudi</option>
+                                <option value="National High School, Basavanagudi">National High School, Basavanagudi</option>
+                                <option value="National English School">National English School</option>
+                                <option value="National Degree College, Jayanagar">National Degree College, Jayanagar</option>
+                                <option value="DR.HNCE">DR.HNCE</option>
+                                <option value="Bangalore University">Bangalore University</option>
+                                <option value="Other">Other Institution (Enter name below)</option>
+                              </select>
+                            </div>
+
+                            {/* Custom Institution Input if Other selected */}
+                            {visInstitutionSelect === "Other" && (
+                              <div className="sm:col-span-2 animate-fadeIn">
+                                <label className="form-label">Enter Institution / School Name *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={visInstitutionOther}
+                                  onChange={(e) => setVisInstitutionOther(e.target.value)}
+                                  placeholder="Full school or college name"
+                                  className="form-input bg-white"
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Esports Interest Dynamic Section */}
+                          <div className="pt-3 border-t border-[#4549D8]/20 space-y-4">
+                            <div>
+                              <label className="form-label font-bold text-sm text-[#191936] block mb-1">
+                                Are you interested in the Supernova Esports Arena? *
+                              </label>
+                              <p className="text-xs text-[#191936]/70 mb-3">
+                                Experience official collegiate tournaments for VALORANT, BGMI, and Free Fire.
+                              </p>
+                              <div className="flex items-center gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setVisEsportsInterest(true)}
+                                  className={`px-6 py-2.5 rounded-xl font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
+                                    visEsportsInterest
+                                      ? "bg-[#4549D8] text-white shadow-sm"
+                                      : "bg-white text-[#191936] border border-[#D8D8E5] hover:bg-gray-50"
+                                  }`}
+                                >
+                                  Yes, I'm Interested
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setVisEsportsInterest(false)}
+                                  className={`px-6 py-2.5 rounded-xl font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
+                                    !visEsportsInterest
+                                      ? "bg-[#191936] text-white shadow-sm"
+                                      : "bg-white text-[#191936] border border-[#D8D8E5] hover:bg-gray-50"
+                                  }`}
+                                >
+                                  No, Just Visiting
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Conditional Game Selection & Competing Details */}
+                            {visEsportsInterest && (
+                              <div className="p-4 rounded-xl bg-white border border-[#4549D8]/30 space-y-4 animate-fadeIn">
+                                {/* Preferred Game */}
+                                <div>
+                                  <label className="form-label">Preferred Esports Game *</label>
+                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    {[
+                                      { id: "VALORANT", label: "VALORANT", type: "PC 5v5 Tactical", color: "#FF4655" },
+                                      { id: "BGMI", label: "BGMI", type: "Mobile Battle Royale", color: "#F5A623" },
+                                      { id: "Free Fire", label: "Free Fire", type: "Mobile Survival", color: "#FF6A00" },
+                                    ].map((g) => {
+                                      const isSelected = visPreferredGame === g.id;
+                                      return (
+                                        <button
+                                          key={g.id}
+                                          type="button"
+                                          onClick={() => setVisPreferredGame(g.id as any)}
+                                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                                            isSelected
+                                              ? "border-2 shadow-sm font-bold"
+                                              : "border-gray-200 hover:border-gray-400"
+                                          }`}
+                                          style={{
+                                            borderColor: isSelected ? g.color : undefined,
+                                            backgroundColor: isSelected ? `${g.color}10` : undefined,
+                                          }}
+                                        >
+                                          <div className="font-display text-sm font-extrabold" style={{ color: isSelected ? g.color : "#191936" }}>
+                                            {g.label}
+                                          </div>
+                                          <div className="text-[10px] text-gray-500 font-mono mt-0.5">{g.type}</div>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+
+                                {/* Spectator vs Competitor Intent */}
+                                <div>
+                                  <label className="form-label">How do you plan to participate? *</label>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => setVisEsportsIntent("spectator")}
+                                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
+                                        visEsportsIntent === "spectator"
+                                          ? "bg-[#191936] text-white border-[#191936] font-bold"
+                                          : "bg-gray-50 text-gray-800 border-gray-200"
+                                      }`}
+                                    >
+                                      <div className="font-heading text-xs uppercase">Spectator / Audience</div>
+                                      <div className="text-[11px] opacity-75 mt-0.5">I want to watch the live championship matches in the arena (no gamer ID required).</div>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setVisEsportsIntent("competing")}
+                                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
+                                        visEsportsIntent === "competing"
+                                          ? "bg-[#4549D8] text-white border-[#4549D8] font-bold"
+                                          : "bg-gray-50 text-gray-800 border-gray-200"
+                                      }`}
+                                    >
+                                      <div className="font-heading text-xs uppercase">Register to Compete</div>
+                                      <div className="text-[11px] opacity-75 mt-0.5">I am registering to play in tournament fixtures (collects In-Game ID & Team).</div>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Competing Details: In-Game ID & Team */}
+                                {visEsportsIntent === "competing" && (
+                                  <div className="pt-3 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-2 gap-3 animate-fadeIn">
+                                    <div>
+                                      <label className="form-label">
+                                        In-Game Player ID / Gamer Tag *
+                                      </label>
+                                      <input
+                                        type="text"
+                                        required
+                                        value={visInGameId}
+                                        onChange={(e) => setVisInGameId(e.target.value)}
+                                        placeholder={
+                                          visPreferredGame === "VALORANT"
+                                            ? "e.g. Phoenix#1234"
+                                            : "e.g. BGMI UID: 5123456789"
+                                        }
+                                        className="form-input !h-10 text-xs"
+                                      />
+                                    </div>
+
+                                    <div>
+                                      <label className="form-label">Team Name (if applicable)</label>
+                                      <input
+                                        type="text"
+                                        value={visTeamName}
+                                        onChange={(e) => setVisTeamName(e.target.value)}
+                                        placeholder="e.g. Basavanagudi Blasters"
+                                        className="form-input !h-10 text-xs"
+                                      />
+                                    </div>
+
+                                    <div className="sm:col-span-2">
+                                      <label className="form-label">Additional Competition Details (Optional)</label>
+                                      <input
+                                        type="text"
+                                        value={visCompetitionNotes}
+                                        onChange={(e) => setVisCompetitionNotes(e.target.value)}
+                                        placeholder="Device model, preferred role (e.g. Duelist, IGL, Assaulter), or teammate info"
+                                        className="form-input !h-10 text-xs"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* CONDITIONAL SUB-SECTION: FACULTY / STAFF */}
+                      {visCategory === "Faculty / Staff" && (
+                        <div className="p-5 sm:p-6 rounded-2xl bg-[#FFF6EE] border-2 border-[#FF873D]/30 space-y-4 animate-fadeIn">
+                          <div className="flex items-center gap-2 pb-2 border-b border-[#FF873D]/20">
+                            <Building2 size={18} className="text-[#FF873D]" />
+                            <h3 className="font-heading font-extrabold text-sm uppercase text-[#191936] tracking-wide">
+                              Institutional & Faculty Details
+                            </h3>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="form-label">Institution / College Name *</label>
+                              <select
+                                value={visInstitutionSelect}
+                                onChange={(e) => setVisInstitutionSelect(e.target.value)}
+                                className="form-input bg-white"
+                              >
+                                <option value="The National College, Basavanagudi">The National College, Basavanagudi</option>
+                                <option value="National PU College, Jayanagar">National PU College, Jayanagar</option>
+                                <option value="National PU College, Basavanagudi">National PU College, Basavanagudi</option>
+                                <option value="National High School, Basavanagudi">National High School, Basavanagudi</option>
+                                <option value="National English School">National English School</option>
+                                <option value="National Degree College, Jayanagar">National Degree College, Jayanagar</option>
+                                <option value="DR.HNCE">DR.HNCE</option>
+                                <option value="Bangalore University">Bangalore University</option>
+                                <option value="Other">Other Institution (Enter name below)</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="form-label">Designation / Department *</label>
+                              <input
+                                type="text"
+                                required
+                                value={visDesignation}
+                                onChange={(e) => setVisDesignation(e.target.value)}
+                                placeholder="e.g. Assistant Professor, Physics / Lecturer"
+                                className="form-input bg-white"
+                              />
+                            </div>
+
+                            {visInstitutionSelect === "Other" && (
+                              <div className="sm:col-span-2 animate-fadeIn">
+                                <label className="form-label">Enter Institution Name *</label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={visInstitutionOther}
+                                  onChange={(e) => setVisInstitutionOther(e.target.value)}
+                                  placeholder="Full institution name"
+                                  className="form-input bg-white"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* CONDITIONAL SUB-SECTION: GENERAL VISITOR */}
+                      {visCategory === "General Visitor" && (
+                        <div className="p-5 sm:p-6 rounded-2xl bg-[#F8F7FC] border border-[#EAEAF2] space-y-4 animate-fadeIn">
+                          <div>
+                            <label className="form-label">Organisation / Workplace / Background (Optional)</label>
+                            <input
+                              type="text"
+                              value={visOrg}
+                              onChange={(e) => setVisOrg(e.target.value)}
+                              placeholder="e.g. Parent, Alumni, Independent Guest, Company"
+                              className="form-input bg-white"
+                            />
+                            <p className="text-[11px] text-[#191936]/60 mt-1">
+                              General visitors do not need to provide student roll numbers or school credentials.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Days Attending (Common to all categories) */}
                       <div>
-                        <label className="form-label">Days Attending *</label>
+                        <label className="form-label">Festival Days Attending *</label>
                         <select
                           value={visDays}
                           onChange={(e) => setVisDays(e.target.value)}
                           className="form-input"
                         >
-                          <option value="Day 1">Day 1 (20 Nov)</option>
-                          <option value="Day 2">Day 2 (21 Nov)</option>
-                          <option value="Both">Both Days</option>
+                          <option value="Both">Both Days (20 & 21 November 2026)</option>
+                          <option value="Day 1">Day 1 Only (20 November 2026)</option>
+                          <option value="Day 2">Day 2 Only (21 November 2026)</option>
                         </select>
                       </div>
                     </div>

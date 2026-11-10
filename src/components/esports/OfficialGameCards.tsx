@@ -1,19 +1,91 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, Info, Check, Smartphone, Monitor, X } from "lucide-react";
-import { SITE_CONTENT, EsportsOfficialGame } from "@/content/site";
+import { Link } from "react-router-dom";
+import { ArrowRight, BookOpen, Monitor, Smartphone, Trophy, Users, CheckCircle2 } from "lucide-react";
+import { GameRulesModal } from "./GameRulesModal";
+
+export interface OfficialGameCardSpec {
+  id: "valorant" | "bgmi" | "freefire";
+  title: string;
+  publisher: string;
+  genre: string;
+  category: string;
+  platform: "PC" | "Mobile";
+  badge: string;
+  accentColor: string;
+  description: string;
+  teamSize: string;
+  format: string;
+  mapPool: string;
+  scoring: string;
+  statusBadge: string;
+  registerQuery: string;
+}
+
+export const OFFICIAL_GAMES_LIST: OfficialGameCardSpec[] = [
+  {
+    id: "valorant",
+    title: "VALORANT",
+    publisher: "Riot Games",
+    genre: "Character-Based Tactical Shooter",
+    category: "5v5 Tactical FPS (PC)",
+    platform: "PC",
+    badge: "5V5 TACTICAL SHOOTER",
+    accentColor: "#FF4655",
+    description:
+      "A tactical 5v5 character-based FPS where precision, teamwork, strategy and agent abilities determine victory.",
+    teamSize: "5 Players + 1 Substitute",
+    format: "Knockout Qualifiers → Double-Elim Finals",
+    mapPool: "Ascent, Bind, Haven, Sunset",
+    scoring: "Standard MR12 (Overtime rules apply)",
+    statusBadge: "Brackets: Awaiting Organiser Confirmation",
+    registerQuery: "/register?type=esports&game=valorant",
+  },
+  {
+    id: "bgmi",
+    title: "BATTLEGROUNDS MOBILE INDIA",
+    publisher: "KRAFTON",
+    genre: "Squad Battle Royale",
+    category: "Squad Battle Royale (Mobile)",
+    platform: "Mobile",
+    badge: "SQUAD BATTLE ROYALE",
+    accentColor: "#F5A623",
+    description:
+      "An intense mobile battle royale competition where players and squads battle through strategy, survival and teamwork.",
+    teamSize: "4 Squad Members + 1 Substitute",
+    format: "Multi-Lobby Qualifiers → Grand Finale",
+    mapPool: "Erangel, Miramar, Sanhok",
+    scoring: "Official 10-Point Scoring Matrix (1 pt/kill)",
+    statusBadge: "Room IDs: Awaiting Organiser Confirmation",
+    registerQuery: "/register?type=esports&game=bgmi",
+  },
+  {
+    id: "freefire",
+    title: "FREE FIRE MAX",
+    publisher: "Garena",
+    genre: "Survival Battle Royale",
+    category: "Fast-Paced Battle Royale (Mobile)",
+    platform: "Mobile",
+    badge: "FAST-PACED BATTLE ROYALE",
+    accentColor: "#FF6A00",
+    description:
+      "A fast-paced mobile battle royale experience where survival, squad coordination and tactical combat are essential.",
+    teamSize: "4 Squad Members + 1 Substitute",
+    format: "Fast-Tempo Elimination Lobbies",
+    mapPool: "Bermuda, Purgatory, Kalahari",
+    scoring: "Placement + Aggressive Finish Points",
+    statusBadge: "Lobby Matrix: Awaiting Organiser Confirmation",
+    registerQuery: "/register?type=esports&game=freefire",
+  },
+];
 
 export const OfficialGameCards: React.FC = () => {
-  const navigate = useNavigate();
-  const [selectedGameInfo, setSelectedGameInfo] = useState<EsportsOfficialGame | null>(null);
-
-  const games = SITE_CONTENT.esports.officialGames || [];
+  const [selectedRulesGame, setSelectedRulesGame] = useState<"valorant" | "bgmi" | "freefire" | null>(null);
 
   return (
     <div className="w-full">
-      {/* Three Visually Distinct Game Cards */}
+      {/* Three Visually Distinct, Complete Game Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
-        {games.map((game) => {
+        {OFFICIAL_GAMES_LIST.map((game) => {
           const isValorant = game.id === "valorant";
           const isBgmi = game.id === "bgmi";
           const isFreefire = game.id === "freefire";
@@ -23,134 +95,136 @@ export const OfficialGameCards: React.FC = () => {
               key={game.id}
               className={`group relative rounded-[24px] border-2 transition-all duration-300 flex flex-col justify-between overflow-hidden ${
                 isValorant
-                  ? "bg-[#1E1724] border-[#FF4655]/40 hover:border-[#FF4655] hover:shadow-[0_14px_36px_rgba(255,70,85,0.22)] hover:-translate-y-1.5"
+                  ? "bg-[#1E1724] border-[#FF4655]/40 hover:border-[#FF4655] hover:shadow-[0_16px_40px_rgba(255,70,85,0.24)] hover:-translate-y-1.5"
                   : isBgmi
-                  ? "bg-[#21201A] border-[#F5A623]/40 hover:border-[#F5A623] hover:shadow-[0_14px_36px_rgba(245,166,35,0.22)] hover:-translate-y-1.5"
-                  : "bg-[#251A18] border-[#FF6A00]/40 hover:border-[#FF6A00] hover:shadow-[0_14px_36px_rgba(255,106,0,0.22)] hover:-translate-y-1.5"
+                  ? "bg-[#21201A] border-[#F5A623]/40 hover:border-[#F5A623] hover:shadow-[0_16px_40px_rgba(245,166,35,0.24)] hover:-translate-y-1.5"
+                  : "bg-[#251A18] border-[#FF6A00]/40 hover:border-[#FF6A00] hover:shadow-[0_16px_40px_rgba(255,106,0,0.24)] hover:-translate-y-1.5"
               }`}
             >
-              {/* Card Banner with Custom Game Artwork */}
-              <div className="relative h-48 sm:h-52 w-full overflow-hidden flex items-center justify-center p-6 border-b border-white/10 select-none">
+              {/* Card Banner with Custom Official Branding Artwork */}
+              <div className="relative h-52 sm:h-56 w-full overflow-hidden flex flex-col items-center justify-center p-6 border-b border-white/10 select-none">
                 {/* Background Pattern */}
                 <div
                   className="absolute inset-0 opacity-20 pointer-events-none group-hover:scale-105 transition-transform duration-500"
                   style={{
                     backgroundImage: isValorant
-                      ? "radial-gradient(circle at 50% 50%, #FF4655 1px, transparent 1px)"
+                      ? "radial-gradient(circle at 50% 50%, #FF4655 1.5px, transparent 1.5px)"
                       : isBgmi
-                      ? "radial-gradient(circle at 50% 50%, #F5A623 1px, transparent 1px)"
-                      : "radial-gradient(circle at 50% 50%, #FF873D 1px, transparent 1px)",
-                    backgroundSize: "20px 20px",
+                      ? "radial-gradient(circle at 50% 50%, #F5A623 1.5px, transparent 1.5px)"
+                      : "radial-gradient(circle at 50% 50%, #FF873D 1.5px, transparent 1.5px)",
+                    backgroundSize: "22px 22px",
                   }}
                   aria-hidden="true"
                 />
 
                 {/* Ambient Center Glow */}
                 <div
-                  className="absolute w-40 h-40 rounded-full blur-2xl opacity-25 group-hover:opacity-40 transition-opacity"
-                  style={{
-                    backgroundColor: game.accentColor,
-                  }}
+                  className="absolute w-44 h-44 rounded-full blur-2xl opacity-25 group-hover:opacity-40 transition-opacity"
+                  style={{ backgroundColor: game.accentColor }}
                   aria-hidden="true"
                 />
 
-                {/* GAME 1: VALORANT ARTWORK */}
+                {/* GAME 1: VALORANT ARTWORK & OFFICIAL LOGO */}
                 {isValorant && (
                   <div className="relative z-10 flex flex-col items-center text-center">
                     <svg
-                      viewBox="0 0 100 100"
-                      className="w-24 h-24 drop-shadow-[0_6px_20px_rgba(255,70,85,0.5)] transform group-hover:scale-110 transition-transform duration-300"
+                      viewBox="0 0 120 120"
+                      className="w-24 h-24 drop-shadow-[0_8px_24px_rgba(255,70,85,0.6)] transform group-hover:scale-110 transition-transform duration-300"
                       fill="none"
                       xmlns="http://www.w3.org/2000/svg"
                     >
-                      {/* Angular V Logo Motif */}
-                      <path
-                        d="M50 14L86 78H68L50 46L32 78H14L50 14Z"
-                        fill="#FF4655"
-                      />
-                      <polygon points="50,28 62,50 38,50" fill="#FFFFFF" />
-                      <circle cx="50" cy="50" r="44" stroke="#FF4655" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.4" />
-                      <line x1="10" y1="50" x2="22" y2="50" stroke="#FF4655" strokeWidth="2" />
-                      <line x1="78" y1="50" x2="90" y2="50" stroke="#FF4655" strokeWidth="2" />
-                      <line x1="50" y1="10" x2="50" y2="22" stroke="#FF4655" strokeWidth="2" />
-                      <line x1="50" y1="78" x2="50" y2="90" stroke="#FF4655" strokeWidth="2" />
+                      {/* Riot Games VALORANT Geometric V Glyph */}
+                      <path d="M60 14L102 88H80L60 52L40 88H18L60 14Z" fill="#FF4655" />
+                      <polygon points="60,30 74,56 46,56" fill="#FFFFFF" />
+                      <circle cx="60" cy="60" r="52" stroke="#FF4655" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.35" />
+                      <line x1="12" y1="60" x2="26" y2="60" stroke="#FF4655" strokeWidth="2" />
+                      <line x1="94" y1="60" x2="108" y2="60" stroke="#FF4655" strokeWidth="2" />
+                      <line x1="60" y1="12" x2="60" y2="26" stroke="#FF4655" strokeWidth="2" />
+                      <line x1="60" y1="94" x2="60" y2="108" stroke="#FF4655" strokeWidth="2" />
                     </svg>
-                    <div className="mt-2 font-mono text-[11px] font-bold tracking-[0.25em] text-[#FF4655] uppercase">
-                      5V5 TACTICAL // RIOT
+                    <div className="mt-2 font-display text-sm font-extrabold tracking-[0.3em] text-[#FF4655] uppercase">
+                      VALORANT
+                    </div>
+                    <div className="font-mono text-[10px] tracking-widest text-white/60 uppercase">
+                      RIOT GAMES · PC DIVISION
                     </div>
                   </div>
                 )}
 
-                {/* GAME 2: BGMI ARTWORK */}
+                {/* GAME 2: BGMI ARTWORK & OFFICIAL BRANDING */}
                 {isBgmi && (
                   <div className="relative z-10 flex flex-col items-center text-center">
                     <svg
-                      viewBox="0 0 100 100"
-                      className="w-24 h-24 drop-shadow-[0_6px_20px_rgba(245,166,35,0.5)] transform group-hover:scale-110 transition-transform duration-300"
+                      viewBox="0 0 120 120"
+                      className="w-24 h-24 drop-shadow-[0_8px_24px_rgba(245,166,35,0.6)] transform group-hover:scale-110 transition-transform duration-300"
                       fill="none"
                       xmlns="http://www.w3.org/2000/svg"
                     >
-                      {/* Level-3 Helmet Silhouette */}
+                      {/* Level-3 Spetsnaz Helmet Silhouette */}
                       <path
-                        d="M26 48C26 34.7452 36.7452 24 50 24C63.2548 24 74 34.7452 74 48V64C74 69.5228 69.5228 74 64 74H36C30.4772 74 26 69.5228 26 64V48Z"
+                        d="M32 54C32 38.536 44.536 26 60 26C75.464 26 88 38.536 88 54V74C88 80.6274 82.6274 86 76 86H44C37.3726 86 32 80.6274 32 74V54Z"
                         fill="#1F1D16"
                         stroke="#F5A623"
                         strokeWidth="2.5"
                       />
-                      {/* Visor slit with amber reflection */}
-                      <rect x="32" y="44" width="36" height="12" rx="2" fill="#F5A623" />
-                      <rect x="34" y="46" width="32" height="8" rx="1" fill="#141410" />
-                      <line x1="36" y1="50" x2="64" y2="50" stroke="#F5A623" strokeWidth="1.5" />
-                      {/* Airdrop Box Motif */}
-                      <path d="M44 68H56V78H44V68Z" fill="#F5A623" />
-                      {/* Compass Crosshair */}
-                      <circle cx="50" cy="50" r="44" stroke="#F5A623" strokeWidth="1.5" strokeDasharray="5 5" opacity="0.35" />
-                      <polygon points="50,14 54,20 46,20" fill="#F5A623" />
+                      {/* Heavy Visor slit with amber reflection */}
+                      <rect x="38" y="50" width="44" height="14" rx="2" fill="#F5A623" />
+                      <rect x="40" y="52" width="40" height="10" rx="1" fill="#141410" />
+                      <line x1="42" y1="57" x2="78" y2="57" stroke="#F5A623" strokeWidth="1.5" />
+                      {/* Crosshair & Stencil Accent */}
+                      <circle cx="60" cy="60" r="52" stroke="#F5A623" strokeWidth="1.5" strokeDasharray="5 5" opacity="0.35" />
+                      <polygon points="60,16 64,22 56,22" fill="#F5A623" />
+                      <path d="M52 80H68V92H52V80Z" fill="#F5A623" />
                     </svg>
-                    <div className="mt-2 font-mono text-[11px] font-bold tracking-[0.22em] text-[#F5A623] uppercase">
-                      BATTLE ROYALE // KRAFTON
+                    <div className="mt-2 font-display text-sm font-extrabold tracking-[0.2em] text-[#F5A623] uppercase">
+                      BGMI
+                    </div>
+                    <div className="font-mono text-[10px] tracking-widest text-white/60 uppercase">
+                      KRAFTON · MOBILE DIVISION
                     </div>
                   </div>
                 )}
 
-                {/* GAME 3: FREE FIRE ARTWORK */}
+                {/* GAME 3: FREE FIRE ARTWORK & OFFICIAL BRANDING */}
                 {isFreefire && (
                   <div className="relative z-10 flex flex-col items-center text-center">
                     <svg
-                      viewBox="0 0 100 100"
-                      className="w-24 h-24 drop-shadow-[0_6px_20px_rgba(255,106,0,0.5)] transform group-hover:scale-110 transition-transform duration-300"
+                      viewBox="0 0 120 120"
+                      className="w-24 h-24 drop-shadow-[0_8px_24px_rgba(255,106,0,0.6)] transform group-hover:scale-110 transition-transform duration-300"
                       fill="none"
                       xmlns="http://www.w3.org/2000/svg"
                     >
-                      {/* Flame Crest & Speed Wings */}
+                      {/* Iconic Free Fire Dagger / Flame Crest */}
                       <path
-                        d="M50 16C50 16 64 34 64 48C64 62 50 78 50 78C50 78 36 62 36 48C36 34 50 16 50 16Z"
+                        d="M60 16C60 16 76 38 76 56C76 74 60 92 60 92C60 92 44 74 44 56C44 38 60 16 60 16Z"
                         fill="#FF6A00"
                       />
                       <path
-                        d="M50 32C50 32 58 44 58 54C58 64 50 72 50 72C50 72 42 64 42 54C42 44 50 32 50 32Z"
+                        d="M60 34C60 34 70 48 70 60C70 72 60 82 60 82C60 82 50 72 50 60C50 48 60 34 60 34Z"
                         fill="#FFAE00"
                       />
                       <path
-                        d="M50 48C50 48 54 56 54 62C54 68 50 72 50 72C50 72 46 68 46 62C46 56 50 48 50 48Z"
+                        d="M60 52C60 52 64 62 64 68C64 74 60 78 60 78C60 78 56 74 56 68C56 62 60 52 60 52Z"
                         fill="#FFFFFF"
                       />
-                      {/* Speed Wings */}
-                      <path d="M22 42L36 48L24 56L16 48L22 42Z" fill="#FF873D" opacity="0.8" />
-                      <path d="M78 42L64 48L76 56L84 48L78 42Z" fill="#FF873D" opacity="0.8" />
-                      {/* Outer Ring */}
-                      <circle cx="50" cy="50" r="44" stroke="#FF6A00" strokeWidth="1.5" strokeDasharray="4 6" opacity="0.4" />
+                      {/* Dynamic Speed Wings */}
+                      <path d="M26 50L42 56L28 66L18 56L26 50Z" fill="#FF873D" opacity="0.85" />
+                      <path d="M94 50L78 56L92 66L102 56L94 50Z" fill="#FF873D" opacity="0.85" />
+                      <circle cx="60" cy="60" r="52" stroke="#FF6A00" strokeWidth="1.5" strokeDasharray="4 6" opacity="0.35" />
                     </svg>
-                    <div className="mt-2 font-mono text-[11px] font-bold tracking-[0.25em] text-[#FF873D] uppercase">
-                      MAX SURVIVAL // GARENA
+                    <div className="mt-2 font-display text-sm font-extrabold tracking-[0.22em] text-[#FF873D] uppercase">
+                      FREE FIRE MAX
+                    </div>
+                    <div className="font-mono text-[10px] tracking-widest text-white/60 uppercase">
+                      GARENA · MOBILE DIVISION
                     </div>
                   </div>
                 )}
 
-                {/* Platform Tag in Corner */}
-                <div className="absolute top-4 right-4 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-white font-mono text-[11px] font-semibold">
+                {/* Top Corner Platform Tag */}
+                <div className="absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-white font-mono text-[11px] font-semibold">
                   {game.platform === "PC" ? <Monitor size={12} /> : <Smartphone size={12} />}
-                  <span>{game.platform}</span>
+                  <span>{game.platform} LAN</span>
                 </div>
               </div>
 
@@ -170,29 +244,60 @@ export const OfficialGameCards: React.FC = () => {
                       {game.badge}
                     </span>
                     <span className="text-white/40 text-xs">•</span>
-                    <span className="font-heading text-xs font-semibold uppercase tracking-wider text-white/70">
-                      {game.genre}
+                    <span className="font-mono text-[11px] font-semibold text-white/70">
+                      {game.category}
                     </span>
                   </div>
 
-                  {/* Title */}
-                  <h3 className="font-display text-2xl font-extrabold text-white tracking-tight mb-3">
+                  {/* Title & Publisher */}
+                  <h3
+                    className="font-display text-2xl font-black tracking-tight mb-2"
+                    style={{ color: "#ffffff" }}
+                  >
                     {game.title}
                   </h3>
 
-                  {/* Description */}
-                  <p className="font-body text-sm text-white/80 leading-relaxed mb-4">
+                  {/* Exact Requested Description */}
+                  <p
+                    className="font-body text-sm leading-relaxed mb-5"
+                    style={{ color: "rgba(255, 255, 255, 0.9)" }}
+                  >
                     {game.description}
                   </p>
 
-                  {/* Notice Badge */}
-                  <div className="p-3 rounded-xl bg-white/5 border border-white/10 text-xs text-white/70 mb-6 font-body flex items-start gap-2">
-                    <Info size={14} className="shrink-0 mt-0.5 text-white/50" />
-                    <span>{game.rulesNotice}</span>
+                  {/* Structured Tournament Information Matrix */}
+                  <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5 mb-5 text-xs font-body">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-white/60 font-mono uppercase text-[10px] flex items-center gap-1">
+                        <Users size={12} /> Roster Size
+                      </span>
+                      <strong className="text-white text-right">{game.teamSize}</strong>
+                    </div>
+
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-white/60 font-mono uppercase text-[10px] flex items-center gap-1">
+                        <Trophy size={12} /> Structure
+                      </span>
+                      <span className="text-white/90 text-right">{game.format}</span>
+                    </div>
+
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-white/60 font-mono uppercase text-[10px]">Active Maps</span>
+                      <span className="text-white/90 text-right font-mono">{game.mapPool}</span>
+                    </div>
+
+                    <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[11px]">
+                      <span className="text-[#D5F542] font-mono flex items-center gap-1">
+                        <CheckCircle2 size={12} /> Verified Student Rosters
+                      </span>
+                      <span className="text-amber-300 font-mono text-[10px]">
+                        Awaiting Organiser Confirmation
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Card Actions */}
+                {/* Card Actions: REGISTER SQUAD + VIEW RULES */}
                 <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
                   <Link
                     to={game.registerQuery}
@@ -208,12 +313,12 @@ export const OfficialGameCards: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => setSelectedGameInfo(game)}
-                    className="w-full sm:w-auto h-11 px-4 rounded-full bg-white/10 border border-white/20 text-white font-heading font-bold text-xs uppercase tracking-wider hover:bg-white/20 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                    aria-label={`Tournament info for ${game.title}`}
+                    onClick={() => setSelectedRulesGame(game.id)}
+                    className="w-full sm:w-auto h-11 px-5 rounded-full bg-white/10 border border-white/20 text-white font-heading font-bold text-xs uppercase tracking-wider hover:bg-white/20 transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                    aria-label={`View rules for ${game.title}`}
                   >
-                    <Info size={13} />
-                    <span>INFO</span>
+                    <BookOpen size={14} className="text-[#D5F542]" />
+                    <span>VIEW RULES</span>
                   </button>
                 </div>
               </div>
@@ -222,79 +327,13 @@ export const OfficialGameCards: React.FC = () => {
         })}
       </div>
 
-      {/* Tournament Information Modal */}
-      {selectedGameInfo && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 animate-fadeIn"
-        >
-          <div className="bg-[#191936] border-2 border-white/20 rounded-[24px] max-w-lg w-full p-6 sm:p-8 text-white relative shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
-            <button
-              type="button"
-              onClick={() => setSelectedGameInfo(null)}
-              className="absolute top-5 right-5 w-9 h-9 rounded-full bg-white/10 border border-white/20 text-white flex items-center justify-center hover:bg-white/20 transition-colors cursor-pointer"
-              aria-label="Close dialog"
-            >
-              <X size={18} />
-            </button>
-
-            <div className="flex items-center gap-2 mb-2">
-              <span
-                className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold uppercase tracking-wider border"
-                style={{
-                  backgroundColor: `${selectedGameInfo.accentColor}20`,
-                  color: selectedGameInfo.accentColor,
-                  borderColor: `${selectedGameInfo.accentColor}50`,
-                }}
-              >
-                {selectedGameInfo.badge}
-              </span>
-              <span className="font-mono text-xs text-white/60">
-                {selectedGameInfo.platform} Division
-              </span>
-            </div>
-
-            <h3 className="font-display text-2xl sm:text-3xl font-extrabold mb-3">
-              {selectedGameInfo.title}
-            </h3>
-
-            <p className="font-body text-sm sm:text-base text-white/80 leading-relaxed mb-5">
-              {selectedGameInfo.description}
-            </p>
-
-            <div className="space-y-3 p-4 rounded-xl bg-white/5 border border-white/10 text-xs sm:text-sm text-white/85 mb-6 font-body">
-              <div className="flex items-start gap-2">
-                <Check size={16} className="text-[#D5F542] shrink-0 mt-0.5" />
-                <span>Open to verified student rosters from institutions across Karnataka.</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <Check size={16} className="text-[#D5F542] shrink-0 mt-0.5" />
-                <span>Valid student ID card required for each registered squad member.</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <Check size={16} className="text-[#D5F542] shrink-0 mt-0.5" />
-                <span>{selectedGameInfo.rulesNotice}</span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  const target = selectedGameInfo.registerQuery;
-                  setSelectedGameInfo(null);
-                  navigate(target);
-                }}
-                className="btn-primary flex-1 text-center"
-                style={{ height: "48px" }}
-              >
-                <span>PROCEED TO SQUAD REGISTRATION</span>
-                <ArrowRight size={15} />
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Rules Modal for Active Game */}
+      {selectedRulesGame && (
+        <GameRulesModal
+          gameId={selectedRulesGame}
+          isOpen={true}
+          onClose={() => setSelectedRulesGame(null)}
+        />
       )}
     </div>
   );
