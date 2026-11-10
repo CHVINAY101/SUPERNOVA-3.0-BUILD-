@@ -42,6 +42,8 @@ import AdminInstitutions from "./pages/admin/AdminInstitutions";
 import AdminSettings from "./pages/admin/AdminSettings";
 import AdminFormOptions from "./pages/admin/AdminFormOptions";
 import AdminAuditLogs from "./pages/admin/AdminAuditLogs";
+import AdminSystemReadiness from "./pages/admin/AdminSystemReadiness";
+import AdminDataExports from "./pages/admin/AdminDataExports";
 
 export default function App() {
   return (
@@ -104,6 +106,8 @@ export default function App() {
         <Route path="settings" element={<AdminSettings />} />
         <Route path="form-options" element={<AdminFormOptions />} />
         <Route path="audit-logs" element={<AdminAuditLogs />} />
+        <Route path="system-readiness" element={<AdminSystemReadiness />} />
+        <Route path="data-exports" element={<AdminDataExports />} />
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Route>
 

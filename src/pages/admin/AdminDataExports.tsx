@@ -17,17 +17,10 @@ import {
   FileSpreadsheet,
   FileText,
   Filter,
-  Search,
   ShieldAlert,
   CheckCircle2,
-  AlertTriangle,
   RotateCcw,
-  Users,
-  Gamepad2,
-  GraduationCap,
-  Calendar,
   Lock,
-  Eye,
   CheckSquare,
   Square,
   X,
@@ -56,7 +49,7 @@ export default function AdminDataExports() {
   const [esportsData, setEsportsData] = useState<any[]>([]);
   const [gamesList, setGamesList] = useState<GameRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [, setFetchError] = useState<string | null>(null);
 
   // Filters State
   const [searchQuery, setSearchQuery] = useState("");

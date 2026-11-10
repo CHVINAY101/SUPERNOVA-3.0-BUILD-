@@ -71,9 +71,9 @@ export const FinalCta: React.FC = () => {
             </a>
           </span>
           <span className="hidden sm:inline text-white/40">•</span>
-          <span>{meta.dates}</span>
+          <span className="whitespace-nowrap">{meta.dates}</span>
           <span className="hidden sm:inline text-white/40">•</span>
-          <span>{meta.venue}</span>
+          <span className="whitespace-nowrap">{meta.venue}</span>
         </div>
       </div>
 

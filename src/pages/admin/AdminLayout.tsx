@@ -19,7 +19,9 @@ import {
   LogOut,
   ExternalLink,
   SlidersHorizontal,
-  ListPlus
+  ListPlus,
+  ClipboardCheck,
+  Download
 } from "lucide-react";
 
 interface NavItem {
@@ -50,6 +52,7 @@ const navSections: NavSection[] = [
       { to: "/admin/participation-registrations", label: "Participation", icon: Users, allowedRoles: ["super_admin", "event_admin"] },
       { to: "/admin/esports-registrations", label: "Esports Teams", icon: Gamepad2, allowedRoles: ["super_admin", "event_admin"] },
       { to: "/admin/visitor-registrations", label: "Visitors", icon: UserCheck, allowedRoles: ["super_admin", "event_admin"] },
+      { to: "/admin/data-exports", label: "Registration Data Exports", icon: Download, allowedRoles: ["super_admin", "event_admin"] },
     ],
   },
   {
@@ -72,6 +75,7 @@ const navSections: NavSection[] = [
       { to: "/admin/settings", label: "Event Details", icon: Settings, allowedRoles: ["super_admin", "event_admin"] },
       { to: "/admin/form-options", label: "Form Options", icon: ListPlus, allowedRoles: ["super_admin", "event_admin"] },
       { to: "/admin/audit-logs", label: "Activity Log", icon: ShieldAlert, allowedRoles: ["super_admin", "event_admin"] },
+      { to: "/admin/system-readiness", label: "System Readiness", icon: ClipboardCheck, allowedRoles: ["super_admin", "event_admin"] },
     ],
   },
 ];

@@ -28,7 +28,7 @@ export const HomeCountdownSchedule = () => {
               <span className="text-[11px] font-bold uppercase tracking-wider text-[#52527A] block mb-1">
                 Venue
               </span>
-              <span className="text-sm font-bold text-[#151535]">
+              <span className="text-sm font-bold text-[#151535] whitespace-nowrap">
                 The National College, Basavanagudi, Bengaluru – 04
               </span>
             </div>

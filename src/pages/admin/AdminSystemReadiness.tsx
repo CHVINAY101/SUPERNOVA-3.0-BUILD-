@@ -11,7 +11,6 @@ import {
   runAutomatedDiagnostics,
 } from "@/services/readinessAuditService";
 import {
-  ClipboardCheck,
   CheckCircle2,
   XCircle,
   AlertTriangle,
@@ -20,15 +19,8 @@ import {
   RotateCcw,
   ShieldAlert,
   Search,
-  Filter,
-  Eye,
   FileCheck,
-  Lock,
-  Sparkles,
-  ExternalLink,
-  ChevronRight,
   X,
-  UserCheck
 } from "lucide-react";
 
 const CATEGORY_LABELS: Record<AuditCategory, { label: string; icon: string }> = {
@@ -58,7 +50,7 @@ const STATUS_BADGES: Record<AuditStatus, { bg: string; text: string; icon: any }
 };
 
 export default function AdminSystemReadiness() {
-  const { user, role } = useAuth();
+  const { user } = useAuth();
   const [items, setItems] = useState<ChecklistItem[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<AuditCategory | "all">("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");

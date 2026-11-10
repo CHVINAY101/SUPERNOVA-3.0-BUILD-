@@ -164,7 +164,7 @@ export const Nav: FC = () => {
             aria-label="SUPERNOVA 3.0 Home"
           >
             <img
-              src="/assets/aistudio/Futuristic_Supernova_3.0_Logo_png_c0ddbd5c.png"
+              src="/assets/aistudio/3-Photoroom_7b0b3a46.png"
               alt="SUPERNOVA 3.0"
               className="h-7 sm:h-8 w-auto object-contain block transition-transform group-hover:scale-105"
               onError={(e) => {

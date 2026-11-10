@@ -1750,7 +1750,6 @@ export async function runAutomatedDiagnostics(
 
   // Test 1: Env variables
   const url = import.meta.env.VITE_SUPABASE_URL;
-  const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
   const mock = import.meta.env.VITE_USE_MOCK;
 
   if (url === "https://cirreovughlncadrbvcn.supabase.co") {
@@ -1906,7 +1905,7 @@ export async function runAutomatedDiagnostics(
 
   // Test 6: Audit log operational check
   try {
-    const { data: auditData, error: auditError } = await supabase
+    const { error: auditError } = await supabase
       .from("audit_logs")
       .select("id")
       .limit(1);
