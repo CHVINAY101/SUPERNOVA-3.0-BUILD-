@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { isConfigured } from "@/lib/supabase";
+import { isMockMode } from "@/lib/supabase";
 import type { AdminRole } from "@/types/database";
 import { 
   LayoutDashboard, 
@@ -193,11 +193,11 @@ export default function AdminLayout() {
       </aside>
 
       <main style={{ flex: 1, overflow: "auto", padding: "32px 40px" }}>
-        {!isConfigured && (
+        {isMockMode && (
           <div
             style={{
-              background: "rgba(239, 68, 68, 0.12)",
-              border: "1px solid rgba(239, 68, 68, 0.3)",
+              background: "rgba(245, 158, 11, 0.12)",
+              border: "1px solid rgba(245, 158, 11, 0.3)",
               borderRadius: "var(--radius-sm, 8px)",
               padding: "12px 18px",
               marginBottom: 24,
@@ -209,15 +209,15 @@ export default function AdminLayout() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <AlertTriangle size={18} color="#dc2626" />
-              <div style={{ fontSize: "0.85rem", color: "#b91c1c" }}>
-                <strong style={{ background: "#dc2626", color: "#fff", padding: "2px 6px", borderRadius: 4, marginRight: 8, fontSize: "0.72rem", letterSpacing: "0.05em" }}>
-                  CONNECTION REQUIRED
+              <AlertTriangle size={18} color="#d97706" />
+              <div style={{ fontSize: "0.85rem", color: "#b45309" }}>
+                <strong style={{ background: "#d97706", color: "#fff", padding: "2px 6px", borderRadius: 4, marginRight: 8, fontSize: "0.72rem", letterSpacing: "0.05em" }}>
+                  DEMO MODE
                 </strong>
-                Supabase database connection missing. Demo mode is disabled in production. Ensure <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> are configured in <code>.env</code>.
+                Data is not saved to persistent storage. Connect live Supabase in <code>.env</code> for production storage.
               </div>
             </div>
-            <span style={{ fontSize: "0.76rem", color: "#dc2626", fontWeight: 600 }}>Offline</span>
+            <span style={{ fontSize: "0.76rem", color: "#d97706", fontWeight: 600 }}>In-Memory Client Active</span>
           </div>
         )}
         <Outlet />

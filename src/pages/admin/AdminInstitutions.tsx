@@ -4,33 +4,60 @@ import { supabase } from "@/lib/supabase";
 import type { InstitutionItem } from "@/types/database";
 import { GraduationCap, ExternalLink, Plus, Edit2, Check, X, Trash2, CheckCircle, AlertCircle } from "lucide-react";
 
+const INITIAL_INSTITUTIONS: InstitutionItem[] = [
+  {
+    id: "inst-1",
+    name: "The National College, Basavanagudi",
+    role: "Host & Autonomous Lead College",
+    description: "Centenary campus hosting Science Expo, Animation Showcase and Esports Tournament arenas.",
+    is_published: true,
+    sort_order: 1,
+  },
+  {
+    id: "inst-2",
+    name: "National Pre-University College",
+    role: "Higher Secondary Science & Commerce",
+    description: "Basavanagudi higher secondary students leading physics models, Olympiad prototypes, and volunteer desks.",
+    is_published: true,
+    sort_order: 2,
+  },
+  {
+    id: "inst-3",
+    name: "National English School",
+    role: "Foundational & Middle School",
+    description: "Primary and middle school teams presenting environmental inventions and arts models in the Kids' Pavilion.",
+    is_published: true,
+    sort_order: 3,
+  },
+  {
+    id: "inst-4",
+    name: "National High School",
+    role: "Secondary Heritage School",
+    description: "Historic secondary academy alumni and students presenting science exhibitions and competitive robotics.",
+    is_published: true,
+    sort_order: 4,
+  },
+];
+
 export default function AdminInstitutions() {
-  const [institutions, setInstitutions] = useState<InstitutionItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [institutions, setInstitutions] = useState<InstitutionItem[]>(INITIAL_INSTITUTIONS);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<InstitutionItem>>({});
   const [showAddForm, setShowAddForm] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const fetchInstitutions = useCallback(async () => {
-    setLoading(true);
     try {
       const { data, error } = await supabase
         .from("institutions")
         .select("*")
         .order("sort_order", { ascending: true });
 
-      if (error) {
-        console.warn("Could not load institutions:", error);
-        setStatusMsg({ type: "error", text: "Institutions could not be loaded from database. Please refresh." });
-      } else if (data) {
+      if (!error && data && data.length > 0) {
         setInstitutions(data as InstitutionItem[]);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.warn("Could not load institutions:", err);
-      setStatusMsg({ type: "error", text: `Connection error: ${err.message || String(err)}` });
-    } finally {
-      setLoading(false);
     }
   }, []);
 
@@ -194,14 +221,7 @@ export default function AdminInstitutions() {
         </div>
       )}
 
-      {loading ? (
-        <div className="card" style={{ textAlign: "center", padding: "48px 24px" }}>
-          <div className="loading-spinner" style={{ margin: "0 auto 12px" }} />
-          <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", margin: 0 }}>
-            Loading live institutions from database...
-          </p>
-        </div>
-      ) : institutions.length === 0 ? (
+      {institutions.length === 0 ? (
         <div className="card" style={{ textAlign: "center", padding: "48px 24px" }}>
           <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", margin: "0 0 12px" }}>
             No schools or institutions registered yet.

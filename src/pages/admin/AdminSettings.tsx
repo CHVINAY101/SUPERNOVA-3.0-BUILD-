@@ -59,8 +59,8 @@ export default function AdminSettings() {
         setConnResult({
           success: true,
           message: connInfo.isConfigured
-            ? `Connected to remote Supabase instance! Checked query successfully (${data ? data.length : 0} records found).`
-            : "Database unconfigured. Please configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env.",
+            ? `Connected to remote Supabase instance! Checked query successfully (${data ? data.length : 0} record found).`
+            : "In-memory database stub is active and operational (Demo Mode). Add credentials in .env to connect live.",
         });
       }
     } catch (err: any) {
@@ -163,18 +163,18 @@ export default function AdminSettings() {
                     textTransform: "uppercase",
                     padding: "3px 8px",
                     borderRadius: 9999,
-                    background: connInfo.isConfigured ? "rgba(16, 185, 129, 0.18)" : "rgba(239, 68, 68, 0.18)",
-                    color: connInfo.isConfigured ? "#059669" : "#dc2626",
-                    border: connInfo.isConfigured ? "1px solid rgba(16, 185, 129, 0.3)" : "1px solid rgba(239, 68, 68, 0.3)",
+                    background: connInfo.isConfigured ? "rgba(16, 185, 129, 0.18)" : "rgba(245, 158, 11, 0.18)",
+                    color: connInfo.isConfigured ? "#059669" : "#b45309",
+                    border: connInfo.isConfigured ? "1px solid rgba(16, 185, 129, 0.3)" : "1px solid rgba(245, 158, 11, 0.3)",
                   }}
                 >
-                  {connInfo.isConfigured ? "Live Cloud Connected" : "Connection Unconfigured"}
+                  {connInfo.isConfigured ? "Live Cloud Connected" : "In-Memory Demo Stub"}
                 </span>
               </div>
               <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", margin: "4px 0 0" }}>
                 {connInfo.isConfigured
                   ? `Active connection target: ${connInfo.url}`
-                  : "Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env to connect to live database."}
+                  : "Currently running with local deterministic in-memory store so all features work out-of-the-box."}
               </p>
             </div>
           </div>
