@@ -1,6 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
-import { sendRegistrationConfirmationEmail, archiveRegistrationRecord, restoreRegistrationRecord } from "@/lib/registrationOperations";
+import {
+  sendRegistrationConfirmationEmail,
+  archiveRegistrationRecord,
+  restoreRegistrationRecord,
+  isRegistrationArchived,
+  markRegistrationArchivedLocal,
+} from "@/lib/registrationOperations";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
@@ -157,11 +163,28 @@ export default function AdminVisitorRegistrations() {
       if (!res.ok) throw new Error(res.error);
 
       const now = new Date().toISOString();
+      markRegistrationArchivedLocal(archiveTarget.id, true);
       setRegistrations((prev) =>
-        prev ? prev.map((item) => (item.id === archiveTarget.id ? { ...item, archived_at: now } : item)) : null
+        prev
+          ? prev.map((item) =>
+              item.id === archiveTarget.id
+                ? {
+                    ...item,
+                    archived_at: now,
+                    admin_notes: item.admin_notes ? `${item.admin_notes}\n[ARCHIVED ${now}]` : `[ARCHIVED ${now}]`,
+                  }
+                : item
+            )
+          : null
       );
       if (inspectedRecord && inspectedRecord.id === archiveTarget.id) {
-        setInspectedRecord({ ...inspectedRecord, archived_at: now });
+        setInspectedRecord({
+          ...inspectedRecord,
+          archived_at: now,
+          admin_notes: inspectedRecord.admin_notes
+            ? `${inspectedRecord.admin_notes}\n[ARCHIVED ${now}]`
+            : `[ARCHIVED ${now}]`,
+        });
       }
 
       setStatusMsg({
@@ -187,11 +210,26 @@ export default function AdminVisitorRegistrations() {
       const res = await restoreRegistrationRecord("visitor", item.id);
       if (!res.ok) throw new Error(res.error);
 
+      markRegistrationArchivedLocal(item.id, false);
       setRegistrations((prev) =>
-        prev ? prev.map((r) => (r.id === item.id ? { ...r, archived_at: null } : r)) : null
+        prev
+          ? prev.map((r) =>
+              r.id === item.id
+                ? {
+                    ...r,
+                    archived_at: null,
+                    admin_notes: r.admin_notes?.replace(/\[ARCHIVED.*?\]/g, "").trim() || null,
+                  }
+                : r
+            )
+          : null
       );
       if (inspectedRecord && inspectedRecord.id === item.id) {
-        setInspectedRecord({ ...inspectedRecord, archived_at: null });
+        setInspectedRecord({
+          ...inspectedRecord,
+          archived_at: null,
+          admin_notes: inspectedRecord.admin_notes?.replace(/\[ARCHIVED.*?\]/g, "").trim() || null,
+        });
       }
 
       setStatusMsg({
@@ -240,7 +278,7 @@ export default function AdminVisitorRegistrations() {
     if (!registrations) return [];
 
     return registrations.filter((item) => {
-      const isArchived = Boolean(item.archived_at);
+      const isArchived = isRegistrationArchived(item);
 
       // 1. View Scope
       if (viewScope === "active" && isArchived) return false;
@@ -303,7 +341,7 @@ export default function AdminVisitorRegistrations() {
     let archived = 0;
 
     registrations.forEach((r) => {
-      if (r.archived_at) {
+      if (isRegistrationArchived(r)) {
         archived++;
       } else {
         totalActive++;
@@ -365,7 +403,7 @@ export default function AdminVisitorRegistrations() {
       sanitizeCsv(r.in_game_id || ""),
       sanitizeCsv(r.team_name || ""),
       sanitizeCsv(r.status),
-      sanitizeCsv(r.archived_at ? "YES" : "NO"),
+      sanitizeCsv(isRegistrationArchived(r) ? "YES" : "NO"),
       sanitizeCsv(r.submitted_at),
     ]);
 
@@ -603,7 +641,7 @@ export default function AdminVisitorRegistrations() {
                   const parsedCategory = getParsedCategory(row);
                   const isEsports = getEsportsInterest(row);
                   const preferredGame = getPreferredGame(row);
-                  const isArchived = Boolean(row.archived_at);
+                  const isArchived = isRegistrationArchived(row);
 
                   return (
                     <tr
@@ -754,7 +792,7 @@ export default function AdminVisitorRegistrations() {
                     <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded">
                       {inspectedRecord.registration_ref}
                     </span>
-                    <AdminStatusBadge status={inspectedRecord.status} isArchived={Boolean(inspectedRecord.archived_at)} />
+                    <AdminStatusBadge status={inspectedRecord.status} isArchived={isRegistrationArchived(inspectedRecord)} />
                   </div>
                   <h2 className="text-xl font-display font-black text-slate-900 tracking-tight m-0">
                     {inspectedRecord.full_name}
@@ -802,7 +840,7 @@ export default function AdminVisitorRegistrations() {
                   >
                     Decline
                   </button>
-                  {Boolean(inspectedRecord.archived_at) ? (
+                  {isRegistrationArchived(inspectedRecord) ? (
                     <button
                       type="button"
                       disabled={savingId === inspectedRecord.id}

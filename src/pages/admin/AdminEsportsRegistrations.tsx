@@ -3,7 +3,12 @@ import { supabase } from "@/lib/supabase";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
 import { getOfficialTeamSize } from "@/utils/esportsRules";
-import { archiveRegistrationRecord, restoreRegistrationRecord } from "@/lib/registrationOperations";
+import {
+  archiveRegistrationRecord,
+  restoreRegistrationRecord,
+  isRegistrationArchived,
+  markRegistrationArchivedLocal,
+} from "@/lib/registrationOperations";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import {
@@ -36,6 +41,7 @@ export interface EsportsRegistrationItem {
   phone: string;
   institution: string | null;
   status: string;
+  admin_notes?: string | null;
   submitted_at: string;
   archived_at?: string | null;
   games: {
@@ -101,8 +107,8 @@ export default function AdminEsportsRegistrations() {
           phone,
           institution,
           status,
+          admin_notes,
           submitted_at,
-          archived_at,
           games (
             id,
             title,
@@ -185,12 +191,28 @@ export default function AdminEsportsRegistrations() {
       }
 
       const now = new Date().toISOString();
+      markRegistrationArchivedLocal(archiveTarget.id, true);
       setRegistrations((prev) =>
-        prev.map((r) => (r.id === archiveTarget.id ? { ...r, archived_at: now } : r))
+        prev.map((r) =>
+          r.id === archiveTarget.id
+            ? {
+                ...r,
+                archived_at: now,
+                admin_notes: r.admin_notes ? `${r.admin_notes}\n[ARCHIVED ${now}]` : `[ARCHIVED ${now}]`,
+              }
+            : r
+        )
       );
 
       if (selectedReg && selectedReg.id === archiveTarget.id) {
-        setSelectedReg({ ...selectedReg, archived_at: now, isArchived: true });
+        setSelectedReg({
+          ...selectedReg,
+          archived_at: now,
+          admin_notes: selectedReg.admin_notes
+            ? `${selectedReg.admin_notes}\n[ARCHIVED ${now}]`
+            : `[ARCHIVED ${now}]`,
+          isArchived: true,
+        });
       }
 
       setStatusMessage({
@@ -218,12 +240,26 @@ export default function AdminEsportsRegistrations() {
         throw new Error(res.error);
       }
 
+      markRegistrationArchivedLocal(item.id, false);
       setRegistrations((prev) =>
-        prev.map((r) => (r.id === item.id ? { ...r, archived_at: null } : r))
+        prev.map((r) =>
+          r.id === item.id
+            ? {
+                ...r,
+                archived_at: null,
+                admin_notes: r.admin_notes?.replace(/\[ARCHIVED.*?\]/g, "").trim() || null,
+              }
+            : r
+        )
       );
 
       if (selectedReg && selectedReg.id === item.id) {
-        setSelectedReg({ ...selectedReg, archived_at: null, isArchived: false });
+        setSelectedReg({
+          ...selectedReg,
+          archived_at: null,
+          admin_notes: selectedReg.admin_notes?.replace(/\[ARCHIVED.*?\]/g, "").trim() || null,
+          isArchived: false,
+        });
       }
 
       setStatusMessage({
@@ -249,7 +285,7 @@ export default function AdminEsportsRegistrations() {
       const expectedCount = getOfficialTeamSize(r.games?.title, r.games?.team_size);
       const isRosterValid = registeredCount === expectedCount;
       const isFlagged = !isRosterValid;
-      const isArchived = Boolean(r.archived_at);
+      const isArchived = isRegistrationArchived(r);
 
       return {
         ...r,

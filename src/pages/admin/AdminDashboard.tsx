@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
 import { LiveRegistrationCounters } from "@/components/admin/LiveRegistrationCounters";
+import { isRegistrationArchived } from "@/lib/registrationOperations";
 import type { RegistrationControl, AuditLog, Match } from "@/types/database";
 import { 
   Gamepad2, 
@@ -35,18 +36,18 @@ export default function AdminDashboard() {
   const fetchDashboardData = useCallback(async () => {
     try {
       const [partsRes, esportsRes, visRes, checkinsRes, matchesRes, logsRes, controlsRes] = await Promise.all([
-        supabase.from("participation_registrations").select("status, archived_at"),
-        supabase.from("registrations").select("status, archived_at"),
-        supabase.from("visitor_registrations").select("status, archived_at, check_in_status"),
+        supabase.from("participation_registrations").select("id, status, admin_notes"),
+        supabase.from("registrations").select("id, status, admin_notes"),
+        supabase.from("visitor_registrations").select("id, status, admin_notes, check_in_status"),
         supabase.from("check_ins").select("id"),
         supabase.from("matches").select("*").eq("status", "live"),
         supabase.from("audit_logs").select("*").order("created_at", { ascending: false }).limit(5),
         supabase.from("registration_controls").select("*").order("form_type"),
       ]);
 
-      const parts = (partsRes.data || []).filter((p: any) => !p.archived_at);
-      const esports = (esportsRes.data || []).filter((e: any) => !e.archived_at);
-      const visitors = (visRes.data || []).filter((v: any) => !v.archived_at);
+      const parts = (partsRes.data || []).filter((p: any) => !isRegistrationArchived(p));
+      const esports = (esportsRes.data || []).filter((e: any) => !isRegistrationArchived(e));
+      const visitors = (visRes.data || []).filter((v: any) => !isRegistrationArchived(v));
       const checkins = checkinsRes.data || [];
       const matches = matchesRes.data || [];
       const logs = logsRes.data || [];

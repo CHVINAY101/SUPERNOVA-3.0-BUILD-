@@ -3,7 +3,12 @@ import { supabase } from "@/lib/supabase";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
 import type { ParticipationRegistration, RegistrationStatus } from "@/types/database";
-import { archiveRegistrationRecord, restoreRegistrationRecord } from "@/lib/registrationOperations";
+import {
+  archiveRegistrationRecord,
+  restoreRegistrationRecord,
+  isRegistrationArchived,
+  markRegistrationArchivedLocal,
+} from "@/lib/registrationOperations";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { 
@@ -109,11 +114,28 @@ export default function AdminParticipationRegistrations() {
       if (!res.ok) throw new Error(res.error);
 
       const now = new Date().toISOString();
+      markRegistrationArchivedLocal(archiveTarget.id, true);
       setRegistrations((prev) =>
-        prev.map((r) => (r.id === archiveTarget.id ? ({ ...r, archived_at: now } as any) : r))
+        prev.map((r) =>
+          r.id === archiveTarget.id
+            ? ({
+                ...r,
+                archived_at: now,
+                admin_notes: (r as any).admin_notes
+                  ? `${(r as any).admin_notes}\n[ARCHIVED ${now}]`
+                  : `[ARCHIVED ${now}]`,
+              } as any)
+            : r
+        )
       );
       if (selectedReg && selectedReg.id === archiveTarget.id) {
-        setSelectedReg({ ...selectedReg, archived_at: now } as any);
+        setSelectedReg({
+          ...selectedReg,
+          archived_at: now,
+          admin_notes: (selectedReg as any).admin_notes
+            ? `${(selectedReg as any).admin_notes}\n[ARCHIVED ${now}]`
+            : `[ARCHIVED ${now}]`,
+        } as any);
       }
 
       setStatusMsg({
@@ -139,11 +161,24 @@ export default function AdminParticipationRegistrations() {
       const res = await restoreRegistrationRecord("participation", item.id);
       if (!res.ok) throw new Error(res.error);
 
+      markRegistrationArchivedLocal(item.id, false);
       setRegistrations((prev) =>
-        prev.map((r) => (r.id === item.id ? ({ ...r, archived_at: null } as any) : r))
+        prev.map((r) =>
+          r.id === item.id
+            ? ({
+                ...r,
+                archived_at: null,
+                admin_notes: (r as any).admin_notes?.replace(/\[ARCHIVED.*?\]/g, "").trim() || null,
+              } as any)
+            : r
+        )
       );
       if (selectedReg && selectedReg.id === item.id) {
-        setSelectedReg({ ...selectedReg, archived_at: null } as any);
+        setSelectedReg({
+          ...selectedReg,
+          archived_at: null,
+          admin_notes: (selectedReg as any).admin_notes?.replace(/\[ARCHIVED.*?\]/g, "").trim() || null,
+        } as any);
       }
 
       setStatusMsg({
@@ -163,7 +198,7 @@ export default function AdminParticipationRegistrations() {
 
   const filteredRegistrations = useMemo(() => {
     return registrations.filter((reg) => {
-      const isArchived = Boolean((reg as any).archived_at);
+      const isArchived = isRegistrationArchived(reg as any);
 
       // 1. View Scope
       if (viewScope === "active" && isArchived) return false;
@@ -204,7 +239,7 @@ export default function AdminParticipationRegistrations() {
     let archived = 0;
 
     registrations.forEach((r: any) => {
-      if (r.archived_at) {
+      if (isRegistrationArchived(r)) {
         archived++;
       } else {
         activeTotal++;
@@ -234,7 +269,7 @@ export default function AdminParticipationRegistrations() {
       sanitizeCsv(r.project_title || "Untitled"),
       sanitizeCsv(r.team_members_count),
       sanitizeCsv(r.status),
-      sanitizeCsv(r.archived_at ? "YES" : "NO"),
+      sanitizeCsv(isRegistrationArchived(r) ? "YES" : "NO"),
       sanitizeCsv(r.submitted_at),
     ]);
 
@@ -433,7 +468,7 @@ export default function AdminParticipationRegistrations() {
                 </tr>
               ) : (
                 filteredRegistrations.map((reg: any) => {
-                  const isArchived = Boolean(reg.archived_at);
+                  const isArchived = isRegistrationArchived(reg);
                   return (
                     <tr
                       key={reg.id}
@@ -542,7 +577,7 @@ export default function AdminParticipationRegistrations() {
                     <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded">
                       {selectedReg.registration_ref}
                     </span>
-                    <AdminStatusBadge status={selectedReg.status} isArchived={Boolean((selectedReg as any).archived_at)} />
+                    <AdminStatusBadge status={selectedReg.status} isArchived={isRegistrationArchived(selectedReg as any)} />
                   </div>
                   <h2 className="text-xl font-display font-black text-slate-900 tracking-tight m-0">
                     {selectedReg.project_title || "Untitled Exhibit"}
@@ -590,7 +625,7 @@ export default function AdminParticipationRegistrations() {
                   >
                     Decline
                   </button>
-                  {Boolean((selectedReg as any).archived_at) ? (
+                  {isRegistrationArchived(selectedReg as any) ? (
                     <button
                       type="button"
                       disabled={isUpdating}

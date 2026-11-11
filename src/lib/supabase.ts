@@ -4,12 +4,12 @@
  * Configured directly with VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.
  * Mock mode is disabled; all operations execute against live Supabase.
  */
-import { supabase } from "@/utils/supabase";
+import { supabase, checkSupabaseClientConfig } from "@/utils/supabase";
 
-export { supabase };
+export { supabase, checkSupabaseClientConfig };
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const isConfigured = Boolean(
   supabaseUrl &&

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { Users, Gamepad2, Clock, CheckCircle2, Archive } from "lucide-react";
+import { isRegistrationArchived } from "@/lib/registrationOperations";
 
 interface LiveCounts {
   activeVisitors: number;
@@ -23,30 +24,30 @@ export function LiveRegistrationCounters() {
   const fetchCounts = useCallback(async () => {
     try {
       const [visRes, espRes, partRes] = await Promise.all([
-        supabase.from("visitor_registrations").select("status, archived_at"),
-        supabase.from("registrations").select("status, archived_at"),
-        supabase.from("participation_registrations").select("status, archived_at"),
+        supabase.from("visitor_registrations").select("id, status, admin_notes"),
+        supabase.from("registrations").select("id, status, admin_notes"),
+        supabase.from("participation_registrations").select("id, status, admin_notes"),
       ]);
 
-      const visitors = visRes.data || [];
-      const esports = espRes.data || [];
-      const participation = partRes.data || [];
+      const visitors = (visRes.data || []) as any[];
+      const esports = (espRes.data || []) as any[];
+      const participation = (partRes.data || []) as any[];
 
-      const activeVisitors = visitors.filter((r) => !r.archived_at).length;
-      const activeEsportsTeams = esports.filter((r) => !r.archived_at).length;
+      const activeVisitors = visitors.filter((r) => !isRegistrationArchived(r)).length;
+      const activeEsportsTeams = esports.filter((r) => !isRegistrationArchived(r)).length;
 
       const allActive = [
-        ...visitors.filter((r) => !r.archived_at),
-        ...esports.filter((r) => !r.archived_at),
-        ...participation.filter((r) => !r.archived_at),
+        ...visitors.filter((r) => !isRegistrationArchived(r)),
+        ...esports.filter((r) => !isRegistrationArchived(r)),
+        ...participation.filter((r) => !isRegistrationArchived(r)),
       ];
 
       const pendingTotal = allActive.filter((r) => r.status === "pending").length;
       const confirmedTotal = allActive.filter((r) => r.status === "confirmed").length;
       const archivedTotal =
-        visitors.filter((r) => Boolean(r.archived_at)).length +
-        esports.filter((r) => Boolean(r.archived_at)).length +
-        participation.filter((r) => Boolean(r.archived_at)).length;
+        visitors.filter((r) => isRegistrationArchived(r)).length +
+        esports.filter((r) => isRegistrationArchived(r)).length +
+        participation.filter((r) => isRegistrationArchived(r)).length;
 
       setCounts({
         activeVisitors,
