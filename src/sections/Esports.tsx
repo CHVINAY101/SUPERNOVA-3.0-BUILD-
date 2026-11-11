@@ -35,7 +35,10 @@ export const Esports: React.FC = () => {
             <span>COLLEGIATE ESPORTS · SECOND EDITION</span>
           </div>
 
-          <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white tracking-tight leading-tight mb-3">
+          <h2
+            className="font-display text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white tracking-tight leading-tight mb-3"
+            style={{ color: "#ffffff" }}
+          >
             ESPORTS ARENA
           </h2>
 
