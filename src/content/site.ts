@@ -126,6 +126,7 @@ export interface SiteContent {
   esports: {
     heading: string;
     subheading?: string;
+    tagline?: string;
     officialGames: EsportsOfficialGame[];
     cards: { title: string; body: string; badge?: string; highlights?: string[] }[];
     ctaText: string;
@@ -475,8 +476,9 @@ export const SITE_CONTENT: SiteContent = {
   },
 
   esports: {
-    heading: "READY TO PLAY? JOIN THE ARENA.",
-    subheading: "The second edition of the Supernova Esports Tournament brings collegiate competitive gaming to The National College. Inter-institutional brackets celebrating teamwork, digital skill, and sportsmanship across three premier titles.",
+    heading: "ESPORTS ARENA",
+    tagline: "Compete. Connect. Conquer.",
+    subheading: "Building on the energetic success of the inaugural edition, Supernova Esports 2.0 brings collegiate competitive gaming to The National College. An inter-institutional showdown celebrating teamwork, digital skill, and sportsmanship across three championship titles.",
     officialGames: [
       {
         id: "valorant",

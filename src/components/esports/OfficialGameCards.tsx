@@ -1,311 +1,301 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, BookOpen, Monitor, Smartphone, Trophy, Users, CheckCircle2 } from "lucide-react";
+import {
+  ArrowRight,
+  BookOpen,
+  ChevronDown,
+  CheckCircle,
+  AlertOctagon,
+  Monitor,
+  Smartphone,
+  Trophy,
+  Users,
+  Shield,
+  Layers,
+} from "lucide-react";
 import { GameRulesModal } from "./GameRulesModal";
 
 export interface OfficialGameCardSpec {
   id: "valorant" | "bgmi" | "freefire";
   title: string;
+  shortTitle: string;
   publisher: string;
-  genre: string;
   category: string;
   platform: "PC" | "Mobile";
-  badge: string;
+  logoSrc: string;
+  logoAlt: string;
   accentColor: string;
   description: string;
   teamSize: string;
   format: string;
   mapPool: string;
   scoring: string;
-  statusBadge: string;
   registerQuery: string;
+  allowedRules: string[];
+  prohibitedRules: string[];
 }
 
 export const OFFICIAL_GAMES_LIST: OfficialGameCardSpec[] = [
   {
     id: "valorant",
     title: "VALORANT",
+    shortTitle: "VALORANT",
     publisher: "Riot Games",
-    genre: "Character-Based Tactical Shooter",
     category: "5v5 Tactical FPS (PC)",
     platform: "PC",
-    badge: "5V5 TACTICAL SHOOTER",
-    accentColor: "#FF4655",
+    logoSrc: "/assets/esports/valorant-logo.jpg",
+    logoAlt: "VALORANT Official Riot Games Logo",
+    accentColor: "#38BDF8",
     description:
-      "A tactical 5v5 character-based FPS where precision, teamwork, strategy and agent abilities determine victory.",
-    teamSize: "5 Players + 1 Substitute",
-    format: "Knockout Qualifiers → Double-Elim Finals",
-    mapPool: "Ascent, Bind, Haven, Sunset",
-    scoring: "Standard MR12 (Overtime rules apply)",
-    statusBadge: "Brackets: Awaiting Organiser Confirmation",
+      "A 5v5 character-based tactical shooter where precision gunplay, tactical agent utility, and team strategy decide every round.",
+    teamSize: "5 Main Players + 1 Substitute",
+    format: "Knockout Qualifiers → Double-Elimination Finals",
+    mapPool: "Ascent, Bind, Haven, Sunset, Lotus",
+    scoring: "Standard MR12 (First to 13 rounds, 2-round overtime)",
     registerQuery: "/register?type=esports&game=valorant",
+    allowedRules: [
+      "Official Riot Games client with active Riot Vanguard anti-cheat.",
+      "Player-owned wired mouse, standard mechanical keyboard, and 3.5mm/USB wired headset.",
+      "Custom in-game sensitivity, crosshairs, audio mix, and keybinds configured via native settings.",
+    ],
+    prohibitedRules: [
+      "Zero tolerance for aimbots, triggerbots, wallhacks, radar hacks, and recoil scripts.",
+      "No mouse onboard macros, automated keystroke scripts, or memory-tampering utilities.",
+      "No exploit abuse (intentional geometry glitching, one-way collision bugs, animation cancels).",
+      "No ringer accounts or unauthorized substitutions during an active match series.",
+    ],
   },
   {
     id: "bgmi",
     title: "BATTLEGROUNDS MOBILE INDIA",
+    shortTitle: "BGMI",
     publisher: "KRAFTON",
-    genre: "Squad Battle Royale",
     category: "Squad Battle Royale (Mobile)",
     platform: "Mobile",
-    badge: "SQUAD BATTLE ROYALE",
-    accentColor: "#F5A623",
+    logoSrc: "/assets/esports/bgmi-logo.svg",
+    logoAlt: "BATTLEGROUNDS MOBILE INDIA - KRAFTON Official Logo",
+    accentColor: "#38BDF8",
     description:
-      "An intense mobile battle royale competition where players and squads battle through strategy, survival and teamwork.",
+      "The premier mobile battle royale championship. Squads coordinate high-tempo tactical rotations, zone positioning, and survival combat.",
     teamSize: "4 Squad Members + 1 Substitute",
-    format: "Multi-Lobby Qualifiers → Grand Finale",
-    mapPool: "Erangel, Miramar, Sanhok",
-    scoring: "Official 10-Point Scoring Matrix (1 pt/kill)",
-    statusBadge: "Room IDs: Awaiting Organiser Confirmation",
+    format: "Multi-Lobby Qualifiers → Championship Grand Finale",
+    mapPool: "Erangel (Day), Miramar, Sanhok",
+    scoring: "Official 10-Point Scoring Matrix (1 pt/finish + 10 pts for WWCD)",
     registerQuery: "/register?type=esports&game=bgmi",
+    allowedRules: [
+      "Official BGMI client downloaded directly from Google Play Store or Apple App Store.",
+      "Competition exclusively on native smartphone or tablet touchscreen (fabric finger sleeves allowed).",
+      "Native in-game HUD layout, gyroscope settings, sensitivity, and graphic customizations.",
+    ],
+    prohibitedRules: [
+      "Strict ban on PC emulators (BlueStacks, Gameloop, LDPlayer, Nox strictly prohibited).",
+      "No hardware trigger clips, gamepad attachments, cooler buttons, or OTG controllers.",
+      "No modified APKs, rooted Android devices (Magisk/Xposed), or jailbroken iOS environments.",
+      "No lobby collusion, cross-team communication, or intentional match-fixing.",
+    ],
   },
   {
     id: "freefire",
     title: "FREE FIRE MAX",
+    shortTitle: "FREE FIRE",
     publisher: "Garena",
-    genre: "Survival Battle Royale",
     category: "Fast-Paced Battle Royale (Mobile)",
     platform: "Mobile",
-    badge: "FAST-PACED BATTLE ROYALE",
-    accentColor: "#FF6A00",
+    logoSrc: "/assets/esports/freefire-logo.svg",
+    logoAlt: "FREE FIRE Official Garena Logo",
+    accentColor: "#38BDF8",
     description:
-      "A fast-paced mobile battle royale experience where survival, squad coordination and tactical combat are essential.",
+      "Fast-paced tactical survival battle royale. Squad coordination, rapid situational reflexes, and aggressive zone mastery are essential.",
     teamSize: "4 Squad Members + 1 Substitute",
-    format: "Fast-Tempo Elimination Lobbies",
+    format: "High-Cadence Elimination Lobbies → Stage Finals",
     mapPool: "Bermuda, Purgatory, Kalahari",
-    scoring: "Placement + Aggressive Finish Points",
-    statusBadge: "Lobby Matrix: Awaiting Organiser Confirmation",
+    scoring: "Official 12-Point System (1 pt/kill + placement ladder points)",
     registerQuery: "/register?type=esports&game=freefire",
+    allowedRules: [
+      "Official Free Fire Max application installed via Google Play Store or Apple App Store.",
+      "Physical mobile touchscreen control only on personal smartphones or tablets.",
+      "In-game HUD customization, custom sensitivity, and native display preferences.",
+    ],
+    prohibitedRules: [
+      "Strict prohibition of PC emulator gameplay (zero emulator lobbies permitted).",
+      "No third-party headshot aim-assist, speed modifiers, or config (.ini) file modifications.",
+      "No mechanical clip-on buttons, controller peripherals, or external key-mappers.",
+      "No toxicity, unsportsmanlike behavior, or teaming in tournament lobbies.",
+    ],
   },
 ];
 
 export const OfficialGameCards: React.FC = () => {
   const [selectedRulesGame, setSelectedRulesGame] = useState<"valorant" | "bgmi" | "freefire" | null>(null);
+  const [expandedRules, setExpandedRules] = useState<Record<string, boolean>>({
+    valorant: false,
+    bgmi: false,
+    freefire: false,
+  });
+
+  const toggleRules = (id: string) => {
+    setExpandedRules((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  };
 
   return (
     <div className="w-full">
-      {/* Three Visually Distinct, Complete Game Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
+      {/* 3 Balanced, Modern Game Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8 items-start">
         {OFFICIAL_GAMES_LIST.map((game) => {
-          const isValorant = game.id === "valorant";
-          const isBgmi = game.id === "bgmi";
-          const isFreefire = game.id === "freefire";
+          const isExpanded = expandedRules[game.id];
 
           return (
             <div
               key={game.id}
-              className={`group relative rounded-[24px] border-2 transition-all duration-300 flex flex-col justify-between overflow-hidden ${
-                isValorant
-                  ? "bg-[#1E1724] border-[#FF4655]/40 hover:border-[#FF4655] hover:shadow-[0_16px_40px_rgba(255,70,85,0.24)] hover:-translate-y-1.5"
-                  : isBgmi
-                  ? "bg-[#21201A] border-[#F5A623]/40 hover:border-[#F5A623] hover:shadow-[0_16px_40px_rgba(245,166,35,0.24)] hover:-translate-y-1.5"
-                  : "bg-[#251A18] border-[#FF6A00]/40 hover:border-[#FF6A00] hover:shadow-[0_16px_40px_rgba(255,106,0,0.24)] hover:-translate-y-1.5"
-              }`}
+              className="group relative rounded-2xl bg-[#0F172A] border border-slate-800/80 hover:border-slate-700 flex flex-col justify-between overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-black/40"
             >
-              {/* Card Banner with Custom Official Branding Artwork */}
-              <div className="relative h-52 sm:h-56 w-full overflow-hidden flex flex-col items-center justify-center p-6 border-b border-white/10 select-none">
-                {/* Background Pattern */}
+              {/* Top Banner with Official Brand Logo */}
+              <div className="relative h-44 sm:h-48 w-full bg-[#0B1120] border-b border-slate-800/80 flex flex-col items-center justify-center p-6 select-none overflow-hidden">
+                {/* Subtle Ambient Blueprint Grid */}
                 <div
-                  className="absolute inset-0 opacity-20 pointer-events-none group-hover:scale-105 transition-transform duration-500"
+                  className="absolute inset-0 opacity-[0.07] pointer-events-none"
                   style={{
-                    backgroundImage: isValorant
-                      ? "radial-gradient(circle at 50% 50%, #FF4655 1.5px, transparent 1.5px)"
-                      : isBgmi
-                      ? "radial-gradient(circle at 50% 50%, #F5A623 1.5px, transparent 1.5px)"
-                      : "radial-gradient(circle at 50% 50%, #FF873D 1.5px, transparent 1.5px)",
-                    backgroundSize: "22px 22px",
+                    backgroundImage:
+                      "linear-gradient(to right, #38BDF8 1px, transparent 1px), linear-gradient(to bottom, #38BDF8 1px, transparent 1px)",
+                    backgroundSize: "24px 24px",
                   }}
                   aria-hidden="true"
                 />
 
-                {/* Ambient Center Glow */}
-                <div
-                  className="absolute w-44 h-44 rounded-full blur-2xl opacity-25 group-hover:opacity-40 transition-opacity"
-                  style={{ backgroundColor: game.accentColor }}
-                  aria-hidden="true"
-                />
-
-                {/* GAME 1: VALORANT ARTWORK & OFFICIAL LOGO */}
-                {isValorant && (
-                  <div className="relative z-10 flex flex-col items-center text-center">
-                    <svg
-                      viewBox="0 0 120 120"
-                      className="w-24 h-24 drop-shadow-[0_8px_24px_rgba(255,70,85,0.6)] transform group-hover:scale-110 transition-transform duration-300"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      {/* Riot Games VALORANT Geometric V Glyph */}
-                      <path d="M60 14L102 88H80L60 52L40 88H18L60 14Z" fill="#FF4655" />
-                      <polygon points="60,30 74,56 46,56" fill="#FFFFFF" />
-                      <circle cx="60" cy="60" r="52" stroke="#FF4655" strokeWidth="1.5" strokeDasharray="6 4" opacity="0.35" />
-                      <line x1="12" y1="60" x2="26" y2="60" stroke="#FF4655" strokeWidth="2" />
-                      <line x1="94" y1="60" x2="108" y2="60" stroke="#FF4655" strokeWidth="2" />
-                      <line x1="60" y1="12" x2="60" y2="26" stroke="#FF4655" strokeWidth="2" />
-                      <line x1="60" y1="94" x2="60" y2="108" stroke="#FF4655" strokeWidth="2" />
-                    </svg>
-                    <div className="mt-2 font-display text-sm font-extrabold tracking-[0.3em] text-[#FF4655] uppercase">
-                      VALORANT
-                    </div>
-                    <div className="font-mono text-[10px] tracking-widest text-white/60 uppercase">
-                      RIOT GAMES · PC DIVISION
-                    </div>
-                  </div>
-                )}
-
-                {/* GAME 2: BGMI ARTWORK & OFFICIAL BRANDING */}
-                {isBgmi && (
-                  <div className="relative z-10 flex flex-col items-center text-center">
-                    <svg
-                      viewBox="0 0 120 120"
-                      className="w-24 h-24 drop-shadow-[0_8px_24px_rgba(245,166,35,0.6)] transform group-hover:scale-110 transition-transform duration-300"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      {/* Level-3 Spetsnaz Helmet Silhouette */}
-                      <path
-                        d="M32 54C32 38.536 44.536 26 60 26C75.464 26 88 38.536 88 54V74C88 80.6274 82.6274 86 76 86H44C37.3726 86 32 80.6274 32 74V54Z"
-                        fill="#1F1D16"
-                        stroke="#F5A623"
-                        strokeWidth="2.5"
-                      />
-                      {/* Heavy Visor slit with amber reflection */}
-                      <rect x="38" y="50" width="44" height="14" rx="2" fill="#F5A623" />
-                      <rect x="40" y="52" width="40" height="10" rx="1" fill="#141410" />
-                      <line x1="42" y1="57" x2="78" y2="57" stroke="#F5A623" strokeWidth="1.5" />
-                      {/* Crosshair & Stencil Accent */}
-                      <circle cx="60" cy="60" r="52" stroke="#F5A623" strokeWidth="1.5" strokeDasharray="5 5" opacity="0.35" />
-                      <polygon points="60,16 64,22 56,22" fill="#F5A623" />
-                      <path d="M52 80H68V92H52V80Z" fill="#F5A623" />
-                    </svg>
-                    <div className="mt-2 font-display text-sm font-extrabold tracking-[0.2em] text-[#F5A623] uppercase">
-                      BGMI
-                    </div>
-                    <div className="font-mono text-[10px] tracking-widest text-white/60 uppercase">
-                      KRAFTON · MOBILE DIVISION
-                    </div>
-                  </div>
-                )}
-
-                {/* GAME 3: FREE FIRE ARTWORK & OFFICIAL BRANDING */}
-                {isFreefire && (
-                  <div className="relative z-10 flex flex-col items-center text-center">
-                    <svg
-                      viewBox="0 0 120 120"
-                      className="w-24 h-24 drop-shadow-[0_8px_24px_rgba(255,106,0,0.6)] transform group-hover:scale-110 transition-transform duration-300"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      {/* Iconic Free Fire Dagger / Flame Crest */}
-                      <path
-                        d="M60 16C60 16 76 38 76 56C76 74 60 92 60 92C60 92 44 74 44 56C44 38 60 16 60 16Z"
-                        fill="#FF6A00"
-                      />
-                      <path
-                        d="M60 34C60 34 70 48 70 60C70 72 60 82 60 82C60 82 50 72 50 60C50 48 60 34 60 34Z"
-                        fill="#FFAE00"
-                      />
-                      <path
-                        d="M60 52C60 52 64 62 64 68C64 74 60 78 60 78C60 78 56 74 56 68C56 62 60 52 60 52Z"
-                        fill="#FFFFFF"
-                      />
-                      {/* Dynamic Speed Wings */}
-                      <path d="M26 50L42 56L28 66L18 56L26 50Z" fill="#FF873D" opacity="0.85" />
-                      <path d="M94 50L78 56L92 66L102 56L94 50Z" fill="#FF873D" opacity="0.85" />
-                      <circle cx="60" cy="60" r="52" stroke="#FF6A00" strokeWidth="1.5" strokeDasharray="4 6" opacity="0.35" />
-                    </svg>
-                    <div className="mt-2 font-display text-sm font-extrabold tracking-[0.22em] text-[#FF873D] uppercase">
-                      FREE FIRE MAX
-                    </div>
-                    <div className="font-mono text-[10px] tracking-widest text-white/60 uppercase">
-                      GARENA · MOBILE DIVISION
-                    </div>
-                  </div>
-                )}
-
-                {/* Top Corner Platform Tag */}
-                <div className="absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-white font-mono text-[11px] font-semibold">
-                  {game.platform === "PC" ? <Monitor size={12} /> : <Smartphone size={12} />}
+                {/* Platform Tag */}
+                <div className="absolute top-3.5 right-3.5 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-900/80 border border-slate-800 text-slate-300 font-mono text-[11px] font-medium backdrop-blur-sm">
+                  {game.platform === "PC" ? <Monitor size={12} className="text-sky-400" /> : <Smartphone size={12} className="text-sky-400" />}
                   <span>{game.platform} LAN</span>
+                </div>
+
+                {/* Publisher Division Kicker */}
+                <div className="absolute top-3.5 left-3.5 font-mono text-[10px] uppercase tracking-wider text-slate-400">
+                  {game.publisher}
+                </div>
+
+                {/* Official Game Logo Asset */}
+                <div className="relative z-10 flex items-center justify-center w-full h-full max-h-32 px-4">
+                  <img
+                    src={game.logoSrc}
+                    alt={game.logoAlt}
+                    className="max-h-24 sm:max-h-28 w-auto max-w-full object-contain transition-transform duration-300 group-hover:scale-105"
+                  />
                 </div>
               </div>
 
               {/* Card Body */}
-              <div className="p-6 sm:p-7 flex flex-col justify-between flex-1">
+              <div className="p-6 flex flex-col justify-between flex-1">
                 <div>
-                  {/* Category Pill */}
-                  <div className="flex items-center gap-2 mb-3">
-                    <span
-                      className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold uppercase tracking-wider border"
-                      style={{
-                        backgroundColor: `${game.accentColor}18`,
-                        color: game.accentColor,
-                        borderColor: `${game.accentColor}40`,
-                      }}
-                    >
-                      {game.badge}
-                    </span>
-                    <span className="text-white/40 text-xs">•</span>
-                    <span className="font-mono text-[11px] font-semibold text-white/70">
-                      {game.category}
-                    </span>
+                  {/* Category & Title */}
+                  <div className="flex items-center gap-2 mb-2 text-xs font-mono text-slate-400">
+                    <span className="text-sky-400 font-semibold">{game.category}</span>
                   </div>
 
-                  {/* Title & Publisher */}
-                  <h3
-                    className="font-display text-2xl font-black tracking-tight mb-2"
-                    style={{ color: "#ffffff" }}
-                  >
+                  <h3 className="font-display text-xl sm:text-2xl font-bold text-white tracking-tight mb-2">
                     {game.title}
                   </h3>
 
-                  {/* Exact Requested Description */}
-                  <p
-                    className="font-body text-sm leading-relaxed mb-5"
-                    style={{ color: "rgba(255, 255, 255, 0.9)" }}
-                  >
+                  <p className="font-body text-sm text-slate-300 leading-relaxed mb-5">
                     {game.description}
                   </p>
 
-                  {/* Structured Tournament Information Matrix */}
-                  <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5 mb-5 text-xs font-body">
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="text-white/60 font-mono uppercase text-[10px] flex items-center gap-1">
-                        <Users size={12} /> Roster Size
+                  {/* Key Match Parameters Strip */}
+                  <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3.5 space-y-2 mb-5 text-xs font-body">
+                    <div className="flex items-center justify-between text-slate-300">
+                      <span className="flex items-center gap-1.5 text-slate-400 font-mono text-[11px]">
+                        <Users size={13} className="text-sky-400" /> Roster
                       </span>
-                      <strong className="text-white text-right">{game.teamSize}</strong>
+                      <span className="font-semibold text-white">{game.teamSize}</span>
                     </div>
-
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="text-white/60 font-mono uppercase text-[10px] flex items-center gap-1">
-                        <Trophy size={12} /> Structure
+                    <div className="flex items-center justify-between text-slate-300">
+                      <span className="flex items-center gap-1.5 text-slate-400 font-mono text-[11px]">
+                        <Trophy size={13} className="text-sky-400" /> Format
                       </span>
-                      <span className="text-white/90 text-right">{game.format}</span>
+                      <span className="text-slate-200 text-right text-[11px]">{game.format}</span>
                     </div>
-
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="text-white/60 font-mono uppercase text-[10px]">Active Maps</span>
-                      <span className="text-white/90 text-right font-mono">{game.mapPool}</span>
-                    </div>
-
-                    <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[11px]">
-                      <span className="text-[#D5F542] font-mono flex items-center gap-1">
-                        <CheckCircle2 size={12} /> Verified Student Rosters
+                    <div className="flex items-center justify-between text-slate-300">
+                      <span className="flex items-center gap-1.5 text-slate-400 font-mono text-[11px]">
+                        <Layers size={13} className="text-sky-400" /> Maps
                       </span>
-                      <span className="text-amber-300 font-mono text-[10px]">
-                        Awaiting Organiser Confirmation
+                      <span className="text-slate-300 font-mono text-[11px] truncate max-w-[170px]" title={game.mapPool}>
+                        {game.mapPool}
                       </span>
                     </div>
                   </div>
+
+                  {/* Expandable Rules & Regulations Section */}
+                  <div className="mb-5 rounded-xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => toggleRules(game.id)}
+                      className="w-full flex items-center justify-between px-3.5 py-2.5 text-left text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800/40 transition-colors"
+                      aria-expanded={isExpanded}
+                    >
+                      <span className="flex items-center gap-1.5 font-mono text-[11px] font-semibold text-sky-400 uppercase tracking-wide">
+                        <Shield size={13} />
+                        Rules & Regulations
+                      </span>
+                      <ChevronDown
+                        size={14}
+                        className={`text-slate-400 transition-transform duration-200 ${
+                          isExpanded ? "rotate-180 text-sky-400" : ""
+                        }`}
+                      />
+                    </button>
+
+                    {/* Smooth Expandable Drawer */}
+                    {isExpanded && (
+                      <div className="px-3.5 pb-4 pt-1 space-y-3.5 border-t border-slate-800/80 text-xs text-slate-300">
+                        {/* Permitted Practice */}
+                        <div>
+                          <span className="font-mono text-[10px] uppercase font-bold text-emerald-400 tracking-wider flex items-center gap-1 mb-1.5">
+                            <CheckCircle size={11} /> Permitted Gameplay
+                          </span>
+                          <ul className="space-y-1.5 text-[11px] leading-relaxed text-slate-300">
+                            {game.allowedRules.map((rule, idx) => (
+                              <li key={idx} className="flex items-start gap-1.5">
+                                <span className="text-emerald-400/80 font-bold">•</span>
+                                <span>{rule}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        {/* Prohibited Practice */}
+                        <div>
+                          <span className="font-mono text-[10px] uppercase font-bold text-rose-400 tracking-wider flex items-center gap-1 mb-1.5">
+                            <AlertOctagon size={11} /> Prohibited Practices
+                          </span>
+                          <ul className="space-y-1.5 text-[11px] leading-relaxed text-slate-300">
+                            {game.prohibitedRules.map((rule, idx) => (
+                              <li key={idx} className="flex items-start gap-1.5">
+                                <span className="text-rose-400/80 font-bold">•</span>
+                                <span>{rule}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        {/* Scoring Matrix Notice */}
+                        <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400">
+                          <strong className="text-slate-200 block mb-0.5 font-mono text-[10px] uppercase">
+                            Scoring Matrix:
+                          </strong>
+                          {game.scoring}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Card Actions: REGISTER SQUAD + VIEW RULES */}
-                <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
+                {/* Card Actions: REGISTER SQUAD + FULL RULEBOOK */}
+                <div className="pt-2 flex flex-col sm:flex-row items-center gap-2.5">
                   <Link
                     to={game.registerQuery}
-                    className="w-full sm:flex-1 h-11 rounded-full font-heading font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all text-[#191936] shadow-md hover:scale-[1.02] active:scale-[0.98]"
-                    style={{
-                      backgroundColor: game.accentColor === "#FF4655" ? "#FF4655" : game.accentColor === "#F5A623" ? "#F5A623" : "#FF873D",
-                      color: game.accentColor === "#FF4655" ? "#FFFFFF" : "#191936",
-                    }}
+                    className="w-full sm:flex-1 h-11 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-body font-semibold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-blue-900/30 active:scale-[0.98]"
                   >
                     <span>REGISTER SQUAD</span>
                     <ArrowRight size={14} />
@@ -314,11 +304,11 @@ export const OfficialGameCards: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setSelectedRulesGame(game.id)}
-                    className="w-full sm:w-auto h-11 px-5 rounded-full bg-white/10 border border-white/20 text-white font-heading font-bold text-xs uppercase tracking-wider hover:bg-white/20 transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-sm"
-                    aria-label={`View rules for ${game.title}`}
+                    className="w-full sm:w-auto h-11 px-4 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 text-slate-200 font-body font-medium text-xs tracking-wide transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                    aria-label={`View complete rulebook for ${game.title}`}
                   >
-                    <BookOpen size={14} className="text-[#D5F542]" />
-                    <span>VIEW RULES</span>
+                    <BookOpen size={13} className="text-sky-400" />
+                    <span>FULL RULEBOOK</span>
                   </button>
                 </div>
               </div>

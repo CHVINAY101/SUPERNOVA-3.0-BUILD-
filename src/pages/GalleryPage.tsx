@@ -46,15 +46,15 @@ export const GalleryPage: React.FC = () => {
   return (
     <div className="w-full bg-[#F8F7FC] min-h-screen pb-24">
       {/* Header Band */}
-      <div className="pt-36 pb-16 bg-white border-b border-[#EAEAF2] relative">
+      <div className="pt-8 sm:pt-12 pb-12 sm:pb-16 bg-white border-b border-[#EAEAF2] relative">
         <div className="max-w-5xl mx-auto px-6 sm:px-8 text-center">
-          <span className="inline-block text-xs uppercase tracking-[0.2em] font-mono text-[#4549D8] font-bold mb-3">
+          <span className="inline-block text-xs uppercase tracking-[0.2em] font-mono text-blue-600 font-bold mb-3">
             GALLERY
           </span>
-          <h1 className="text-3xl sm:text-5xl md:text-6xl font-black uppercase tracking-tight text-[#191936] mb-4">
+          <h1 className="text-3xl sm:text-5xl md:text-6xl font-display font-extrabold uppercase tracking-tight text-[#0F172A] mb-4">
             MOMENTS & EXHIBITS
           </h1>
-          <p className="font-mono text-xs sm:text-sm font-semibold text-[#191936]/70 max-w-xl mx-auto">
+          <p className="font-mono text-xs sm:text-sm font-semibold text-slate-600 max-w-xl mx-auto">
             Glimpses from Supernova editions at The National College, Basavanagudi.
           </p>
         </div>

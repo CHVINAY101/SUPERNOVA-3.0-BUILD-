@@ -71,41 +71,36 @@ export default function Esports() {
   ];
 
   return (
-    <div className="bg-[#FAF9F4] text-[#191936] min-h-screen">
+    <div className="bg-[#FAF9F4] text-[#0F172A] min-h-screen">
       {/* Hero Banner */}
-      <section className="bg-[#191936] text-white py-16 sm:py-20 lg:py-24 relative overflow-clip border-b-2 border-[#191936]">
-        {/* Subtle background grid floor */}
+      <section className="bg-[#0B1120] text-slate-100 py-16 sm:py-20 lg:py-24 relative overflow-clip border-b border-slate-800/80">
+        {/* Subtle background grid */}
         <div
-          className="absolute inset-x-0 bottom-0 h-64 pointer-events-none opacity-15"
+          className="absolute inset-0 opacity-[0.04] pointer-events-none"
           style={{
-            perspective: "600px",
-            transformOrigin: "bottom center",
+            backgroundImage:
+              "linear-gradient(to right, #38BDF8 1px, transparent 1px), linear-gradient(to bottom, #38BDF8 1px, transparent 1px)",
+            backgroundSize: "40px 40px",
           }}
           aria-hidden="true"
-        >
-          <div
-            className="w-full h-full"
-            style={{
-              transform: "rotateX(60deg)",
-              backgroundImage:
-                "linear-gradient(to right, #4549D8 1px, transparent 1px), linear-gradient(to bottom, #D5F542 1px, transparent 1px)",
-              backgroundSize: "48px 48px",
-            }}
-          />
-        </div>
+        />
 
         <div className="site-container relative z-10">
           <div className="max-w-3xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#D5F542] text-[#191936] font-mono text-xs font-bold uppercase tracking-wider mb-6">
-              <Swords size={14} />
-              EVENT ZONE 04 · ESPORTS TOURNAMENT (SECOND EDITION)
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-sky-950/60 text-sky-400 font-mono text-xs font-semibold tracking-wider border border-sky-800/60 mb-5">
+              <Swords size={13} />
+              <span>COLLEGIATE ESPORTS · SECOND EDITION</span>
             </div>
 
-            <h1 className="font-display text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-tight text-white mb-6">
-              The battle arena returns. Assemble your squad.
+            <h1 className="font-display text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-tight text-white mb-2">
+              ESPORTS ARENA
             </h1>
 
-            <p className="font-body text-base sm:text-lg text-white/80 leading-relaxed mb-8 max-w-2xl">
+            <p className="font-display text-xl sm:text-2xl font-semibold text-sky-300 tracking-wide mb-4">
+              &ldquo;Compete. Connect. Conquer.&rdquo;
+            </p>
+
+            <p className="font-body text-base sm:text-lg text-slate-300 leading-relaxed mb-8 max-w-2xl">
               Building on the energetic success of the inaugural edition, Supernova Esports 2.0 brings collegiate competitive gaming to The National College. An inter-institutional showdown celebrating teamwork, digital skill, and sportsmanship.
             </p>
 
@@ -113,22 +108,13 @@ export default function Esports() {
               <Link
                 to="/register?type=esports"
                 className="btn-primary"
-                style={{ height: "52px", padding: "0 32px" }}
               >
                 <span>REGISTER YOUR SQUAD</span>
-                <ArrowRight size={16} />
+                <ArrowRight size={15} />
               </Link>
               <Link
                 to="/schedule"
                 className="btn-secondary"
-                style={{
-                  height: "52px",
-                  padding: "0 28px",
-                  background: "transparent",
-                  color: "#FFFFFF",
-                  borderColor: "rgba(255,255,255,0.3)",
-                  boxShadow: "none",
-                }}
               >
                 Festival Schedule
               </Link>
@@ -201,16 +187,16 @@ export default function Esports() {
       </section>
 
       {/* Three Official Games Showcase */}
-      <section className="py-14 sm:py-20 bg-[#191936] text-white border-b-2 border-[#191936] relative overflow-hidden">
+      <section className="py-14 sm:py-20 bg-[#0B1120] text-slate-100 border-b border-slate-800/80 relative overflow-hidden">
         <div className="site-container relative z-10">
           <div className="max-w-3xl mb-10 sm:mb-12">
-            <span className="section-label" style={{ color: "#D5F542" }}>
+            <span className="section-label">
               COMPETITIVE ROSTER
             </span>
-            <h2 className="section-heading text-white mb-3" style={{ color: "#ffffff" }}>
+            <h2 className="section-heading text-white mb-3">
               Three Official Tournament Games
             </h2>
-            <p className="font-body text-base sm:text-lg text-white/80 leading-relaxed">
+            <p className="font-body text-base text-slate-300 leading-relaxed">
               Supernova Esports 2.0 features three championship titles across PC and mobile divisions. Assemble your squad and register your institutional roster.
             </p>
           </div>
@@ -220,14 +206,14 @@ export default function Esports() {
       </section>
 
       {/* 4 Tournament Cards Section */}
-      <section className="site-section bg-[#FAF9F4]">
+      <section className="site-section bg-[#F8FAFC]">
         <div className="site-container">
           <div className="max-w-2xl mb-12">
-            <span className="section-label">ARENA BRIEFING</span>
-            <h2 className="section-heading mb-4 text-[#191936]">
+            <span className="section-label text-sky-600">ARENA BRIEFING</span>
+            <h2 className="section-heading mb-3 text-slate-900">
               Tournament Guidelines & Structure
             </h2>
-            <p className="font-body text-base text-[#191936]/80 leading-relaxed">
+            <p className="font-body text-base text-slate-600 leading-relaxed">
               Every detail is planned for an exciting, fair, and high-energy competition. Register your team to stay informed as bracket fixtures and game title rosters are announced.
             </p>
           </div>
@@ -238,29 +224,29 @@ export default function Esports() {
               return (
                 <div
                   key={card.title}
-                  className="bg-white rounded-[24px] p-6 sm:p-8 border-2 border-[#191936] shadow-[4px_4px_0px_#191936] flex flex-col justify-between hover:-translate-y-1 transition-transform"
+                  className="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200/80 shadow-sm flex flex-col justify-between hover:border-blue-200 hover:shadow-md transition-all"
                 >
                   <div>
                     <div className="flex items-center justify-between gap-3 mb-5">
-                      <div className="w-12 h-12 rounded-2xl bg-[#191936] text-[#D5F542] border-2 border-[#191936] flex items-center justify-center shadow-[2px_2px_0px_#4549D8]">
-                        <Icon size={24} />
+                      <div className="w-10 h-10 rounded-xl bg-slate-900 text-sky-400 flex items-center justify-center">
+                        <Icon size={20} />
                       </div>
-                      <span className="px-3 py-1 rounded-full font-mono text-[11px] font-bold tracking-wider uppercase text-[#191936] bg-[#FAF9F4] border-2 border-[#191936]">
+                      <span className="px-2.5 py-0.5 rounded-md font-mono text-[11px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 uppercase tracking-wide">
                         {card.badge}
                       </span>
                     </div>
 
-                    <h3 className="font-display text-2xl font-extrabold text-[#191936] mb-3">
+                    <h3 className="font-display text-xl sm:text-2xl font-bold text-slate-900 mb-2">
                       {card.title}
                     </h3>
-                    <p className="font-body text-sm sm:text-base text-[#191936]/80 leading-relaxed mb-6">
+                    <p className="font-body text-sm text-slate-600 leading-relaxed mb-6">
                       {card.desc}
                     </p>
 
-                    <div className="pt-4 border-t-2 border-[#191936]/10 flex flex-col gap-2.5">
+                    <div className="pt-4 border-t border-slate-100 flex flex-col gap-2">
                       {card.points.map((pt, pIdx) => (
-                        <div key={pIdx} className="flex items-start gap-2.5 text-xs sm:text-sm text-[#191936]/85">
-                          <CheckCircle2 size={16} className="text-[#4549D8] shrink-0 mt-0.5" />
+                        <div key={pIdx} className="flex items-start gap-2 text-xs sm:text-sm text-slate-700">
+                          <CheckCircle2 size={15} className="text-sky-600 shrink-0 mt-0.5" />
                           <span>{pt}</span>
                         </div>
                       ))}
@@ -276,36 +262,27 @@ export default function Esports() {
       {/* Call to Action Band */}
       <section className="pb-20">
         <div className="site-container">
-          <div className="bg-[#191936] text-white rounded-[28px] sm:rounded-[36px] p-8 sm:p-12 lg:p-14 border-3 sm:border-4 border-[#191936] shadow-[6px_6px_0px_#191936] text-center flex flex-col items-center">
-            <span className="font-mono text-xs font-bold uppercase tracking-widest text-[#D5F542] mb-3">
+          <div className="bg-[#0B1120] text-white rounded-2xl p-8 sm:p-12 border border-slate-800 text-center flex flex-col items-center shadow-lg">
+            <span className="font-mono text-xs font-semibold uppercase tracking-widest text-sky-400 mb-2">
               EARLY ROSTER REGISTRATION
             </span>
-            <h2 className="font-display text-3xl sm:text-4xl lg:text-5xl font-extrabold text-white mb-4 max-w-xl">
+            <h2 className="font-display text-2xl sm:text-4xl font-extrabold text-white mb-3 max-w-xl">
               Ready to represent your institution?
             </h2>
-            <p className="font-body text-sm sm:text-base text-white/80 max-w-lg mb-8 leading-relaxed">
+            <p className="font-body text-sm text-slate-300 max-w-lg mb-8 leading-relaxed">
               Register your team captain and squad members now. Tournament fixtures and schedule will be communicated directly to verified team representatives.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-4">
               <Link
                 to="/register?type=esports"
                 className="btn-primary"
-                style={{ height: "52px", padding: "0 36px" }}
               >
                 <span>REGISTER YOUR SQUAD NOW</span>
-                <ArrowRight size={16} />
+                <ArrowRight size={15} />
               </Link>
               <Link
                 to="/contact"
                 className="btn-secondary"
-                style={{
-                  height: "52px",
-                  padding: "0 28px",
-                  background: "transparent",
-                  color: "#FFFFFF",
-                  borderColor: "rgba(255,255,255,0.3)",
-                  boxShadow: "none",
-                }}
               >
                 Contact Helpdesk
               </Link>

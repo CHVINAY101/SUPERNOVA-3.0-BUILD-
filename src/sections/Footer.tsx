@@ -105,8 +105,13 @@ export const Footer: FC = () => {
                   onClick={handleScrollTo("experiences")}
                   className="hover:text-white transition-colors"
                 >
-                  Four Experiences
+                  Flagship Zones
                 </a>
+              </li>
+              <li>
+                <Link to="/animation" className="hover:text-[#D5F542] transition-colors font-medium">
+                  Department of Animation
+                </Link>
               </li>
               <li>
                 <a

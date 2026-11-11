@@ -46,17 +46,17 @@ export function SharedPageHeader({ title, subtitle, tag }: SharedPageHeaderProps
     <div
       style={{
         position: "relative",
-        height: "clamp(300px, 40vh, 420px)",
+        height: "clamp(220px, 30vh, 320px)",
         width: "100%",
-        background: "linear-gradient(180deg, #F6F3FF 0%, #FFFFFF 100%)",
+        background: "linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
         textAlign: "center",
-        padding: "clamp(84px, 12vh, 108px) 24px 36px",
+        padding: "clamp(24px, 4vh, 40px) 24px 32px",
         overflow: "hidden",
-        borderBottom: "1px solid rgba(46, 42, 138, 0.08)",
+        borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
         boxSizing: "border-box",
       }}
     >
@@ -124,12 +124,12 @@ export function SharedPageHeader({ title, subtitle, tag }: SharedPageHeaderProps
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           style={{
-            fontFamily: "'Unbounded', sans-serif",
-            fontWeight: 900,
-            fontSize: "clamp(2.2rem, 5.2vw, 4.2rem)",
+            fontFamily: "'Bricolage Grotesque', sans-serif",
+            fontWeight: 800,
+            fontSize: "clamp(2.2rem, 5.2vw, 4rem)",
             lineHeight: 1.08,
-            color: "#0B0B1E",
-            letterSpacing: "-0.03em",
+            color: "#0F172A",
+            letterSpacing: "-0.02em",
             margin: "0 0 14px",
             userSelect: "none",
           }}

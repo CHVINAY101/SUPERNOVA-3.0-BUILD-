@@ -1,22 +1,23 @@
 import { useState, useEffect, type FC } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
-import { ArrowRight, Menu, X, Mail } from "lucide-react";
-import { SITE_CONTENT } from "@/content/site";
+import { ArrowRight, Menu, X } from "lucide-react";
 
 interface NavLinkItem {
   id: string;
   label: string;
-  href?: string;
+  href: string;
+  anchorId?: string;
 }
 
 const NAV_ITEMS: NavLinkItem[] = [
-  { id: "home", label: "Home", href: "/" },
-  { id: "about", label: "About", href: "/about" },
-  { id: "experiences", label: "Events", href: "/events" },
-  { id: "schedule", label: "Schedule", href: "/schedule" },
+  { id: "home", label: "Home", href: "/", anchorId: "home" },
+  { id: "about", label: "About", href: "/about", anchorId: "about" },
+  { id: "events", label: "Events", href: "/events", anchorId: "experiences" },
+  { id: "animation", label: "Animation", href: "/animation", anchorId: "animation-preview" },
+  { id: "esports", label: "Esports", href: "/esports", anchorId: "esports" },
+  { id: "schedule", label: "Schedule", href: "/schedule", anchorId: "schedule" },
   { id: "gallery", label: "Gallery", href: "/gallery" },
-  { id: "organisers", label: "Institutions", href: "/#organisers" },
-  { id: "contact", label: "Contact", href: "/contact" },
+  { id: "contact", label: "Contact", href: "/contact", anchorId: "contact" },
 ];
 
 export const Nav: FC = () => {
@@ -24,22 +25,23 @@ export const Nav: FC = () => {
   const location = useLocation();
   const isHomePage = location.pathname === "/";
 
-  // On homepage, nav is hidden initially and reveals only when scrolling beyond hero.
+  // On homepage, nav is hidden initially and reveals smoothly when scrolling past the hero.
   // On all other routes, nav is visible immediately.
   const [showNav, setShowNav] = useState(!isHomePage);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState("home");
 
-  // Keep showNav updated when changing routes
+  // Keep visibility in sync when route changes
   useEffect(() => {
     if (!isHomePage) {
       setShowNav(true);
     } else {
       setShowNav(window.scrollY > 380);
     }
+    setMobileMenuOpen(false);
   }, [isHomePage, location.pathname]);
 
-  // Scroll detection & IntersectionObserver for scroll-triggered navigation on homepage
+  // Scroll detection for homepage hero reveal
   useEffect(() => {
     if (!isHomePage) {
       setShowNav(true);
@@ -51,7 +53,6 @@ export const Nav: FC = () => {
       if (!ticking) {
         window.requestAnimationFrame(() => {
           const scrollY = window.scrollY;
-          // Reveal nav once scrolled past ~380px
           if (scrollY > 380) {
             setShowNav(true);
           } else if (scrollY < 120) {
@@ -66,26 +67,8 @@ export const Nav: FC = () => {
     window.addEventListener("scroll", handleScroll, { passive: true });
     handleScroll();
 
-    const heroEl = document.getElementById("home");
-    let observer: IntersectionObserver | null = null;
-    if (heroEl) {
-      observer = new IntersectionObserver(
-        (entries) => {
-          const entry = entries[0];
-          if (!entry.isIntersecting || entry.intersectionRatio < 0.25) {
-            if (window.scrollY > 300) setShowNav(true);
-          } else if (entry.intersectionRatio > 0.6 && window.scrollY < 200) {
-            setShowNav(false);
-          }
-        },
-        { threshold: [0, 0.25, 0.6, 1.0] }
-      );
-      observer.observe(heroEl);
-    }
-
     return () => {
       window.removeEventListener("scroll", handleScroll);
-      if (observer) observer.disconnect();
     };
   }, [isHomePage]);
 
@@ -101,18 +84,19 @@ export const Nav: FC = () => {
           }
         });
       },
-      { rootMargin: "-30% 0px -40% 0px" }
+      { rootMargin: "-25% 0px -45% 0px" }
     );
 
     NAV_ITEMS.forEach((item) => {
-      const el = document.getElementById(item.id);
+      const targetId = item.anchorId || item.id;
+      const el = document.getElementById(targetId);
       if (el) observer.observe(el);
     });
 
     return () => observer.disconnect();
   }, [isHomePage]);
 
-  // Lock body scroll when mobile menu is open
+  // Prevent background scrolling when mobile menu is open
   useEffect(() => {
     if (mobileMenuOpen) {
       document.body.style.overflow = "hidden";
@@ -127,22 +111,27 @@ export const Nav: FC = () => {
   const handleNavClick = (item: NavLinkItem) => {
     setMobileMenuOpen(false);
 
-    if (isHomePage) {
-      const el = document.getElementById(item.id);
+    if (isHomePage && item.anchorId) {
+      const el = document.getElementById(item.anchorId);
       if (el) {
         el.scrollIntoView({ behavior: "smooth" });
         return;
       }
     }
 
-    if (item.href) {
-      navigate(item.href);
+    navigate(item.href);
+  };
+
+  const isItemActive = (item: NavLinkItem) => {
+    if (isHomePage) {
+      return activeSection === (item.anchorId || item.id);
     }
+    return location.pathname === item.href;
   };
 
   return (
     <>
-      {/* Modern Minimal Floating Capsule Navigation */}
+      {/* Compact Floating Navigation Bar */}
       <header
         role="banner"
         className={`fixed top-3 sm:top-4 inset-x-0 mx-auto w-[calc(100%-24px)] max-w-5xl z-50 transition-all duration-300 ease-out ${
@@ -151,8 +140,8 @@ export const Nav: FC = () => {
             : "-translate-y-16 opacity-0 pointer-events-none"
         }`}
       >
-        <div className="bg-[#191936]/88 backdrop-blur-xl border border-white/15 rounded-full px-4 sm:px-6 py-2 shadow-[0_12px_36px_rgba(15,15,35,0.28)] flex items-center justify-between gap-3 sm:gap-4 transition-all">
-          {/* Brand Logo */}
+        <div className="bg-[#0B1120]/85 backdrop-blur-md border border-slate-700/50 rounded-full px-3.5 sm:px-5 py-2 shadow-lg shadow-black/25 flex items-center justify-between gap-3 transition-colors">
+          {/* Supernova Brand Logo */}
           <Link
             to="/"
             onClick={() => {
@@ -177,22 +166,20 @@ export const Nav: FC = () => {
           <nav
             role="navigation"
             aria-label="Primary Navigation"
-            className="hidden md:flex items-center gap-1 lg:gap-1.5"
+            className="hidden lg:flex items-center gap-1"
           >
             {NAV_ITEMS.map((item) => {
-              const isActive = isHomePage
-                ? activeSection === item.id
-                : location.pathname === item.href;
+              const active = isItemActive(item);
 
               return (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => handleNavClick(item)}
-                  className={`px-3 py-1.5 rounded-full text-[13px] font-heading font-medium tracking-wide uppercase transition-all duration-200 cursor-pointer ${
-                    isActive
-                      ? "text-[#D5F542] bg-white/15 shadow-sm font-semibold"
-                      : "text-white/75 hover:text-white hover:bg-white/10"
+                  className={`px-3 py-1.5 rounded-full text-xs font-sans font-medium tracking-wide transition-all duration-150 cursor-pointer ${
+                    active
+                      ? "text-sky-400 bg-sky-400/10 font-semibold shadow-xs"
+                      : "text-slate-300 hover:text-white hover:bg-white/[0.06]"
                   }`}
                 >
                   {item.label}
@@ -201,104 +188,96 @@ export const Nav: FC = () => {
             })}
           </nav>
 
-          {/* Action CTA & Mobile Trigger */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          {/* Registration Action & Mobile Hamburger */}
+          <div className="flex items-center gap-2">
             <Link
               to="/register"
-              className="inline-flex items-center justify-center gap-1.5 h-9 px-4 sm:px-5 rounded-full bg-[#D5F542] text-[#191936] font-heading font-bold text-xs uppercase tracking-wider hover:bg-[#E2FF4A] shadow-[0_2px_10px_rgba(213,245,66,0.3)] hover:scale-[1.03] active:scale-[0.98] transition-all whitespace-nowrap"
+              className="inline-flex items-center justify-center gap-1.5 h-8 sm:h-9 px-3.5 sm:px-4 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-sans font-semibold text-xs tracking-wide shadow-sm hover:shadow-blue-500/25 active:scale-95 transition-all whitespace-nowrap"
               aria-label="Register Now"
             >
-              <span>Register Now</span>
-              <ArrowRight size={13} strokeWidth={2.5} />
+              <span>Register</span>
+              <ArrowRight size={13} strokeWidth={2.2} />
             </Link>
 
-            {/* Mobile Hamburger Button */}
+            {/* Mobile Hamburger Trigger */}
             <button
               type="button"
-              onClick={() => setMobileMenuOpen(true)}
-              className="md:hidden flex items-center justify-center w-9 h-9 rounded-full bg-white/10 border border-white/15 text-white hover:bg-white/20 transition-colors"
-              aria-label="Open Navigation Menu"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="lg:hidden flex items-center justify-center w-8 h-8 rounded-full bg-slate-800/80 border border-slate-700/60 text-slate-200 hover:text-white hover:bg-slate-700/80 transition-colors"
+              aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
               aria-expanded={mobileMenuOpen}
             >
-              <Menu size={18} />
+              {mobileMenuOpen ? <X size={16} /> : <Menu size={16} />}
             </button>
           </div>
         </div>
       </header>
 
-      {/* Modern Responsive Mobile Navigation Drawer */}
+      {/* Responsive Mobile Dropdown Drawer */}
       {mobileMenuOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Mobile Navigation"
-          className="fixed inset-0 z-[100] flex flex-col justify-between p-6 sm:p-8 bg-[#191936]/96 backdrop-blur-2xl text-white overflow-y-auto animate-fadeIn"
-        >
-          {/* Top Bar with Brand & Close Button */}
-          <div className="flex items-center justify-between pb-5 border-b border-white/10">
-            <img
-              src="/assets/aistudio/Futuristic_Supernova_3.0_Logo_png_c0ddbd5c.png"
-              alt="SUPERNOVA 3.0"
-              className="h-8 w-auto object-contain"
-            />
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(false)}
-              className="w-10 h-10 rounded-full bg-white/10 border border-white/20 text-white flex items-center justify-center hover:bg-white/20 transition-colors cursor-pointer"
-              aria-label="Close Navigation Menu"
-            >
-              <X size={20} />
-            </button>
-          </div>
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden animate-fadeIn"
+            onClick={() => setMobileMenuOpen(false)}
+            aria-hidden="true"
+          />
 
-          {/* Navigation Links with Refined Typography */}
-          <div className="flex flex-col gap-2 my-auto py-6">
-            {NAV_ITEMS.map((item) => {
-              const isActive = isHomePage
-                ? activeSection === item.id
-                : location.pathname === item.href;
-
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => handleNavClick(item)}
-                  className={`text-left font-heading text-xl sm:text-2xl font-semibold tracking-wide uppercase py-3 px-2 rounded-xl transition-all flex items-center justify-between cursor-pointer ${
-                    isActive
-                      ? "text-[#D5F542] bg-white/10 font-bold"
-                      : "text-white/80 hover:text-white hover:bg-white/5"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                  <ArrowRight size={18} className="opacity-50" />
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Bottom Actions */}
-          <div className="flex flex-col gap-4 pt-6 border-t border-white/10">
-            <Link
-              to="/register"
-              onClick={() => setMobileMenuOpen(false)}
-              className="inline-flex items-center justify-center gap-2 h-12 rounded-full bg-[#D5F542] text-[#191936] font-heading font-extrabold text-sm uppercase tracking-wider hover:bg-[#E2FF4A] shadow-lg transition-all"
-            >
-              <span>REGISTER NOW</span>
-              <ArrowRight size={16} />
-            </Link>
-
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-white/60 pt-2 font-body">
-              <span>The National College, Basavanagudi</span>
-              <a
-                href={`mailto:${SITE_CONTENT.meta.helpdeskEmail}`}
-                className="inline-flex items-center gap-1.5 text-white/70 hover:text-[#D5F542] transition-colors"
+          {/* Dropdown Card */}
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation Menu"
+            className="fixed top-16 inset-x-4 max-w-sm mx-auto z-50 bg-[#0B1120]/95 backdrop-blur-xl border border-slate-700/70 rounded-2xl p-4 shadow-2xl lg:hidden flex flex-col gap-1 animate-fadeIn"
+          >
+            <div className="flex items-center justify-between pb-3 mb-2 border-b border-slate-800">
+              <span className="text-[11px] font-mono tracking-wider text-slate-400 uppercase font-semibold">
+                Supernova Navigation
+              </span>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                className="w-7 h-7 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center hover:text-white"
+                aria-label="Close menu"
               >
-                <Mail size={13} />
-                <span>{SITE_CONTENT.meta.helpdeskEmail}</span>
-              </a>
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              {NAV_ITEMS.map((item) => {
+                const active = isItemActive(item);
+
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleNavClick(item)}
+                    className={`w-full min-h-[44px] px-3.5 py-2.5 rounded-xl text-left text-sm font-sans font-medium transition-colors flex items-center justify-between cursor-pointer ${
+                      active
+                        ? "text-sky-400 bg-sky-400/10 font-semibold"
+                        : "text-slate-200 hover:text-white hover:bg-slate-800/60"
+                    }`}
+                  >
+                    <span>{item.label}</span>
+                    {active && <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="pt-3 mt-2 border-t border-slate-800">
+              <Link
+                to="/register"
+                onClick={() => setMobileMenuOpen(false)}
+                className="w-full min-h-[44px] flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-sans font-semibold text-xs uppercase tracking-wider shadow-sm transition-all"
+              >
+                <span>Register for Supernova 3.0</span>
+                <ArrowRight size={14} />
+              </Link>
             </div>
           </div>
-        </div>
+        </>
       )}
     </>
   );

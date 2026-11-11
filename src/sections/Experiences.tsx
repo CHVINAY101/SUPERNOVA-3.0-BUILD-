@@ -49,57 +49,56 @@ export const Experiences: React.FC = () => {
               <motion.div
                 key={item.id}
                 onClick={() => setSelectedItem(item)}
-                whileHover={{ y: -6 }}
-                transition={{ duration: 0.18 }}
-                className="brand-card group cursor-pointer flex flex-col justify-between select-none bg-[#FFFFFF] overflow-hidden rounded-2xl border-2 border-[#191936] shadow-[4px_4px_0px_#191936] hover:shadow-[6px_6px_0px_#191936] transition-all"
+                whileHover={{ y: -4 }}
+                transition={{ duration: 0.2 }}
+                className="group cursor-pointer flex flex-col justify-between select-none bg-white overflow-hidden rounded-2xl border border-slate-200/90 shadow-sm hover:shadow-xl hover:border-blue-300 transition-all duration-300"
                 title={`Click for ${item.title} details`}
               >
                 {/* 16:10 Photo Header with brand accent pill */}
-                <div className="w-full aspect-[16/10] relative overflow-hidden bg-[#191936]">
+                <div className="w-full aspect-[16/10] relative overflow-hidden bg-slate-900">
                   <img
                     src={photoSrc}
                     alt={item.title}
                     loading="lazy"
                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                   />
-                  <div className="absolute inset-0 bg-gradient-to-t from-[#191936]/80 via-[#191936]/20 to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />
 
                   {/* Zone Number Badge */}
                   <span
-                    className="absolute top-3 left-3 px-3 py-1 rounded-full font-mono text-xs font-bold tracking-wider uppercase text-[#191936] bg-[#FFFFFF] border-2 border-[#191936] shadow-sm"
+                    className="absolute top-3 left-3 px-2.5 py-1 rounded-md font-mono text-[11px] font-semibold tracking-wider uppercase text-slate-100 bg-slate-900/80 border border-white/10 backdrop-blur-md"
                   >
                     ZONE {item.num}
                   </span>
 
-                  {/* Zone Accent Chip */}
+                  {/* Zone Title on Image */}
                   <span
-                    className="absolute bottom-3 left-3 px-2.5 py-1 rounded-md font-mono text-[11px] font-bold tracking-wide uppercase text-[#191936] border border-[#191936]/20 shadow-sm flex items-center gap-1"
-                    style={{ backgroundColor: item.color }}
+                    className="absolute bottom-3 left-3 px-2.5 py-1 rounded-md font-mono text-[11px] font-medium tracking-wide text-slate-100 bg-slate-950/70 border border-white/10 backdrop-blur-md flex items-center gap-1.5"
                   >
-                    <Sparkles size={11} className="text-[#191936]" />
-                    {item.title}
+                    <Sparkles size={11} className="text-sky-400" />
+                    <span>{item.title}</span>
                   </span>
                 </div>
 
                 {/* Card Content */}
-                <div className="p-6 flex flex-col flex-1 bg-[#FFFFFF] justify-between">
+                <div className="p-6 flex flex-col flex-1 bg-white justify-between">
                   <div>
                     {item.heading && (
-                      <div className="font-mono text-xs uppercase tracking-wider font-bold text-[#4549D8] mb-1.5">
+                      <div className="font-mono text-xs uppercase tracking-wider font-semibold text-sky-600 mb-1.5">
                         {item.heading}
                       </div>
                     )}
-                    <h3 className="font-display text-xl sm:text-2xl font-extrabold text-[#191936] leading-snug mb-3 group-hover:text-[#4549D8] transition-colors">
+                    <h3 className="font-display text-xl sm:text-2xl font-bold text-slate-900 leading-snug mb-2.5 group-hover:text-blue-600 transition-colors">
                       {item.title}
                     </h3>
-                    <p className="font-body text-sm text-[#191936]/75 leading-relaxed m-0 line-clamp-3">
+                    <p className="font-body text-sm text-slate-600 leading-relaxed m-0 line-clamp-3">
                       {item.description}
                     </p>
                   </div>
 
-                  <div className="mt-5 pt-4 border-t border-[#E8E8EF] flex items-center justify-between text-xs font-bold text-[#191936] group-hover:text-[#4549D8] transition-colors">
+                  <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-slate-900 group-hover:text-blue-600 transition-colors">
                     <span className="font-mono uppercase tracking-wider">Explore Zone</span>
-                    <ArrowRight size={16} className="transform group-hover:translate-x-1 transition-transform" />
+                    <ArrowRight size={15} className="transform group-hover:translate-x-1 transition-transform" />
                   </div>
                 </div>
               </motion.div>

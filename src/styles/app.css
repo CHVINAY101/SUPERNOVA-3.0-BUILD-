@@ -7,26 +7,22 @@
 
 :root {
   /* Surfaces & Neutrals */
-  --color-paper: #FAF9F4;
+  --color-paper: #F8FAFC;
   --color-white: #FFFFFF;
-  --color-cool-grey: #E8E8EF;
-  --color-ink: #191936;
-  --color-navy: #191936;
+  --color-cool-grey: #E2E8F0;
+  --color-ink: #0F172A;
+  --color-navy: #0B1120;
+  --color-charcoal: #1E293B;
 
-  /* Primary Accents */
-  --color-electric-blue: #4549D8;
-  --color-lime: #D5F542;
-  --color-orange: #FF873D;
-
-  /* Secondary Accents */
-  --color-sky: #A9D9F4;
-  --color-lavender: #C8B9F5;
-  --color-butter: #F6E9B9;
-  --color-warm-cream: #EAE7DC;
+  /* Restrained Palette */
+  --color-electric-blue: #38BDF8;
+  --color-blue-primary: #2563EB;
+  --color-lavender: #A5B4FC;
+  --color-muted-slate: #94A3B8;
 
   /* Typography */
-  --font-display: 'Bricolage Grotesque', sans-serif;
-  --font-heading: 'Barlow Condensed', sans-serif;
+  --font-display: 'Bricolage Grotesque', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-heading: 'Bricolage Grotesque', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
@@ -35,9 +31,9 @@
   --container-pad-desktop: 28px;
   --container-pad-mobile: 20px;
 
-  /* Consistent Vertical Rhythm: 64px–96px for major sections */
-  --section-pad-desktop: 80px;
-  --section-pad-mobile: 64px;
+  /* Consistent Vertical Rhythm: 72px–96px */
+  --section-pad-desktop: 88px;
+  --section-pad-mobile: 60px;
 
   /* Related Elements Rhythm: 16px–24px */
   --element-gap-desktop: 24px;
@@ -45,8 +41,8 @@
   --card-pad-desktop: 24px;
   --card-pad-mobile: 20px;
 
-  --btn-height-desktop: 52px;
-  --btn-height-mobile: 50px;
+  --btn-height-desktop: 48px;
+  --btn-height-mobile: 46px;
 }
 
 *, *::before, *::after {
@@ -55,6 +51,7 @@
 
 html {
   scroll-behavior: smooth;
+  scroll-padding-top: 84px;
   font-size: 16px;
   background-color: var(--color-paper);
   color: var(--color-ink);
@@ -142,21 +139,23 @@ a {
 /* Section Headings */
 .section-heading {
   font-family: var(--font-display);
-  font-size: clamp(32px, 5vw, 60px);
+  font-size: clamp(28px, 4vw, 48px);
   font-weight: 800;
-  line-height: 1.04;
-  letter-spacing: -0.03em;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
   color: var(--color-ink);
 }
 
 .section-label {
-  font-family: var(--font-heading);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--color-electric-blue);
-  display: inline-block;
+  color: #38BDF8;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 12px;
 }
 
@@ -168,32 +167,31 @@ a {
   gap: 8px;
   height: var(--btn-height-desktop);
   min-height: var(--btn-height-desktop);
-  padding: 0 28px;
-  background-color: var(--color-lime);
-  color: var(--color-ink);
-  border: 2px solid var(--color-ink);
+  padding: 0 24px;
+  background-color: #2563EB;
+  color: #FFFFFF;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 9999px;
-  font-family: var(--font-heading);
-  font-size: 15px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  box-shadow: 3px 3px 0px var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
 .btn-primary:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0px var(--color-ink);
-  background-color: #E2FF4A;
+  transform: translateY(-1px);
+  background-color: #1D4ED8;
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.35);
 }
 
 .btn-primary:active {
-  transform: translate(2px, 2px);
-  box-shadow: 1px 1px 0px var(--color-ink);
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
 }
 
 .btn-secondary {
@@ -203,32 +201,30 @@ a {
   gap: 8px;
   height: var(--btn-height-desktop);
   min-height: var(--btn-height-desktop);
-  padding: 0 28px;
-  background-color: #FFFFFF;
-  color: var(--color-ink);
-  border: 2px solid var(--color-ink);
+  padding: 0 24px;
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #F8FAFC;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 9999px;
-  font-family: var(--font-heading);
-  font-size: 15px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  box-shadow: 3px 3px 0px var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  transition: background-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  backdrop-filter: blur(8px);
+  transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 
 .btn-secondary:hover {
-  background-color: var(--color-paper);
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0px var(--color-ink);
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
 }
 
 .btn-secondary:active {
-  transform: translate(2px, 2px);
-  box-shadow: 1px 1px 0px var(--color-ink);
+  transform: translateY(0);
 }
 
 /* Card tokens */

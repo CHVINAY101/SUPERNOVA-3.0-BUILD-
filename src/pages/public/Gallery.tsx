@@ -83,11 +83,11 @@ export default function Gallery() {
 
   return (
     <div className="w-full bg-white text-[#151535] min-h-screen">
-      {/* Header Band (Clears 120px from top) */}
-      <div className="pt-32 pb-16 bg-[#F8F7FC] relative border-b border-[#EAEAF2] overflow-hidden">
+      {/* Header Band */}
+      <div className="pt-8 sm:pt-12 pb-12 sm:pb-16 bg-[#F8F7FC] relative border-b border-[#EAEAF2] overflow-hidden">
         <div className="site-container relative z-10 text-center max-w-3xl mx-auto">
           <span className="section-label">PHOTO ARCHIVE</span>
-          <h1 className="font-heading text-4xl sm:text-6xl font-extrabold text-[#151535] mb-4 tracking-tight">
+          <h1 className="font-display text-4xl sm:text-6xl font-extrabold text-[#151535] mb-4 tracking-tight">
             FESTIVAL GALLERY
           </h1>
           <p className="font-body text-base sm:text-lg text-[#52527A] max-w-xl mx-auto">

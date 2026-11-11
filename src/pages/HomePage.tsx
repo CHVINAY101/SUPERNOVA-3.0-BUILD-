@@ -3,6 +3,7 @@ import { Hero } from "../sections/Hero";
 import { Marquee } from "../sections/Marquee";
 import { About } from "../sections/About";
 import { Experiences } from "../sections/Experiences";
+import { AnimationPreview } from "../sections/AnimationPreview";
 import { Esports } from "../sections/Esports";
 import { SaveTheDates } from "../sections/SaveTheDates";
 import { GalleryPreview } from "../sections/GalleryPreview";
@@ -22,10 +23,13 @@ export const HomePage: FC = () => {
       {/* 3. About Supernova: A PLACE FOR IDEAS TO COME ALIVE */}
       <About />
 
-      {/* 4. Four Event Experiences: Science Expo, School Exhibition, Animation Showcase, Esports Tournament */}
+      {/* 4. Flagship Zones */}
       <Experiences />
 
-      {/* 5. Esports Highlight & Live Arena */}
+      {/* 5. Department of Animation Feature: Original IP Launch & Experiences */}
+      <AnimationPreview />
+
+      {/* 6. Esports Highlight & Live Arena (Managed by Dept of Animation) */}
       <Esports />
 
       {/* 6. Save The Dates, Live Countdown & Itinerary */}
