@@ -4,6 +4,7 @@ import { PageHero } from "@/components/PageLayout";
 import { ConfirmationCard, Field, ReviewRow, StepIndicator, SubmitError } from "@/components/registration/RegistrationUI";
 import { supabase } from "@/lib/supabase";
 import { isValidEmail, isValidName, isValidPhone } from "@/lib/validation";
+import { getOfficialTeamSize } from "@/utils/esportsRules";
 
 interface GameOption {
   id: string;
@@ -124,7 +125,7 @@ export default function RegisterEsports() {
   );
 
   const selectedGame = games?.find((game) => game.id === draft.gameId) ?? null;
-  const teamSize = selectedGame?.team_size ?? null;
+  const teamSize = selectedGame ? getOfficialTeamSize(selectedGame.title, selectedGame.team_size) : null;
 
   const update = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -133,10 +134,11 @@ export default function RegisterEsports() {
 
   const selectGame = (gameId: string) => {
     const game = games?.find((item) => item.id === gameId) ?? null;
+    const requiredSize = game ? getOfficialTeamSize(game.title, game.team_size) : null;
     setDraft((current) => ({
       ...current,
       gameId,
-      players: game?.team_size ? Array.from({ length: game.team_size }, (_, i) => current.players[i] ?? { name: "", gamerId: "" }) : current.players,
+      players: requiredSize ? Array.from({ length: requiredSize }, (_, i) => current.players[i] ?? { name: "", gamerId: "" }) : current.players,
     }));
     setErrors((current) => ({ ...current, gameId: "" }));
   };
@@ -180,7 +182,10 @@ export default function RegisterEsports() {
       p_captain_name: draft.repName.trim(),
       p_email: draft.email.trim(),
       p_phone: draft.phone,
-      p_players: draft.players.map((player) => ({ player_name: player.name.trim(), gamer_tag: player.gamerId.trim() })),
+      p_players: (teamSize ? draft.players.slice(0, teamSize) : draft.players).map((player) => ({
+        player_name: player.name.trim(),
+        gamer_tag: player.gamerId.trim(),
+      })),
       p_consent: draft.consent,
       p_website: draft.website,
     });

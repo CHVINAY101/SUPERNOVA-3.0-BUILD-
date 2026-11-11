@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { SITE_CONTENT } from "../content/site";
-import { CheckCircle2, Plus, Trash2, Copy, GraduationCap, Building2, Users } from "lucide-react";
+import { CheckCircle2, Copy, GraduationCap, Building2, Users } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import { getOfficialTeamSize, validateEsportsRoster } from "@/utils/esportsRules";
 
 type FormType = "participation" | "visitor" | "esports" | null;
 
@@ -35,6 +36,7 @@ export const RegisterPage: React.FC = () => {
   // Active games from Supabase
   const [activeGames, setActiveGames] = useState<GameOption[]>([]);
   const [selectedGameId, setSelectedGameId] = useState<string>("");
+  const cachedPlayersRef = useRef<Record<number, PlayerRow>>({});
 
   useEffect(() => {
     async function loadGames() {
@@ -47,17 +49,30 @@ export const RegisterPage: React.FC = () => {
           .order("sort_order", { ascending: true });
         if (!error && data && data.length > 0) {
           setActiveGames(data);
-          setSelectedGameId(data[0].id);
-          // Set initial player count according to first game's team_size
-          const count = data[0].team_size || 5;
-          setEspPlayers(Array.from({ length: count }, () => ({ name: "", inGameId: "" })));
+          
+          // Check if URL specified a preferred game (e.g. ?type=esports&game=bgmi)
+          const urlGameParam = (searchParams.get("game") || "").toLowerCase().trim();
+          let targetGame = data[0];
+          if (urlGameParam) {
+            const matched = data.find((g) => g.title.toLowerCase().includes(urlGameParam) || g.id === urlGameParam);
+            if (matched) targetGame = matched;
+          }
+          
+          setSelectedGameId(targetGame.id);
+          const requiredCount = getOfficialTeamSize(targetGame.title, targetGame.team_size);
+          setEspPlayers(
+            Array.from({ length: requiredCount }, (_, i) => ({
+              name: cachedPlayersRef.current[i]?.name || "",
+              inGameId: cachedPlayersRef.current[i]?.inGameId || "",
+            }))
+          );
         }
       } catch (err) {
         console.warn("Could not load games list:", err);
       }
     }
     loadGames();
-  }, []);
+  }, [searchParams]);
 
   // Participation Form State
   const [partInstitution, setPartInstitution] = useState("");
@@ -120,38 +135,44 @@ export const RegisterPage: React.FC = () => {
   const [copiedRef, setCopiedRef] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // When game selection changes, resize players roster to match team_size
+  // When game selection changes, resize players roster to match exact official team_size
   const handleGameChange = (gameId: string) => {
     setSelectedGameId(gameId);
     const game = activeGames.find((g) => g.id === gameId);
-    const targetSize = game?.team_size || 5;
+    const targetSize = getOfficialTeamSize(game?.title, game?.team_size);
+
     setEspPlayers((prev) => {
-      if (prev.length === targetSize) return prev;
-      if (prev.length < targetSize) {
-        const added = Array.from({ length: targetSize - prev.length }, () => ({
-          name: "",
-          inGameId: "",
-        }));
-        return [...prev, ...added];
-      }
-      return prev.slice(0, targetSize);
+      // 1. Sync current player rows to session cache
+      prev.forEach((p, idx) => {
+        if (p.name || p.inGameId) {
+          cachedPlayersRef.current[idx] = { ...p };
+        }
+      });
+
+      // 2. Build exactly targetSize rows preserving valid positions (players 1..targetSize)
+      // and restoring from cache if user previously entered them during this session
+      const reconciled: PlayerRow[] = Array.from({ length: targetSize }, (_, i) => {
+        if (prev[i]) {
+          return { ...prev[i] };
+        }
+        if (cachedPlayersRef.current[i]) {
+          return { ...cachedPlayersRef.current[i] };
+        }
+        return { name: "", inGameId: "" };
+      });
+
+      return reconciled;
     });
   };
 
-  // Add/remove player for esports
-  const handleAddPlayer = () => {
-    setEspPlayers((prev) => [...prev, { name: "", inGameId: "" }]);
-  };
-
-  const handleRemovePlayer = (idx: number) => {
-    if (espPlayers.length <= 1) return;
-    setEspPlayers((prev) => prev.filter((_, i) => i !== idx));
-  };
-
   const handlePlayerChange = (idx: number, field: keyof PlayerRow, val: string) => {
-    setEspPlayers((prev) =>
-      prev.map((p, i) => (i === idx ? { ...p, [field]: val } : p))
-    );
+    setEspPlayers((prev) => {
+      const updated = prev.map((p, i) => (i === idx ? { ...p, [field]: val } : p));
+      if (updated[idx]) {
+        cachedPlayersRef.current[idx] = { ...updated[idx] };
+      }
+      return updated;
+    });
   };
 
   // Generate Mailto fallback URL if needed
@@ -342,16 +363,26 @@ export const RegisterPage: React.FC = () => {
           throw new Error("Please select a game for esports registration.");
         }
         const game = activeGames.find((g) => g.id === selectedGameId);
-        if (game?.team_size && espPlayers.length !== game.team_size) {
-          throw new Error(
-            `${game.title} requires exactly ${game.team_size} players (current: ${espPlayers.length}).`
-          );
+        const gameTitle = game?.title || "Tournament Title";
+        const expectedCount = getOfficialTeamSize(game?.title, game?.team_size);
+
+        // Multi-level frontend and submission handler validation
+        const validation = validateEsportsRoster(gameTitle, espPlayers.slice(0, expectedCount));
+        if (!validation.isValid) {
+          throw new Error(validation.errorMessage || `All ${expectedCount} players are required.`);
         }
 
-        const playersPayload = espPlayers.map((p) => ({
+        // Construct payload using strictly the permitted number of players
+        const playersPayload = espPlayers.slice(0, expectedCount).map((p) => ({
           player_name: p.name.trim(),
           gamer_tag: p.inGameId.trim(),
         }));
+
+        if (playersPayload.length !== expectedCount) {
+          throw new Error(
+            `${gameTitle} requires exactly ${expectedCount} players (current payload: ${playersPayload.length}). Extra or missing players are not allowed.`
+          );
+        }
 
         const { data, error } = await supabase.rpc("submit_esports_registration", {
           p_team_name: espTeamName.trim(),
@@ -1171,57 +1202,73 @@ export const RegisterPage: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Player Rows */}
+                      {/* Player Rows: Strictly Enforced Official Tournament Team Sizes */}
                       <div className="pt-4 border-t border-[#EAEAF2]">
-                        <div className="flex items-center justify-between mb-3">
-                          <label className="form-label font-bold text-base mb-0">
-                            Team Players
-                          </label>
-                          <button
-                            type="button"
-                            onClick={handleAddPlayer}
-                            className="inline-flex items-center gap-1.5 text-xs font-mono font-bold text-[#4549D8] bg-white border border-[#4549D8] px-3 py-1.5 rounded-full hover:bg-[#4549D8] hover:text-white transition-colors"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            Add Player
-                          </button>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                          <div>
+                            <label className="form-label font-bold text-base mb-0">
+                              Team Players (
+                              {activeGames.find((g) => g.id === selectedGameId)?.title || "Official Title"} — exactly{" "}
+                              {getOfficialTeamSize(
+                                activeGames.find((g) => g.id === selectedGameId)?.title,
+                                activeGames.find((g) => g.id === selectedGameId)?.team_size
+                              )}{" "}
+                              players required)
+                            </label>
+                            <p className="text-xs text-[#191936]/60 mt-0.5">
+                              Substitutes are not permitted. All roster positions are mandatory.
+                            </p>
+                          </div>
+                          <span className="self-start sm:self-auto font-mono text-xs font-bold px-2.5 py-1 rounded bg-blue-50 border border-blue-200 text-blue-700">
+                            {espPlayers.length} /{" "}
+                            {getOfficialTeamSize(
+                              activeGames.find((g) => g.id === selectedGameId)?.title,
+                              activeGames.find((g) => g.id === selectedGameId)?.team_size
+                            )}{" "}
+                            Required
+                          </span>
                         </div>
 
                         <div className="space-y-3">
                           {espPlayers.map((player, idx) => (
                             <div
                               key={idx}
-                              className="flex items-center gap-3 p-3 rounded-xl bg-[#F8F7FC] border border-[#EAEAF2]"
+                              className="p-3.5 rounded-xl bg-[#F8F7FC] border border-[#EAEAF2] space-y-2.5 sm:space-y-0 sm:flex sm:items-center sm:gap-3"
                             >
-                              <span className="font-mono text-xs font-bold w-6 text-[#191936]/60 text-center">
-                                #{idx + 1}
-                              </span>
-                              <input
-                                type="text"
-                                required
-                                value={player.name}
-                                onChange={(e) => handlePlayerChange(idx, "name", e.target.value)}
-                                placeholder="Player Name"
-                                className="form-input !h-10 text-sm flex-1"
-                              />
-                              <input
-                                type="text"
-                                required
-                                value={player.inGameId}
-                                onChange={(e) => handlePlayerChange(idx, "inGameId", e.target.value)}
-                                placeholder="In-Game ID"
-                                className="form-input !h-10 text-sm flex-1"
-                              />
-                              {espPlayers.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemovePlayer(idx)}
-                                  className="p-2 text-red-500 hover:text-red-700"
-                                  title="Remove player"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+                              <div className="flex items-center justify-between sm:justify-start gap-2 shrink-0 sm:w-28">
+                                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-white border border-[#EAEAF2] text-[#191936]">
+                                  Player #{idx + 1}
+                                </span>
+                                {idx === 0 && (
+                                  <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+                                    Lead
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                <div>
+                                  <label className="sr-only">Player {idx + 1} Full Name</label>
+                                  <input
+                                    type="text"
+                                    required
+                                    value={player.name}
+                                    onChange={(e) => handlePlayerChange(idx, "name", e.target.value)}
+                                    placeholder={`Player ${idx + 1} Full Name *`}
+                                    className="form-input !h-10 text-sm w-full"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="sr-only">Player {idx + 1} In-Game ID</label>
+                                  <input
+                                    type="text"
+                                    required
+                                    value={player.inGameId}
+                                    onChange={(e) => handlePlayerChange(idx, "inGameId", e.target.value)}
+                                    placeholder={`Player ${idx + 1} In-Game Tag/ID *`}
+                                    className="form-input !h-10 text-sm w-full font-mono"
+                                  />
+                                </div>
+                              </div>
                             </div>
                           ))}
                         </div>

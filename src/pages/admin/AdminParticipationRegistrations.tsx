@@ -3,16 +3,21 @@ import { supabase } from "@/lib/supabase";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
 import type { ParticipationRegistration, RegistrationStatus } from "@/types/database";
+import { archiveRegistrationRecord, restoreRegistrationRecord } from "@/lib/registrationOperations";
+import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
+import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { 
   Search, 
   CheckCircle2, 
-  XCircle, 
   AlertCircle, 
   Download, 
-  ChevronRight, 
   X, 
   Edit3, 
-  Save 
+  Save,
+  RotateCcw,
+  Trash2,
+  RefreshCw,
+  Eye
 } from "lucide-react";
 
 export default function AdminParticipationRegistrations() {
@@ -21,20 +26,36 @@ export default function AdminParticipationRegistrations() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [areaFilter, setAreaFilter] = useState<string>("all");
+  const [viewScope, setViewScope] = useState<"active" | "archived" | "all">("active");
+
+  // Selected registration for Drawer
   const [selectedReg, setSelectedReg] = useState<ParticipationRegistration | null>(null);
   const [editNote, setEditNote] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Safe Archive Modal state
+  const [archiveTarget, setArchiveTarget] = useState<ParticipationRegistration | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
 
   const fetchRegistrations = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from("participation_registrations")
-      .select("*")
-      .order("submitted_at", { ascending: false });
-    if (data) {
-      setRegistrations(data as ParticipationRegistration[]);
+    try {
+      const { data, error } = await supabase
+        .from("participation_registrations")
+        .select("*")
+        .order("submitted_at", { ascending: false });
+
+      if (error) {
+        console.error("Failed to fetch participation registrations:", error);
+      } else {
+        setRegistrations((data as unknown as ParticipationRegistration[]) || []);
+      }
+    } catch (err) {
+      console.error("Error loading participation:", err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   const { connectionState, lastEventTime } = useRealtimeSubscription(
@@ -46,19 +67,125 @@ export default function AdminParticipationRegistrations() {
     fetchRegistrations();
   }, [fetchRegistrations]);
 
+  const updateStatus = async (id: string, newStatus: RegistrationStatus) => {
+    setIsUpdating(true);
+    setStatusMsg(null);
+    try {
+      const { error } = await supabase
+        .from("participation_registrations")
+        .update({ status: newStatus, admin_notes: editNote })
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setRegistrations((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, status: newStatus, admin_notes: editNote } : r))
+      );
+      if (selectedReg && selectedReg.id === id) {
+        setSelectedReg({ ...selectedReg, status: newStatus, admin_notes: editNote });
+      }
+
+      setStatusMsg({
+        type: "success",
+        text: `Registration status updated to ${newStatus.replace("_", " ")}.`,
+      });
+      setTimeout(() => setStatusMsg(null), 4000);
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: `Failed to update status: ${err.message || "Unknown error"}`,
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  // Safe Archive Handler
+  const handleConfirmArchive = async () => {
+    if (!archiveTarget) return;
+    setIsArchiving(true);
+    try {
+      const res = await archiveRegistrationRecord("participation", archiveTarget.id);
+      if (!res.ok) throw new Error(res.error);
+
+      const now = new Date().toISOString();
+      setRegistrations((prev) =>
+        prev.map((r) => (r.id === archiveTarget.id ? ({ ...r, archived_at: now } as any) : r))
+      );
+      if (selectedReg && selectedReg.id === archiveTarget.id) {
+        setSelectedReg({ ...selectedReg, archived_at: now } as any);
+      }
+
+      setStatusMsg({
+        type: "success",
+        text: `Project "${archiveTarget.project_title || archiveTarget.full_name}" was archived.`,
+      });
+      setArchiveTarget(null);
+      setTimeout(() => setStatusMsg(null), 4000);
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: `Archive error: ${err.message || "Unknown error"}`,
+      });
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  // Safe Restore Handler
+  const handleRestore = async (item: ParticipationRegistration) => {
+    setIsUpdating(true);
+    try {
+      const res = await restoreRegistrationRecord("participation", item.id);
+      if (!res.ok) throw new Error(res.error);
+
+      setRegistrations((prev) =>
+        prev.map((r) => (r.id === item.id ? ({ ...r, archived_at: null } as any) : r))
+      );
+      if (selectedReg && selectedReg.id === item.id) {
+        setSelectedReg({ ...selectedReg, archived_at: null } as any);
+      }
+
+      setStatusMsg({
+        type: "success",
+        text: `Project "${item.project_title || item.full_name}" restored to active submissions.`,
+      });
+      setTimeout(() => setStatusMsg(null), 4000);
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: `Restore error: ${err.message || "Unknown error"}`,
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const filteredRegistrations = useMemo(() => {
     return registrations.filter((reg) => {
+      const isArchived = Boolean((reg as any).archived_at);
+
+      // 1. View Scope
+      if (viewScope === "active" && isArchived) return false;
+      if (viewScope === "archived" && !isArchived) return false;
+
+      // 2. Status
       const matchesStatus = statusFilter === "all" || reg.status === statusFilter;
-      const matchesArea = areaFilter === "all" || reg.participation_area.toLowerCase() === areaFilter.toLowerCase();
-      const q = searchQuery.toLowerCase();
+
+      // 3. Area
+      const matchesArea = areaFilter === "all" || reg.participation_area?.toLowerCase() === areaFilter.toLowerCase();
+
+      // 4. Search
+      const q = searchQuery.toLowerCase().trim();
+      if (!q) return matchesStatus && matchesArea;
+
       const name = reg.full_name?.toLowerCase() || "";
       const proj = reg.project_title?.toLowerCase() || "";
       const inst = reg.institution?.toLowerCase() || "";
       const ref = reg.registration_ref?.toLowerCase() || "";
       const mail = reg.email?.toLowerCase() || "";
 
-      const matchesSearch = 
-        !q ||
+      const matchesSearch =
         ref.includes(q) ||
         name.includes(q) ||
         proj.includes(q) ||
@@ -67,40 +194,50 @@ export default function AdminParticipationRegistrations() {
 
       return matchesStatus && matchesArea && matchesSearch;
     });
-  }, [registrations, statusFilter, areaFilter, searchQuery]);
+  }, [registrations, viewScope, statusFilter, areaFilter, searchQuery]);
 
-  const updateStatus = async (id: string, newStatus: RegistrationStatus) => {
-    setIsUpdating(true);
-    const { error } = await supabase
-      .from("participation_registrations")
-      .update({ status: newStatus, admin_notes: editNote })
-      .eq("id", id);
+  // Aggregate Metrics
+  const metrics = useMemo(() => {
+    let activeTotal = 0;
+    let confirmed = 0;
+    let pending = 0;
+    let archived = 0;
 
-    if (!error) {
-      setRegistrations((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, status: newStatus, admin_notes: editNote } : r))
-      );
-      if (selectedReg && selectedReg.id === id) {
-        setSelectedReg({ ...selectedReg, status: newStatus, admin_notes: editNote });
+    registrations.forEach((r: any) => {
+      if (r.archived_at) {
+        archived++;
+      } else {
+        activeTotal++;
+        if (r.status === "confirmed") confirmed++;
+        if (r.status === "pending") pending++;
       }
-    }
-    setIsUpdating(false);
-  };
+    });
+
+    return { activeTotal, confirmed, pending, archived };
+  }, [registrations]);
 
   const handleExportCSV = () => {
-    const headers = ["Ref ID", "Name", "Email", "Phone", "Institution", "Zone", "Project Title", "Team Size", "Status", "Date"];
-    const rows = filteredRegistrations.map((r) => [
-      r.registration_ref,
-      `"${r.full_name}"`,
-      r.email,
-      r.phone,
-      `"${r.institution || ""}"`,
-      `"${r.participation_area}"`,
-      `"${(r.project_title || "").replace(/"/g, '""')}"`,
-      r.team_members_count,
-      r.status,
-      r.submitted_at,
+    const sanitizeCsv = (val: string | number | null | undefined): string => {
+      const str = String(val ?? "");
+      const safe = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
+
+    const headers = ["Ref ID", "Lead Participant", "Email", "Phone", "Institution", "Zone", "Project Title", "Team Size", "Status", "Archived", "Submission Date"];
+    const rows = filteredRegistrations.map((r: any) => [
+      sanitizeCsv(r.registration_ref),
+      sanitizeCsv(r.full_name),
+      sanitizeCsv(r.email),
+      sanitizeCsv(r.phone),
+      sanitizeCsv(r.institution || "Independent"),
+      sanitizeCsv(r.participation_area),
+      sanitizeCsv(r.project_title || "Untitled"),
+      sanitizeCsv(r.team_members_count),
+      sanitizeCsv(r.status),
+      sanitizeCsv(r.archived_at ? "YES" : "NO"),
+      sanitizeCsv(r.submitted_at),
     ]);
+
     const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -111,59 +248,138 @@ export default function AdminParticipationRegistrations() {
     document.body.removeChild(link);
   };
 
-  const getStatusBadge = (status: RegistrationStatus) => {
-    switch (status) {
-      case "confirmed":
-        return <span style={{ padding: "4px 10px", borderRadius: "999px", background: "rgba(16, 185, 129, 0.15)", color: "#10b981", fontSize: "0.75rem", fontWeight: 700 }}>Confirmed</span>;
-      case "declined":
-        return <span style={{ padding: "4px 10px", borderRadius: "999px", background: "rgba(239, 68, 68, 0.15)", color: "#ef4444", fontSize: "0.75rem", fontWeight: 700 }}>Declined</span>;
-      case "correction_requested":
-        return <span style={{ padding: "4px 10px", borderRadius: "999px", background: "rgba(245, 158, 11, 0.15)", color: "#f59e0b", fontSize: "0.75rem", fontWeight: 700 }}>Correction</span>;
-      default:
-        return <span style={{ padding: "4px 10px", borderRadius: "999px", background: "rgba(59, 130, 246, 0.15)", color: "#3b82f6", fontSize: "0.75rem", fontWeight: 700 }}>Pending</span>;
-    }
-  };
-
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 28, flexWrap: "wrap", gap: 16 }}>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
-          <h1 style={{ fontSize: "1.75rem", fontWeight: 700, color: "var(--text-primary)" }}>Participation Registrations</h1>
-          <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", marginTop: 4 }}>
-            Review, allocate stalls, and manage Science Expo, School Exhibition, and Animation project entries.
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+              Exhibitions & Science Expo
+            </span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight mt-1 mb-1">
+            Participation & Project Registrations
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500">
+            Review submissions, assign exhibition stalls, inspect equipment specifications, and manage approvals.
           </p>
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+
+        <div className="flex items-center gap-2.5">
           <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} />
           <button
-            onClick={handleExportCSV}
-            className="btn btn-secondary"
-            style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.85rem" }}
+            type="button"
+            onClick={fetchRegistrations}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
           >
-            <Download size={15} /> Export CSV
+            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+            <span>Sync</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleExportCSV}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
+          >
+            <Download size={13} />
+            <span>Export CSV</span>
           </button>
         </div>
       </div>
 
-      {/* Filter Toolbar */}
-      <div className="card" style={{ padding: 18, marginBottom: 24, display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", flexGrow: 1 }}>
-          <div style={{ position: "relative", minWidth: 260 }}>
-            <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+      {/* Metrics Row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-slate-500 font-semibold">Active Projects</p>
+          <p className="text-2xl font-display font-extrabold text-slate-900 mt-1">{metrics.activeTotal}</p>
+        </div>
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-emerald-700 font-semibold">Confirmed Projects</p>
+          <p className="text-2xl font-display font-extrabold text-emerald-700 mt-1">{metrics.confirmed}</p>
+        </div>
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-amber-700 font-semibold">Pending Review</p>
+          <p className="text-2xl font-display font-extrabold text-amber-600 mt-1">{metrics.pending}</p>
+        </div>
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-slate-500 font-semibold">Archived Projects</p>
+          <p className="text-2xl font-display font-extrabold text-slate-600 mt-1">{metrics.archived}</p>
+        </div>
+      </div>
+
+      {statusMsg && (
+        <div
+          className={`p-3.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-between border shadow-2xs ${
+            statusMsg.type === "success"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-rose-50 border-rose-200 text-rose-900"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {statusMsg.type === "success" ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+            <span>{statusMsg.text}</span>
+          </div>
+          <button type="button" onClick={() => setStatusMsg(null)} className="p-1 text-slate-400 hover:text-slate-700">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Filter and Search Bar */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="inline-flex rounded-xl p-1 bg-slate-100 border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setViewScope("active")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                viewScope === "active" ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Active Entries ({metrics.activeTotal})
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewScope("archived")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                viewScope === "archived" ? "bg-white text-rose-700 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Archived ({metrics.archived})
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewScope("all")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                viewScope === "all" ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              All Entries
+            </button>
+          </div>
+
+          <span className="text-xs text-slate-500 font-mono">
+            Showing <strong className="text-slate-900">{filteredRegistrations.length}</strong> matching entries
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-slate-100">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
             <input
-              className="input"
-              style={{ paddingLeft: 36, height: 38, fontSize: "0.85rem" }}
-              placeholder="Search reference, participant, or project..."
+              type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search reference, participant, project, institution..."
+              className="w-full h-9 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-hidden focus:border-blue-500 transition-colors"
             />
           </div>
 
           <select
-            className="select"
-            style={{ height: 38, fontSize: "0.85rem", width: "auto" }}
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
+            className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:bg-white focus:outline-hidden focus:border-blue-500"
           >
             <option value="all">All Statuses</option>
             <option value="pending">Pending</option>
@@ -173,268 +389,330 @@ export default function AdminParticipationRegistrations() {
           </select>
 
           <select
-            className="select"
-            style={{ height: 38, fontSize: "0.85rem", width: "auto" }}
             value={areaFilter}
             onChange={(e) => setAreaFilter(e.target.value)}
+            className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:bg-white focus:outline-hidden focus:border-blue-500"
           >
-            <option value="all">All Event Zones</option>
+            <option value="all">All Exhibition Zones</option>
             <option value="Science Expo">Science Expo</option>
             <option value="School Kids' Exhibition">School Kids' Exhibition</option>
             <option value="Department of Animation Showcase">Animation Showcase</option>
           </select>
         </div>
-
-        <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-          Showing <strong>{filteredRegistrations.length}</strong> entries
-        </p>
       </div>
 
-      {/* Main Table */}
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "0.88rem" }}>
+      {/* Main SaaS Table */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-2xs">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
             <thead>
-              <tr style={{ borderBottom: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.02)" }}>
-                <th style={{ padding: "14px 18px", color: "var(--text-muted)", fontWeight: 600 }}>Ref ID</th>
-                <th style={{ padding: "14px 18px", color: "var(--text-muted)", fontWeight: 600 }}>Lead Participant</th>
-                <th style={{ padding: "14px 18px", color: "var(--text-muted)", fontWeight: 600 }}>Project / Exhibit</th>
-                <th style={{ padding: "14px 18px", color: "var(--text-muted)", fontWeight: 600 }}>Zone</th>
-                <th style={{ padding: "14px 18px", color: "var(--text-muted)", fontWeight: 600 }}>Status</th>
-                <th style={{ padding: "14px 18px", color: "var(--text-muted)", fontWeight: 600 }}>Date</th>
-                <th style={{ padding: "14px 18px", color: "var(--text-muted)", fontWeight: 600, textAlign: "right" }}>Action</th>
+              <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 uppercase font-mono tracking-wider text-[11px]">
+                <th className="py-3 px-4 font-semibold">Reference</th>
+                <th className="py-3 px-4 font-semibold">Lead Participant</th>
+                <th className="py-3 px-4 font-semibold">Project Title</th>
+                <th className="py-3 px-4 font-semibold">Exhibition Zone</th>
+                <th className="py-3 px-4 font-semibold">Team Size</th>
+                <th className="py-3 px-4 font-semibold">Status</th>
+                <th className="py-3 px-4 font-semibold">Submitted</th>
+                <th className="py-3 px-4 text-right font-semibold">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: 48, textAlign: "center", color: "var(--text-muted)" }}>
+                  <td colSpan={8} className="py-12 text-center text-slate-500 font-mono">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-blue-600" />
                     Loading participation records...
                   </td>
                 </tr>
               ) : filteredRegistrations.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: 48, textAlign: "center", color: "var(--text-muted)" }}>
-                    No participation registrations found.
+                  <td colSpan={8} className="py-12 text-center text-slate-500">
+                    <p className="font-semibold text-slate-800">No participation records match your filters.</p>
                   </td>
                 </tr>
               ) : (
-                filteredRegistrations.map((reg) => (
-                  <tr
-                    key={reg.id}
-                    style={{
-                      borderBottom: "1px solid var(--border-subtle)",
-                      cursor: "pointer",
-                      transition: "background 0.15s ease",
-                    }}
-                    onClick={() => {
-                      setSelectedReg(reg);
-                      setEditNote(reg.admin_notes || "");
-                    }}
-                  >
-                    <td style={{ padding: "14px 18px", fontFamily: "monospace", color: "var(--cyan-400)", fontWeight: 700 }}>
-                      {reg.registration_ref}
-                    </td>
-                    <td style={{ padding: "14px 18px" }}>
-                      <p style={{ fontWeight: 600, color: "var(--text-primary)" }}>{reg.full_name}</p>
-                      <p style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>{reg.institution || "Independent"}</p>
-                    </td>
-                    <td style={{ padding: "14px 18px", maxWidth: 220 }}>
-                      <p style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {reg.project_title || "Untitled Project"}
-                      </p>
-                      <p style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>{reg.team_members_count} team members</p>
-                    </td>
-                    <td style={{ padding: "14px 18px", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
-                      {reg.participation_area}
-                    </td>
-                    <td style={{ padding: "14px 18px" }}>
-                      {getStatusBadge(reg.status)}
-                    </td>
-                    <td style={{ padding: "14px 18px", color: "var(--text-muted)", fontSize: "0.8rem" }}>
-                      {new Date(reg.submitted_at).toLocaleDateString("en-IN", { month: "short", day: "numeric" })}
-                    </td>
-                    <td style={{ padding: "14px 18px", textAlign: "right" }}>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ padding: "4px 8px", fontSize: "0.8rem", color: "var(--cyan-400)" }}
-                      >
-                        Inspect <ChevronRight size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                filteredRegistrations.map((reg: any) => {
+                  const isArchived = Boolean(reg.archived_at);
+                  return (
+                    <tr
+                      key={reg.id}
+                      onClick={() => {
+                        setSelectedReg(reg);
+                        setEditNote(reg.admin_notes || "");
+                      }}
+                      className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
+                    >
+                      <td className="py-3.5 px-4 font-mono font-bold text-blue-700 whitespace-nowrap">
+                        {reg.registration_ref}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className="font-bold text-slate-900 block group-hover:text-blue-700 transition-colors">
+                          {reg.full_name}
+                        </span>
+                        <span className="text-[11px] text-slate-500 block truncate max-w-[190px]">
+                          {reg.institution || "Independent"}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className="font-semibold text-slate-800 block truncate max-w-[220px]">
+                          {reg.project_title || "Untitled Project"}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap text-slate-600">
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono text-[11px]">
+                          {reg.participation_area}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-slate-600 whitespace-nowrap">
+                        {reg.team_members_count} members
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <AdminStatusBadge status={reg.status} isArchived={isArchived} />
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-slate-500 whitespace-nowrap">
+                        {new Date(reg.submitted_at).toLocaleDateString("en-IN", {
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </td>
+                      <td className="py-3.5 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="inline-flex items-center gap-1.5 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedReg(reg);
+                              setEditNote(reg.admin_notes || "");
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
+                          >
+                            <Eye size={12} />
+                            <span>View</span>
+                          </button>
+
+                          {isArchived ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRestore(reg)}
+                              disabled={isUpdating}
+                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
+                              title="Restore to active entries"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Restore</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setArchiveTarget(reg)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Archive entry"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Details Slide-Over Modal */}
+      {/* Details Slide-Over Drawer */}
       {selectedReg && (
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 100,
-            background: "rgba(0,0,0,0.65)",
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex justify-end animate-fadeIn"
           onClick={() => setSelectedReg(null)}
         >
           <div
-            style={{
-              width: "100%",
-              maxWidth: 540,
-              background: "var(--navy-900)",
-              height: "100%",
-              overflowY: "auto",
-              padding: 32,
-              borderLeft: "1px solid var(--border-subtle)",
-              display: "flex",
-              flexDirection: "column",
-            }}
+            className="w-full max-w-xl bg-white border-l border-slate-200 h-full overflow-y-auto p-6 sm:p-8 flex flex-col justify-between shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-              <div>
-                <span style={{ fontSize: "0.75rem", fontFamily: "monospace", color: "var(--cyan-400)", fontWeight: 700 }}>
-                  {selectedReg.registration_ref}
+            <div className="space-y-6">
+              {/* Header */}
+              <div className="flex items-start justify-between pb-4 border-b border-slate-200">
+                <div>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded">
+                      {selectedReg.registration_ref}
+                    </span>
+                    <AdminStatusBadge status={selectedReg.status} isArchived={Boolean((selectedReg as any).archived_at)} />
+                  </div>
+                  <h2 className="text-xl font-display font-black text-slate-900 tracking-tight m-0">
+                    {selectedReg.project_title || "Untitled Exhibit"}
+                  </h2>
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">
+                    Lead: {selectedReg.full_name} · {selectedReg.team_members_count} team members
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedReg(null)}
+                  className="p-1.5 rounded-xl border border-slate-200 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Status Actions */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2.5">
+                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                  Update Status & Approval
                 </span>
-                <h2 style={{ fontSize: "1.4rem", fontWeight: 700, marginTop: 4 }}>Registration Details</h2>
-              </div>
-              <button
-                className="btn btn-ghost"
-                onClick={() => setSelectedReg(null)}
-                style={{ padding: 6, borderRadius: "50%" }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div style={{ display: "grid", gap: 20, flexGrow: 1 }}>
-              <div className="card" style={{ padding: 18 }}>
-                <p style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)" }}>Status</p>
-                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <button
+                    type="button"
+                    disabled={isUpdating || selectedReg.status === "confirmed"}
                     onClick={() => updateStatus(selectedReg.id, "confirmed")}
-                    disabled={isUpdating}
-                    className="btn"
-                    style={{
-                      background: selectedReg.status === "confirmed" ? "#10b981" : "rgba(16, 185, 129, 0.15)",
-                      color: selectedReg.status === "confirmed" ? "#ffffff" : "#10b981",
-                      fontSize: "0.8rem",
-                      padding: "6px 14px",
-                    }}
+                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
                   >
-                    <CheckCircle2 size={14} /> Confirm Entry
+                    Confirm
                   </button>
                   <button
+                    type="button"
+                    disabled={isUpdating || selectedReg.status === "correction_requested"}
                     onClick={() => updateStatus(selectedReg.id, "correction_requested")}
-                    disabled={isUpdating}
-                    className="btn"
-                    style={{
-                      background: selectedReg.status === "correction_requested" ? "#f59e0b" : "rgba(245, 158, 11, 0.15)",
-                      color: selectedReg.status === "correction_requested" ? "#ffffff" : "#f59e0b",
-                      fontSize: "0.8rem",
-                      padding: "6px 14px",
-                    }}
+                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white transition-colors disabled:opacity-50 cursor-pointer"
                   >
-                    <AlertCircle size={14} /> Request Correction
+                    Correction
                   </button>
                   <button
+                    type="button"
+                    disabled={isUpdating || selectedReg.status === "declined"}
                     onClick={() => updateStatus(selectedReg.id, "declined")}
-                    disabled={isUpdating}
-                    className="btn"
-                    style={{
-                      background: selectedReg.status === "declined" ? "#ef4444" : "rgba(239, 68, 68, 0.15)",
-                      color: selectedReg.status === "declined" ? "#ffffff" : "#ef4444",
-                      fontSize: "0.8rem",
-                      padding: "6px 14px",
-                    }}
+                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
                   >
-                    <XCircle size={14} /> Decline
+                    Decline
                   </button>
-                </div>
-              </div>
-
-              <div className="card" style={{ padding: 18 }}>
-                <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: 12 }}>Participant Information</h3>
-                <div style={{ display: "grid", gap: 10, fontSize: "0.88rem" }}>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>Lead Name: </span>
-                    <strong>{selectedReg.full_name}</strong>
-                  </div>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>Email: </span>
-                    <a href={`mailto:${selectedReg.email}`} style={{ color: "var(--cyan-400)" }}>{selectedReg.email}</a>
-                  </div>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>Phone: </span>
-                    <a href={`tel:${selectedReg.phone}`} style={{ color: "var(--cyan-400)" }}>{selectedReg.phone}</a>
-                  </div>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>Institution: </span>
-                    <span>{selectedReg.institution || "Independent"}</span>
-                  </div>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>Category: </span>
-                    <span>{selectedReg.participant_category}</span>
-                  </div>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>Team Size: </span>
-                    <span>{selectedReg.team_members_count} members</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="card" style={{ padding: 18 }}>
-                <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: 12 }}>Exhibit Details</h3>
-                <div style={{ display: "grid", gap: 10, fontSize: "0.88rem" }}>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>Zone: </span>
-                    <strong style={{ color: "var(--cyan-400)" }}>{selectedReg.participation_area}</strong>
-                  </div>
-                  <div>
-                    <span style={{ color: "var(--text-muted)" }}>Project Title: </span>
-                    <strong style={{ color: "var(--text-primary)" }}>{selectedReg.project_title || "Untitled"}</strong>
-                  </div>
-                  {selectedReg.project_description && (
-                    <div style={{ marginTop: 8 }}>
-                      <span style={{ color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Description & Requirements:</span>
-                      <p style={{ background: "rgba(0,0,0,0.25)", padding: 12, borderRadius: 8, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                        {selectedReg.project_description}
-                      </p>
-                    </div>
+                  {Boolean((selectedReg as any).archived_at) ? (
+                    <button
+                      type="button"
+                      disabled={isUpdating}
+                      onClick={() => handleRestore(selectedReg)}
+                      className="py-2 px-3 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
+                    >
+                      Restore
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setArchiveTarget(selectedReg)}
+                      className="py-2 px-3 rounded-lg text-xs font-semibold bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                    >
+                      Archive
+                    </button>
                   )}
                 </div>
               </div>
 
-              <div className="card" style={{ padding: 18 }}>
-                <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                  <Edit3 size={15} /> Admin Notes & Stall Allocation
+              {/* Participant Details */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2.5 text-xs">
+                <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                  Lead Participant Details
+                </h3>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Lead Name:</span>
+                  <strong className="text-slate-900">{selectedReg.full_name}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Email:</span>
+                  <a href={`mailto:${selectedReg.email}`} className="text-blue-700 font-mono hover:underline">
+                    {selectedReg.email}
+                  </a>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Phone:</span>
+                  <a href={`tel:${selectedReg.phone}`} className="text-blue-700 font-mono hover:underline">
+                    {selectedReg.phone}
+                  </a>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Institution:</span>
+                  <span className="font-medium text-slate-900">{selectedReg.institution || "Independent"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Participant Category:</span>
+                  <span className="font-medium text-slate-900">{selectedReg.participant_category}</span>
+                </div>
+              </div>
+
+              {/* Exhibit & Zone Details */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2.5 text-xs">
+                <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                  Exhibit & Requirements
+                </h3>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Zone:</span>
+                  <strong className="text-blue-700 font-semibold">{selectedReg.participation_area}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Project Title:</span>
+                  <strong className="text-slate-900">{selectedReg.project_title || "Untitled"}</strong>
+                </div>
+                {selectedReg.project_description && (
+                  <div className="pt-2 border-t border-slate-200">
+                    <span className="text-slate-500 block mb-1">Description & Requirements:</span>
+                    <p className="p-3 rounded-lg bg-white border border-slate-200 text-slate-700 leading-relaxed">
+                      {selectedReg.project_description}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Admin Notes & Stall Allocation */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2">
+                <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                  <Edit3 size={13} /> Admin Notes & Stall Allocation
                 </h3>
                 <textarea
-                  className="textarea"
                   rows={3}
-                  placeholder="e.g. Stall B-14 allocated, 230V AC socket verified..."
                   value={editNote}
                   onChange={(e) => setEditNote(e.target.value)}
-                  style={{ fontSize: "0.88rem" }}
+                  placeholder="e.g. Stall B-14 allocated, 230V AC socket verified..."
+                  className="w-full p-2.5 text-xs rounded-xl border border-slate-200 bg-white text-slate-900 focus:outline-hidden focus:border-blue-500"
                 />
                 <button
+                  type="button"
                   onClick={() => updateStatus(selectedReg.id, selectedReg.status)}
                   disabled={isUpdating}
-                  className="btn btn-secondary"
-                  style={{ marginTop: 10, fontSize: "0.8rem", width: "100%", justifyContent: "center" }}
+                  className="w-full py-2 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  <Save size={14} /> Save Notes
+                  <Save size={13} />
+                  <span>Save Notes & Allocation</span>
                 </button>
               </div>
             </div>
+
+            <div className="pt-4 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedReg(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Close Drawer
+              </button>
+            </div>
           </div>
         </div>
+      )}
+
+      {/* Safe Archive Modal */}
+      {archiveTarget && (
+        <AdminArchiveConfirmModal
+          isOpen={true}
+          onClose={() => setArchiveTarget(null)}
+          onConfirm={handleConfirmArchive}
+          isProcessing={isArchiving}
+          registrationRef={archiveTarget.registration_ref}
+          name={archiveTarget.project_title || archiveTarget.full_name}
+          category={`Participation Exhibit (${archiveTarget.participation_area})`}
+        />
       )}
     </div>
   );

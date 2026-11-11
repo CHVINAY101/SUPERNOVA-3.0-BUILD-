@@ -1,28 +1,28 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import type { RegistrationControl } from "@/types/database";
-import { CheckCircle2, AlertCircle, Save, Calendar, Clock, RefreshCw } from "lucide-react";
+import { CheckCircle2, AlertCircle, Save, Calendar, Clock, RefreshCw, X } from "lucide-react";
 
 interface FormMeta {
   title: string;
-  badgeColor: string;
+  badgeLabel: string;
   description: string;
 }
 
 const META_MAP: Record<string, FormMeta> = {
   participation: {
     title: "Project & Exhibit Registration",
-    badgeColor: "var(--cobalt)",
+    badgeLabel: "Science Expo & Stalls",
     description: "For student innovators, research stalls, school inventors, and animators.",
   },
   visitor: {
     title: "General Visitor Registration",
-    badgeColor: "#10b981",
+    badgeLabel: "Visitor Passes",
     description: "Free campus admission passes for students, educators, families, and visitors.",
   },
   esports: {
     title: "Esports Squad Registration",
-    badgeColor: "var(--coral)",
+    badgeLabel: "Tournament Roster",
     description: "Collegiate championship rosters in VALORANT (5p), FREE FIRE (4p), and BGMI (4p).",
   },
 };
@@ -83,7 +83,8 @@ export default function AdminRegistrationControls() {
       if (error) {
         setStatusMsg({ type: "error", text: `Failed to save ${control.form_type}: ${error.message}` });
       } else {
-        setStatusMsg({ type: "success", text: `${META_MAP[control.form_type]?.title || control.form_type} settings saved successfully!` });
+        setStatusMsg({ type: "success", text: `${META_MAP[control.form_type]?.title || control.form_type} settings saved successfully.` });
+        setTimeout(() => setStatusMsg(null), 4000);
       }
     } catch (err: any) {
       setStatusMsg({ type: "error", text: err.message || "Failed to update registration settings." });
@@ -96,234 +97,196 @@ export default function AdminRegistrationControls() {
     const now = new Date();
     if (!ctrl.is_open) {
       return (
-        <span style={{ padding: "4px 10px", borderRadius: 20, fontSize: "0.75rem", fontWeight: 700, background: "rgba(239,68,68,0.15)", color: "#ef4444" }}>
+        <span className="px-2.5 py-0.5 rounded-full font-mono text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
           CLOSED
         </span>
       );
     }
     if (ctrl.opens_at && now < new Date(ctrl.opens_at)) {
       return (
-        <span style={{ padding: "4px 10px", borderRadius: 20, fontSize: "0.75rem", fontWeight: 700, background: "rgba(245,158,11,0.15)", color: "#f59e0b" }}>
+        <span className="px-2.5 py-0.5 rounded-full font-mono text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
           SCHEDULED (Opens Soon)
         </span>
       );
     }
     if (ctrl.closes_at && now > new Date(ctrl.closes_at)) {
       return (
-        <span style={{ padding: "4px 10px", borderRadius: 20, fontSize: "0.75rem", fontWeight: 700, background: "rgba(239,68,68,0.15)", color: "#ef4444" }}>
+        <span className="px-2.5 py-0.5 rounded-full font-mono text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
           EXPIRED
         </span>
       );
     }
     return (
-      <span style={{ padding: "4px 10px", borderRadius: 20, fontSize: "0.75rem", fontWeight: 700, background: "rgba(16,185,129,0.15)", color: "#10b981" }}>
+      <span className="px-2.5 py-0.5 rounded-full font-mono text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
         OPEN & ACTIVE
       </span>
     );
   };
 
+  const formatForInput = (iso: string | null) => {
+    if (!iso) return "";
+    try {
+      const d = new Date(iso);
+      return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    } catch {
+      return "";
+    }
+  };
+
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 16 }}>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
-          <h1 style={{ fontSize: "1.75rem", fontWeight: 700, color: "var(--text-primary)" }}>
-            Registration Open/Close Controls
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+              Operations Control
+            </span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight mt-1 mb-1">
+            Registration Stream Controls
           </h1>
-          <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", marginTop: 4 }}>
-            Instantly open or close each registration stream with live public site synchronization and database-level enforcement.
+          <p className="text-xs sm:text-sm text-slate-500">
+            Open or close submission portals, configure scheduling dates, and customize notices.
           </p>
         </div>
+
         <button
+          type="button"
           onClick={fetchControls}
           disabled={loading}
-          className="btn btn-secondary"
-          style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.85rem" }}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer self-start md:self-auto"
         >
-          <RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Refresh
+          <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          <span>Refresh</span>
         </button>
       </div>
 
       {statusMsg && (
         <div
-          style={{
-            padding: "12px 18px",
-            borderRadius: 8,
-            marginBottom: 24,
-            fontSize: "0.88rem",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            background: statusMsg.type === "success" ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)",
-            border: `1px solid ${statusMsg.type === "success" ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`,
-            color: statusMsg.type === "success" ? "#10b981" : "#ef4444",
-          }}
+          className={`p-3.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-between border shadow-2xs ${
+            statusMsg.type === "success"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-rose-50 border-rose-200 text-rose-900"
+          }`}
         >
-          {statusMsg.type === "success" ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-          <span>{statusMsg.text}</span>
+          <div className="flex items-center gap-2">
+            {statusMsg.type === "success" ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+            <span>{statusMsg.text}</span>
+          </div>
+          <button type="button" onClick={() => setStatusMsg(null)} className="p-1 text-slate-400 hover:text-slate-700">
+            <X size={14} />
+          </button>
         </div>
       )}
 
       {loading ? (
-        <div style={{ padding: 60, textAlign: "center" }}>
-          <div className="loading-spinner" style={{ margin: "0 auto 16px" }} />
-          <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>Loading portal registration controls...</p>
+        <div className="py-16 text-center text-slate-500 font-mono">
+          <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-blue-600" />
+          Loading registration controls...
         </div>
       ) : (
-        <div style={{ display: "grid", gap: 24 }}>
+        <div className="space-y-5">
           {controls.map((ctrl) => {
             const meta = META_MAP[ctrl.form_type] || {
               title: ctrl.form_type.toUpperCase(),
-              badgeColor: "var(--cyan-400)",
+              badgeLabel: ctrl.form_type,
               description: "",
             };
             const isSaving = savingKey === ctrl.form_type;
 
-            // Format timestamp for datetime-local input
-            const formatForInput = (iso: string | null) => {
-              if (!iso) return "";
-              try {
-                const d = new Date(iso);
-                return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-              } catch {
-                return "";
-              }
-            };
-
             return (
               <div
                 key={ctrl.form_type}
-                className="card"
-                style={{
-                  padding: 24,
-                  border: ctrl.is_open ? "1px solid var(--border-subtle)" : "1px solid rgba(239,68,68,0.3)",
-                  background: ctrl.is_open ? "rgba(255,255,255,0.02)" : "rgba(239,68,68,0.02)",
-                }}
+                className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs space-y-5"
               >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 20 }}>
+                {/* Title & Master Toggle */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
                   <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <h2 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--text-primary)" }}>{meta.title}</h2>
+                    <div className="flex items-center gap-2.5">
+                      <h2 className="text-base sm:text-lg font-bold text-slate-900 m-0">
+                        {meta.title}
+                      </h2>
                       {getStatusBadge(ctrl)}
                     </div>
-                    <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginTop: 4 }}>{meta.description}</p>
+                    <p className="text-xs text-slate-500 mt-1 m-0">
+                      {meta.description}
+                    </p>
                   </div>
 
-                  {/* Toggle Switch */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <span style={{ fontSize: "0.85rem", fontWeight: 600, color: ctrl.is_open ? "#10b981" : "#ef4444" }}>
-                      {ctrl.is_open ? "Portal Accepting Submissions" : "Submissions Suspended"}
+                  {/* Accessible Pill Toggle */}
+                  <div className="flex items-center gap-3">
+                    <span className={`text-xs font-semibold ${ctrl.is_open ? "text-emerald-700" : "text-rose-700"}`}>
+                      {ctrl.is_open ? "Accepting Submissions" : "Submissions Closed"}
                     </span>
                     <button
                       type="button"
                       role="switch"
                       aria-checked={ctrl.is_open}
                       onClick={() => handleFieldChange(ctrl.form_type, "is_open", !ctrl.is_open)}
-                      style={{
-                        width: 52,
-                        height: 28,
-                        borderRadius: 14,
-                        background: ctrl.is_open ? "#10b981" : "#475569",
-                        position: "relative",
-                        border: "none",
-                        cursor: "pointer",
-                        transition: "background 0.2s ease",
-                      }}
+                      className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer border ${
+                        ctrl.is_open ? "bg-emerald-600 border-emerald-600" : "bg-slate-300 border-slate-400"
+                      }`}
                     >
                       <span
-                        style={{
-                          width: 22,
-                          height: 22,
-                          borderRadius: "50%",
-                          background: "#ffffff",
-                          position: "absolute",
-                          top: 3,
-                          left: ctrl.is_open ? 27 : 3,
-                          transition: "left 0.2s ease",
-                          boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
-                        }}
+                        className={`block w-4 h-4 rounded-full bg-white transition-transform ${
+                          ctrl.is_open ? "translate-x-6" : "translate-x-1"
+                        }`}
                       />
                     </button>
                   </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20, marginBottom: 20 }}>
-                  {/* Closed Message */}
+                {/* Form Schedule & Closed Message */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
                   <div>
-                    <label className="label" style={{ fontWeight: 600, marginBottom: 6, display: "block" }}>
-                      Closed Notice Message (Displayed when closed or expired)
+                    <label className="font-semibold text-slate-700 block mb-1">
+                      Closed Notice Message
                     </label>
                     <input
-                      className="input"
+                      type="text"
                       value={ctrl.closed_message || ""}
-                      placeholder="e.g. Registrations are now closed for Supernova 3.0."
+                      placeholder="e.g. Registrations are currently closed."
                       onChange={(e) => handleFieldChange(ctrl.form_type, "closed_message", e.target.value)}
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs"
                     />
                   </div>
 
-                  {/* Opens At */}
                   <div>
-                    <label className="label" style={{ fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
-                      <Calendar size={14} /> Scheduled Opening (Optional)
+                    <label className="font-semibold text-slate-700 flex items-center gap-1 mb-1">
+                      <Calendar size={13} /> Scheduled Opening (Optional)
                     </label>
                     <input
                       type="datetime-local"
-                      className="input"
                       value={formatForInput(ctrl.opens_at)}
                       onChange={(e) => handleFieldChange(ctrl.form_type, "opens_at", e.target.value ? new Date(e.target.value).toISOString() : null)}
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs font-mono"
                     />
                   </div>
 
-                  {/* Closes At */}
                   <div>
-                    <label className="label" style={{ fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
-                      <Clock size={14} /> Scheduled Deadline (Optional)
+                    <label className="font-semibold text-slate-700 flex items-center gap-1 mb-1">
+                      <Clock size={13} /> Scheduled Deadline (Optional)
                     </label>
                     <input
                       type="datetime-local"
-                      className="input"
                       value={formatForInput(ctrl.closes_at)}
                       onChange={(e) => handleFieldChange(ctrl.form_type, "closes_at", e.target.value ? new Date(e.target.value).toISOString() : null)}
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs font-mono"
                     />
                   </div>
                 </div>
 
-                {/* Editable Intro & Consent Text */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20, marginBottom: 20 }}>
-                  <div>
-                    <label className="label" style={{ fontWeight: 600, marginBottom: 6, display: "block" }}>
-                      Form Introduction Text
-                    </label>
-                    <textarea
-                      className="input"
-                      rows={2}
-                      value={ctrl.intro_text || ""}
-                      placeholder="Describe what applicants will be registering for..."
-                      onChange={(e) => handleFieldChange(ctrl.form_type, "intro_text", e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="label" style={{ fontWeight: 600, marginBottom: 6, display: "block" }}>
-                      Declaration & Consent Text
-                    </label>
-                    <textarea
-                      className="input"
-                      rows={2}
-                      value={ctrl.consent_text || ""}
-                      placeholder="Applicant agreement statement..."
-                      onChange={(e) => handleFieldChange(ctrl.form_type, "consent_text", e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                {/* Save Button */}
+                <div className="flex justify-end pt-2">
                   <button
+                    type="button"
                     onClick={() => handleSave(ctrl)}
                     disabled={isSaving}
-                    className="btn btn-primary"
-                    style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.85rem" }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
                   >
-                    <Save size={15} />
-                    {isSaving ? "Saving Settings…" : `Save ${meta.title}`}
+                    <Save size={13} />
+                    <span>{isSaving ? "Saving..." : "Save Settings"}</span>
                   </button>
                 </div>
               </div>

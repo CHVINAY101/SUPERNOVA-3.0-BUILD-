@@ -22,23 +22,31 @@ export function LiveRegistrationCounters() {
 
   const fetchCounts = useCallback(async () => {
     try {
-      const [visRes, espRes] = await Promise.all([
+      const [visRes, espRes, partRes] = await Promise.all([
         supabase.from("visitor_registrations").select("status, archived_at"),
         supabase.from("registrations").select("status, archived_at"),
+        supabase.from("participation_registrations").select("status, archived_at"),
       ]);
 
       const visitors = visRes.data || [];
       const esports = espRes.data || [];
+      const participation = partRes.data || [];
 
       const activeVisitors = visitors.filter((r) => !r.archived_at).length;
       const activeEsportsTeams = esports.filter((r) => !r.archived_at).length;
 
-      const allActive = [...visitors.filter((r) => !r.archived_at), ...esports.filter((r) => !r.archived_at)];
+      const allActive = [
+        ...visitors.filter((r) => !r.archived_at),
+        ...esports.filter((r) => !r.archived_at),
+        ...participation.filter((r) => !r.archived_at),
+      ];
+
       const pendingTotal = allActive.filter((r) => r.status === "pending").length;
       const confirmedTotal = allActive.filter((r) => r.status === "confirmed").length;
       const archivedTotal =
         visitors.filter((r) => Boolean(r.archived_at)).length +
-        esports.filter((r) => Boolean(r.archived_at)).length;
+        esports.filter((r) => Boolean(r.archived_at)).length +
+        participation.filter((r) => Boolean(r.archived_at)).length;
 
       setCounts({
         activeVisitors,
@@ -65,6 +73,9 @@ export function LiveRegistrationCounters() {
       .on("postgres_changes", { event: "*", schema: "public", table: "registrations" }, () => {
         fetchCounts();
       })
+      .on("postgres_changes", { event: "*", schema: "public", table: "participation_registrations" }, () => {
+        fetchCounts();
+      })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
           fetchCounts();
@@ -77,59 +88,75 @@ export function LiveRegistrationCounters() {
   }, [fetchCounts]);
 
   const cards = [
-    { label: "Active Visitors", value: counts.activeVisitors, icon: Users, color: "#00D2FF" },
-    { label: "Active Esports Teams", value: counts.activeEsportsTeams, icon: Gamepad2, color: "#A855F7" },
-    { label: "Pending Confirmation", value: counts.pendingTotal, icon: Clock, color: "#F59E0B" },
-    { label: "Confirmed Active", value: counts.confirmedTotal, icon: CheckCircle2, color: "#10B981" },
-    { label: "Archived / Deleted", value: counts.archivedTotal, icon: Archive, color: "#94A3B8" },
+    {
+      label: "Active Visitors",
+      value: counts.activeVisitors,
+      icon: Users,
+      badgeColor: "bg-blue-50 text-blue-700 border-blue-200",
+      accentDot: "bg-blue-500",
+    },
+    {
+      label: "Active Esports Teams",
+      value: counts.activeEsportsTeams,
+      icon: Gamepad2,
+      badgeColor: "bg-purple-50 text-purple-700 border-purple-200",
+      accentDot: "bg-purple-500",
+    },
+    {
+      label: "Pending Confirmations",
+      value: counts.pendingTotal,
+      icon: Clock,
+      badgeColor: "bg-amber-50 text-amber-700 border-amber-200",
+      accentDot: "bg-amber-500",
+    },
+    {
+      label: "Confirmed Active",
+      value: counts.confirmedTotal,
+      icon: CheckCircle2,
+      badgeColor: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      accentDot: "bg-emerald-500",
+    },
+    {
+      label: "Archived / Deleted",
+      value: counts.archivedTotal,
+      icon: Archive,
+      badgeColor: "bg-slate-100 text-slate-700 border-slate-200",
+      accentDot: "bg-slate-400",
+    },
   ];
 
   return (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <h2 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500">
           Live Registration Statistics
         </h2>
-        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+        <span className="text-[11px] font-mono text-slate-400">
           {loading ? "Syncing..." : "Realtime Active"}
         </span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
         {cards.map((c) => {
           const Icon = c.icon;
           return (
             <div
               key={c.label}
-              style={{
-                background: "var(--navy-800)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 12,
-                padding: "14px 16px",
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-              }}
+              className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs hover:border-slate-300 transition-all flex flex-col justify-between"
             >
-              <div
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  background: `${c.color}20`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: c.color,
-                  flexShrink: 0,
-                }}
-              >
-                <Icon size={18} />
-              </div>
-              <div>
-                <div style={{ fontSize: "1.35rem", fontWeight: 800, color: "var(--text-primary)", lineHeight: 1.1 }}>
-                  {c.value}
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-slate-500 truncate">
+                  {c.label}
+                </span>
+                <div
+                  className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${c.badgeColor}`}
+                >
+                  <Icon size={14} />
                 </div>
-                <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: 2 }}>{c.label}</div>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl sm:text-3xl font-display font-extrabold text-slate-900 tracking-tight leading-tight">
+                  {c.value}
+                </span>
               </div>
             </div>
           );

@@ -192,7 +192,8 @@ export const Nav: FC = () => {
           <div className="flex items-center gap-2">
             <Link
               to="/register"
-              className="inline-flex items-center justify-center gap-1.5 h-8 sm:h-9 px-3.5 sm:px-4 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-sans font-semibold text-xs tracking-wide shadow-sm hover:shadow-blue-500/25 active:scale-95 transition-all whitespace-nowrap"
+              className="inline-flex items-center justify-center gap-1.5 h-8 sm:h-9 px-3.5 sm:px-4 rounded-full text-white font-sans font-semibold text-xs tracking-wide shadow-sm hover:brightness-105 active:scale-95 transition-all whitespace-nowrap"
+              style={{ backgroundColor: "#d2fc15" }}
               aria-label="Register Now"
             >
               <span>Register</span>

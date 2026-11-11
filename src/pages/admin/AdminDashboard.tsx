@@ -14,7 +14,8 @@ import {
   Clock,
   Play,
   Activity,
-  RefreshCw
+  RefreshCw,
+  AlertTriangle
 } from "lucide-react";
 
 export default function AdminDashboard() {
@@ -34,24 +35,24 @@ export default function AdminDashboard() {
   const fetchDashboardData = useCallback(async () => {
     try {
       const [partsRes, esportsRes, visRes, checkinsRes, matchesRes, logsRes, controlsRes] = await Promise.all([
-        supabase.from("participation_registrations").select("status"),
-        supabase.from("registrations").select("status"),
-        supabase.from("visitor_registrations").select("status, check_in_status"),
+        supabase.from("participation_registrations").select("status, archived_at"),
+        supabase.from("registrations").select("status, archived_at"),
+        supabase.from("visitor_registrations").select("status, archived_at, check_in_status"),
         supabase.from("check_ins").select("id"),
         supabase.from("matches").select("*").eq("status", "live"),
         supabase.from("audit_logs").select("*").order("created_at", { ascending: false }).limit(5),
         supabase.from("registration_controls").select("*").order("form_type"),
       ]);
 
-      const parts = partsRes.data || [];
-      const esports = esportsRes.data || [];
-      const visitors = visRes.data || [];
+      const parts = (partsRes.data || []).filter((p: any) => !p.archived_at);
+      const esports = (esportsRes.data || []).filter((e: any) => !e.archived_at);
+      const visitors = (visRes.data || []).filter((v: any) => !v.archived_at);
       const checkins = checkinsRes.data || [];
       const matches = matchesRes.data || [];
       const logs = logsRes.data || [];
       const regControls = controlsRes.data || [];
 
-      // Pending reviews count
+      // Pending reviews count across all active registrations
       const pendingParts = parts.filter((p: any) => p.status === "pending").length;
       const pendingEsports = esports.filter((e: any) => e.status === "pending").length;
       const pendingVisitors = visitors.filter((v: any) => v.status === "pending").length;
@@ -97,7 +98,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 25000);
+    const interval = setInterval(fetchDashboardData, 30000);
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 
@@ -138,303 +139,272 @@ export default function AdminDashboard() {
   };
 
   return (
-    <div style={{ maxWidth: 1040, margin: "0 auto", paddingBottom: 60 }}>
+    <div className="space-y-6">
       {/* Top Welcome & Event Day Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 28 }}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
-          <span style={{ fontSize: "0.75rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--cyan-400)" }}>
-            Supernova 3.0 Operations
-          </span>
-          <h1 style={{ fontSize: "2rem", fontWeight: 800, color: "var(--text-primary)", marginTop: 4, margin: 0 }}>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+              Operations Center
+            </span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight mt-1.5 mb-1">
             Event Day Command Center
           </h1>
-          <p style={{ color: "var(--text-muted)", fontSize: "0.92rem", marginTop: 6 }}>
-            Quick overview of registrations, gate arrivals, esports stages, and staff activities.
+          <p className="text-xs sm:text-sm text-slate-500">
+            Realtime overview of gate check-ins, registrations, esports stages, and staff activities.
           </p>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} variant="dark" />
+        <div className="flex items-center gap-3">
+          <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} />
           <button
+            type="button"
             onClick={fetchDashboardData}
-            className="btn btn-secondary"
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.85rem" }}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
           >
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh Data
+            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+            <span>Sync</span>
           </button>
         </div>
       </div>
 
-      {/* LIVE REGISTRATION STATISTICS */}
+      {/* 1. LIVE REGISTRATION STATISTICS (5 Compact Cards) */}
       <LiveRegistrationCounters />
 
-      {/* THREE BIG SHORTCUT BUTTONS */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 32 }}>
-        <Link
-          to="/admin/checkin"
-          style={{
-            background: "linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(16, 185, 129, 0.05) 100%)",
-            border: "2px solid #10b981",
-            borderRadius: 16,
-            padding: "22px 24px",
-            textDecoration: "none",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 6px 20px rgba(16, 185, 129, 0.15)",
-            transition: "transform 0.18s ease",
-          }}
-          className="card-hover"
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: "#10b981", color: "#ffffff", display: "grid", placeItems: "center" }}>
-              <UserCheck size={26} />
+      {/* 2. THREE COMPACT OPERATIONAL SHORTCUTS */}
+      <div>
+        <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 mb-3">
+          Operational Shortcuts
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Shortcut 1: Check-in Desk */}
+          <Link
+            to="/admin/checkin"
+            className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-emerald-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <UserCheck size={20} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 group-hover:text-emerald-700 transition-colors m-0">
+                  Open Check-in Desk
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5 m-0">
+                  Gate search & pass verification
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#ffffff", margin: 0 }}>
-                Open Check-in Desk
-              </h3>
-              <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.75)", margin: "4px 0 0" }}>
-                Gate attendee search & pass verification
-              </p>
-            </div>
-          </div>
-          <ArrowRight size={20} color="#10b981" />
-        </Link>
+            <ArrowRight size={16} className="text-slate-400 group-hover:text-emerald-600 transition-colors shrink-0" />
+          </Link>
 
-        <Link
-          to="/admin/esports-control"
-          style={{
-            background: "linear-gradient(135deg, rgba(240, 120, 85, 0.2) 0%, rgba(240, 120, 85, 0.05) 100%)",
-            border: "2px solid var(--coral, #f07855)",
-            borderRadius: 16,
-            padding: "22px 24px",
-            textDecoration: "none",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 6px 20px rgba(240, 120, 85, 0.15)",
-            transition: "transform 0.18s ease",
-          }}
-          className="card-hover"
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--coral, #f07855)", color: "#ffffff", display: "grid", placeItems: "center" }}>
-              <Gamepad2 size={26} />
+          {/* Shortcut 2: Esports Control */}
+          <Link
+            to="/admin/esports-control"
+            className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-purple-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-purple-50 border border-purple-200 text-purple-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <Gamepad2 size={20} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 group-hover:text-purple-700 transition-colors m-0">
+                  Esports Control
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5 m-0">
+                  Match staging, scores & board
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#ffffff", margin: 0 }}>
-                Esports Control
-              </h3>
-              <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.75)", margin: "4px 0 0" }}>
-                Match staging, live scores & board
-              </p>
-            </div>
-          </div>
-          <ArrowRight size={20} color="var(--coral, #f07855)" />
-        </Link>
+            <ArrowRight size={16} className="text-slate-400 group-hover:text-purple-600 transition-colors shrink-0" />
+          </Link>
 
-        <Link
-          to="/admin/announcements"
-          style={{
-            background: "linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(56, 189, 248, 0.05) 100%)",
-            border: "2px solid var(--cyan-400, #38bdf8)",
-            borderRadius: 16,
-            padding: "22px 24px",
-            textDecoration: "none",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 6px 20px rgba(56, 189, 248, 0.15)",
-            transition: "transform 0.18s ease",
-          }}
-          className="card-hover"
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--cyan-400, #38bdf8)", color: "#000000", display: "grid", placeItems: "center" }}>
-              <Bell size={26} />
+          {/* Shortcut 3: Post Announcement */}
+          <Link
+            to="/admin/announcements"
+            className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-blue-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <Bell size={20} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 group-hover:text-blue-700 transition-colors m-0">
+                  Post an Announcement
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5 m-0">
+                  Broadcast alert to portal
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 style={{ fontSize: "1.2rem", fontWeight: 800, color: "#ffffff", margin: 0 }}>
-                Post an Announcement
-              </h3>
-              <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.75)", margin: "4px 0 0" }}>
-                Broadcast alert to public website
-              </p>
-            </div>
-          </div>
-          <ArrowRight size={20} color="var(--cyan-400, #38bdf8)" />
-        </Link>
+            <ArrowRight size={16} className="text-slate-400 group-hover:text-blue-600 transition-colors shrink-0" />
+          </Link>
+        </div>
       </div>
 
-      {/* METRIC CARDS ROW: Check-ins, Waiting for Review, Live Matches */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 20, marginBottom: 32 }}>
+      {/* 3. BALANCED GRID: Check-ins, Waiting for Review, Live Matches */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Today's Check-in Numbers */}
-        <div
-          style={{
-            background: "rgba(23, 23, 27, 0.75)",
-            border: "1.5px solid var(--border-subtle)",
-            borderRadius: 14,
-            padding: "20px 22px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>Today's Check-in Numbers</span>
-            <UserCheck size={18} color="#10b981" />
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500">
+                Today's Check-in Numbers
+              </span>
+              <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                <UserCheck size={14} />
+              </div>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-display font-black text-emerald-700 leading-none">
+                {todayCheckins.checkedIn}
+              </span>
+              <span className="text-xs font-semibold text-slate-500 font-mono">
+                / {todayCheckins.total} Expected
+              </span>
+            </div>
           </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span style={{ fontSize: "2.2rem", fontWeight: 900, color: "#10b981", lineHeight: 1 }}>
-              {todayCheckins.checkedIn}
-            </span>
-            <span style={{ fontSize: "0.95rem", color: "var(--text-muted)" }}>
-              / {todayCheckins.total} Expected
-            </span>
-          </div>
-          <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 8 }}>
-            Verified arrivals at entrance desk
+          <p className="text-xs text-slate-500 mt-3 pt-3 border-t border-slate-100">
+            Verified physical arrivals at entrance desk
           </p>
         </div>
 
         {/* Counts Waiting for Review */}
-        <div
-          style={{
-            background: "rgba(23, 23, 27, 0.75)",
-            border: `1.5px solid ${pendingReviewCount > 0 ? "rgba(245, 158, 11, 0.4)" : "var(--border-subtle)"}`,
-            borderRadius: 14,
-            padding: "20px 22px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>Waiting for Review</span>
-            <Clock size={18} color="#f59e0b" />
+        <div className={`bg-white border rounded-2xl p-5 shadow-2xs flex flex-col justify-between ${
+          pendingReviewCount > 0 ? "border-amber-300" : "border-slate-200/90"
+        }`}>
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500">
+                Waiting for Review
+              </span>
+              <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center">
+                <Clock size={14} />
+              </div>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className={`text-3xl font-display font-black leading-none ${
+                pendingReviewCount > 0 ? "text-amber-600" : "text-emerald-700"
+              }`}>
+                {pendingReviewCount}
+              </span>
+              <span className="text-xs font-semibold text-slate-500 font-mono">
+                Submissions Pending
+              </span>
+            </div>
           </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span style={{ fontSize: "2.2rem", fontWeight: 900, color: pendingReviewCount > 0 ? "#f59e0b" : "#10b981", lineHeight: 1 }}>
-              {pendingReviewCount}
-            </span>
-            <span style={{ fontSize: "0.95rem", color: "var(--text-muted)" }}>Pending Submissions</span>
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <Link to="/admin/participation-registrations" style={{ fontSize: "0.78rem", color: "var(--cyan-400)", fontWeight: 700, textDecoration: "none" }}>
-              Review Submissions →
+          <div className="mt-3 pt-3 border-t border-slate-100">
+            <Link
+              to="/admin/esports-registrations"
+              className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline"
+            >
+              <span>Review Submissions</span>
+              <ArrowRight size={12} />
             </Link>
           </div>
         </div>
 
         {/* Matches Live Now */}
-        <div
-          style={{
-            background: "rgba(23, 23, 27, 0.75)",
-            border: `1.5px solid ${liveMatches.length > 0 ? "var(--coral)" : "var(--border-subtle)"}`,
-            borderRadius: 14,
-            padding: "20px 22px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-muted)" }}>Matches Live Now</span>
-            <Play size={18} color="var(--coral)" />
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500">
+                Matches Live Now
+              </span>
+              <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-700 flex items-center justify-center">
+                <Play size={14} />
+              </div>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-display font-black text-purple-700 leading-none">
+                {liveMatches.length}
+              </span>
+              <span className="text-xs font-semibold text-slate-500 font-mono">
+                Active Tournament Stages
+              </span>
+            </div>
           </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span style={{ fontSize: "2.2rem", fontWeight: 900, color: liveMatches.length > 0 ? "var(--coral)" : "#ffffff", lineHeight: 1 }}>
-              {liveMatches.length}
-            </span>
-            <span style={{ fontSize: "0.95rem", color: "var(--text-muted)" }}>Active Stages</span>
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <Link to="/admin/esports-control" style={{ fontSize: "0.78rem", color: "var(--coral)", fontWeight: 700, textDecoration: "none" }}>
-              Open Esports Stage Control →
+          <div className="mt-3 pt-3 border-t border-slate-100">
+            <Link
+              to="/admin/esports-control"
+              className="text-xs font-bold text-purple-700 hover:text-purple-800 inline-flex items-center gap-1 no-underline"
+            >
+              <span>Open Esports Stage Control</span>
+              <ArrowRight size={12} />
             </Link>
           </div>
         </div>
       </div>
 
-      {/* REGISTRATION SWITCHES (OPEN / CLOSED) */}
-      <div
-        style={{
-          background: "rgba(23, 23, 27, 0.75)",
-          border: "1.5px solid var(--border-subtle)",
-          borderRadius: 16,
-          padding: "24px 28px",
-          marginBottom: 32,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      {/* 4. REGISTRATION SWITCHES (OPEN / CLOSED WITH CONFIRMATION) */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 mb-4 border-b border-slate-100">
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <SlidersHorizontal size={18} color="var(--cyan-400)" />
-              <h2 style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)", margin: 0 }}>
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal size={16} className="text-blue-700" />
+              <h2 className="text-base font-bold text-slate-900 m-0">
                 Registration Switches
               </h2>
             </div>
-            <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: 4 }}>
-              Instantly open or close submission portals for each registration type.
+            <p className="text-xs text-slate-500 mt-0.5">
+              Instantly open or close submission portals for each registration track.
             </p>
           </div>
-          <Link to="/admin/registration-controls" style={{ fontSize: "0.82rem", color: "var(--cyan-400)", fontWeight: 700, textDecoration: "none" }}>
-            Advanced Schedule Settings →
+          <Link
+            to="/admin/registration-controls"
+            className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline shrink-0"
+          >
+            <span>Advanced Schedule Settings</span>
+            <ArrowRight size={12} />
           </Link>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
           {controls.map((ctrl) => {
             const isToggling = togglingType === ctrl.form_type;
 
             return (
               <div
                 key={ctrl.form_type}
-                style={{
-                  background: "rgba(0,0,0,0.3)",
-                  border: `1.5px solid ${ctrl.is_open ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
-                  borderRadius: 12,
-                  padding: "16px 18px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
+                className={`p-4 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+                  ctrl.is_open
+                    ? "bg-emerald-50/40 border-emerald-200"
+                    : "bg-slate-50 border-slate-200"
+                }`}
               >
                 <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div className="flex items-center gap-2">
                     <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        background: ctrl.is_open ? "#10b981" : "#ef4444",
-                      }}
+                      className={`w-2 h-2 rounded-full ${
+                        ctrl.is_open ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
+                      }`}
                     />
-                    <h3 style={{ fontSize: "1rem", fontWeight: 800, color: "#ffffff", margin: 0 }}>
+                    <h3 className="text-xs font-bold text-slate-900 m-0">
                       {formLabels[ctrl.form_type] || ctrl.form_type}
                     </h3>
                   </div>
                   <span
-                    style={{
-                      display: "inline-block",
-                      fontSize: "0.74rem",
-                      fontWeight: 800,
-                      marginTop: 4,
-                      color: ctrl.is_open ? "#10b981" : "#f87171",
-                    }}
+                    className={`inline-block text-[10px] font-mono font-bold mt-1 uppercase ${
+                      ctrl.is_open ? "text-emerald-700" : "text-rose-700"
+                    }`}
                   >
-                    {ctrl.is_open ? "OPEN FOR SUBMISSIONS" : "CLOSED TO PUBLIC"}
+                    {ctrl.is_open ? "OPEN TO PUBLIC" : "CLOSED TO PUBLIC"}
                   </span>
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => handleToggleClick(ctrl)}
                   disabled={isToggling}
-                  style={{
-                    padding: "8px 16px",
-                    borderRadius: 9999,
-                    fontSize: "0.82rem",
-                    fontWeight: 800,
-                    cursor: "pointer",
-                    border: 0,
-                    background: ctrl.is_open ? "rgba(239, 68, 68, 0.15)" : "#10b981",
-                    color: ctrl.is_open ? "#f87171" : "#ffffff",
-                    transition: "all 0.15s ease",
-                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                    ctrl.is_open
+                      ? "bg-white border-rose-200 text-rose-700 hover:bg-rose-50"
+                      : "bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 shadow-2xs"
+                  }`}
                 >
-                  {isToggling ? "Updating..." : ctrl.is_open ? "Close Portal" : "Open Portal"}
+                  {isToggling ? "Updating..." : ctrl.is_open ? "Close" : "Open"}
                 </button>
               </div>
             );
@@ -442,115 +412,85 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* LAST 5 ADMIN ACTIVITIES */}
-      <div
-        style={{
-          background: "rgba(23, 23, 27, 0.75)",
-          border: "1.5px solid var(--border-subtle)",
-          borderRadius: 16,
-          padding: "24px 28px",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Activity size={18} color="var(--cyan-400)" />
-            <h2 style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)", margin: 0 }}>
+      {/* 5. RECENT STAFF ACTIVITY LOG */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs">
+        <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <Activity size={16} className="text-blue-700" />
+            <h2 className="text-base font-bold text-slate-900 m-0">
               Recent Staff Activity Log
             </h2>
           </div>
-          <Link to="/admin/audit-logs" style={{ fontSize: "0.82rem", color: "var(--cyan-400)", fontWeight: 700, textDecoration: "none" }}>
-            View Full Audit History →
+          <Link
+            to="/admin/audit-logs"
+            className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline"
+          >
+            <span>Full Audit History</span>
+            <ArrowRight size={12} />
           </Link>
         </div>
 
         {recentLogs.length === 0 ? (
-          <p style={{ color: "var(--text-muted)", fontSize: "0.88rem" }}>
-            No recent activity recorded yet. Changes made by staff will be tracked here.
+          <p className="text-xs text-slate-400 italic py-2">
+            No recent activity recorded yet. Staff actions and status changes will be tracked here.
           </p>
         ) : (
-          <div style={{ display: "grid", gap: 10 }}>
+          <div className="space-y-2">
             {recentLogs.map((log) => (
               <div
                 key={log.id}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  background: "rgba(0,0,0,0.25)",
-                  fontSize: "0.85rem",
-                  flexWrap: "wrap",
-                  gap: 8,
-                }}
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs"
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span
-                    style={{
-                      fontSize: "0.72rem",
-                      fontWeight: 800,
-                      padding: "2px 6px",
-                      borderRadius: 4,
-                      background: "rgba(34, 211, 238, 0.15)",
-                      color: "var(--cyan-400)",
-                    }}
-                  >
+                <div className="flex items-center gap-2.5 overflow-hidden">
+                  <span className="font-mono text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-blue-100/70 text-blue-800 shrink-0">
                     {log.action}
                   </span>
-                  <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>
-                    {log.entity_type} ({log.entity_id || "record"})
+                  <span className="font-semibold text-slate-800 truncate">
+                    {log.entity_type} {log.entity_id ? `(${log.entity_id.slice(0, 8)})` : ""}
                   </span>
                 </div>
-                <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
-                  By {log.actor_id || "staff"} · {new Date(log.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </div>
+                <span className="text-[11px] font-mono text-slate-500 shrink-0">
+                  {new Date(log.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* Close Confirmation Modal */}
+      {/* Safe Confirmation Modal for Closing a Portal */}
       {confirmCloseTarget && (
         <div
           role="dialog"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.75)",
-            backdropFilter: "blur(6px)",
-            display: "grid",
-            placeItems: "center",
-            zIndex: 1000,
-            padding: 20,
-          }}
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn"
           onClick={() => setConfirmCloseTarget(null)}
         >
           <div
+            className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-sm w-full p-5"
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--navy-900)",
-              border: "1.5px solid var(--border-subtle)",
-              borderRadius: 16,
-              padding: 28,
-              maxWidth: 440,
-              width: "100%",
-            }}
           >
-            <h3 style={{ fontSize: "1.25rem", fontWeight: 800, color: "#f87171", margin: 0 }}>
-              Close {formLabels[confirmCloseTarget.form_type]}?
-            </h3>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", lineHeight: 1.5, margin: "12px 0 20px" }}>
-              Closing this portal will immediately block public submissions on the website. You can reopen it at any time.
+            <div className="flex items-center gap-2.5 text-rose-600 mb-2">
+              <AlertTriangle size={18} />
+              <h3 className="text-base font-bold text-slate-900 m-0">
+                Close {formLabels[confirmCloseTarget.form_type]}?
+              </h3>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed my-3">
+              Closing this portal will immediately prevent the public from submitting new registrations. You can reopen it at any time.
             </p>
-            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-              <button onClick={() => setConfirmCloseTarget(null)} className="btn btn-secondary">
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConfirmCloseTarget(null)}
+                className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50"
+              >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={() => executeToggle(confirmCloseTarget, false)}
-                className="btn btn-ghost"
-                style={{ color: "#ef4444", borderColor: "#ef4444", fontWeight: 700 }}
+                className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold"
               >
                 Yes, Close Portal
               </button>

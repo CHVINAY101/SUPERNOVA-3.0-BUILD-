@@ -1,19 +1,21 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
-import { sendRegistrationConfirmationEmail } from "@/lib/registrationOperations";
-import { LoadingBlock, EmptyState } from "@/components/PageLayout";
+import { sendRegistrationConfirmationEmail, archiveRegistrationRecord, restoreRegistrationRecord } from "@/lib/registrationOperations";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
+import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
+import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { 
-  Users, 
-  GraduationCap, 
   Gamepad2, 
-  Building2, 
   Search, 
   Download, 
   X, 
   Eye,
-  RefreshCw
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+  CheckCircle2,
+  AlertTriangle
 } from "lucide-react";
 
 export interface VisitorRegistrationRecord {
@@ -38,15 +40,20 @@ export interface VisitorRegistrationRecord {
   status: string;
   admin_notes?: string | null;
   submitted_at: string;
+  archived_at?: string | null;
   metadata?: Record<string, any> | null;
 }
 
-const REGISTRATION_STATUSES = ["pending", "confirmed", "declined", "correction_requested"] as const;
+const REGISTRATION_STATUSES = [
+  { value: "pending", label: "Pending" },
+  { value: "confirmed", label: "Confirmed" },
+  { value: "correction_requested", label: "Correction Requested" },
+  { value: "declined", label: "Declined" },
+];
 
 export default function AdminVisitorRegistrations() {
   const [registrations, setRegistrations] = useState<VisitorRegistrationRecord[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -56,14 +63,17 @@ export default function AdminVisitorRegistrations() {
   const [esportsFilter, setEsportsFilter] = useState("all");
   const [gameFilter, setGameFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [viewScope, setViewScope] = useState<"active" | "archived" | "all">("active");
 
-  // Detail Modal
+  // Detail Drawer
   const [inspectedRecord, setInspectedRecord] = useState<VisitorRegistrationRecord | null>(null);
+
+  // Safe Archive Modal
+  const [archiveTarget, setArchiveTarget] = useState<VisitorRegistrationRecord | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    setError(null);
-
     try {
       const { data, error: fetchError } = await supabase
         .from("visitor_registrations")
@@ -76,12 +86,11 @@ export default function AdminVisitorRegistrations() {
 
       setRegistrations((data as unknown as VisitorRegistrationRecord[]) || []);
     } catch (err: any) {
-      console.error("Failed to load visitor registrations from Supabase:", err);
-      setError(
-        err?.message
-          ? `Supabase Error: ${err.message}`
-          : "Visitor registrations could not be loaded from Supabase. Please verify your connection and permissions."
-      );
+      console.error("Failed to load visitor registrations:", err);
+      setStatusMsg({
+        type: "error",
+        text: `Error loading visitor registrations: ${err?.message || "Unknown error"}`,
+      });
       setRegistrations([]);
     } finally {
       setLoading(false);
@@ -112,6 +121,9 @@ export default function AdminVisitorRegistrations() {
       setRegistrations((prev) =>
         prev ? prev.map((item) => (item.id === id ? { ...item, status: newStatus } : item)) : null
       );
+      if (inspectedRecord && inspectedRecord.id === id) {
+        setInspectedRecord({ ...inspectedRecord, status: newStatus });
+      }
 
       if (newStatus === "confirmed") {
         const emailRes = await sendRegistrationConfirmationEmail(id, "visitor", false);
@@ -119,7 +131,7 @@ export default function AdminVisitorRegistrations() {
           type: emailRes.ok ? "success" : "error",
           text: emailRes.ok
             ? `Reference ${ref} confirmed and confirmation email sent.`
-            : `Reference ${ref} confirmed, but email failed: ${emailRes.error}`,
+            : `Reference ${ref} confirmed, but email notice failed: ${emailRes.error}`,
         });
       } else {
         setStatusMsg({
@@ -136,7 +148,68 @@ export default function AdminVisitorRegistrations() {
     }
   };
 
-  // Helper to categorize rows reliably even if stored in legacy category strings
+  // Safe Archive Handler
+  const handleConfirmArchive = async () => {
+    if (!archiveTarget) return;
+    setIsArchiving(true);
+    try {
+      const res = await archiveRegistrationRecord("visitor", archiveTarget.id);
+      if (!res.ok) throw new Error(res.error);
+
+      const now = new Date().toISOString();
+      setRegistrations((prev) =>
+        prev ? prev.map((item) => (item.id === archiveTarget.id ? { ...item, archived_at: now } : item)) : null
+      );
+      if (inspectedRecord && inspectedRecord.id === archiveTarget.id) {
+        setInspectedRecord({ ...inspectedRecord, archived_at: now });
+      }
+
+      setStatusMsg({
+        type: "success",
+        text: `Visitor pass "${archiveTarget.full_name}" (${archiveTarget.registration_ref}) was archived.`,
+      });
+      setArchiveTarget(null);
+      setTimeout(() => setStatusMsg(null), 4000);
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: `Archive error: ${err.message || "Unknown error"}`,
+      });
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  // Safe Restore Handler
+  const handleRestore = async (item: VisitorRegistrationRecord) => {
+    setSavingId(item.id);
+    try {
+      const res = await restoreRegistrationRecord("visitor", item.id);
+      if (!res.ok) throw new Error(res.error);
+
+      setRegistrations((prev) =>
+        prev ? prev.map((r) => (r.id === item.id ? { ...r, archived_at: null } : r)) : null
+      );
+      if (inspectedRecord && inspectedRecord.id === item.id) {
+        setInspectedRecord({ ...inspectedRecord, archived_at: null });
+      }
+
+      setStatusMsg({
+        type: "success",
+        text: `Visitor pass "${item.full_name}" (${item.registration_ref}) restored to active list.`,
+      });
+      setTimeout(() => setStatusMsg(null), 4000);
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: `Restore error: ${err.message || "Unknown error"}`,
+      });
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  // Helper to categorize rows reliably
   const getParsedCategory = (record: VisitorRegistrationRecord): "Student" | "General Visitor" | "Faculty / Staff" => {
     const cat = (record.visitor_category || "").toLowerCase();
     if (cat.includes("student")) return "Student";
@@ -167,10 +240,16 @@ export default function AdminVisitorRegistrations() {
     if (!registrations) return [];
 
     return registrations.filter((item) => {
-      // 1. Status Filter
+      const isArchived = Boolean(item.archived_at);
+
+      // 1. View Scope
+      if (viewScope === "active" && isArchived) return false;
+      if (viewScope === "archived" && !isArchived) return false;
+
+      // 2. Status Filter
       if (statusFilter !== "all" && item.status !== statusFilter) return false;
 
-      // 2. Category Filter (Student / General Visitor / Faculty / Staff)
+      // 3. Category Filter
       const parsedCat = getParsedCategory(item);
       if (categoryFilter !== "all") {
         if (categoryFilter === "Student" && parsedCat !== "Student") return false;
@@ -178,18 +257,18 @@ export default function AdminVisitorRegistrations() {
         if (categoryFilter === "Faculty / Staff" && parsedCat !== "Faculty / Staff") return false;
       }
 
-      // 3. Esports Interest Filter
+      // 4. Esports Interest Filter
       const isInterestedInEsports = getEsportsInterest(item);
       if (esportsFilter === "yes" && !isInterestedInEsports) return false;
       if (esportsFilter === "no" && isInterestedInEsports) return false;
 
-      // 4. Preferred Game Filter
+      // 5. Preferred Game Filter
       const game = getPreferredGame(item);
       if (gameFilter !== "all") {
         if (!game || !game.toLowerCase().includes(gameFilter.toLowerCase())) return false;
       }
 
-      // 5. Search Query
+      // 6. Search Query
       if (searchQuery.trim()) {
         const needle = searchQuery.toLowerCase().trim();
         const matches = [
@@ -211,37 +290,45 @@ export default function AdminVisitorRegistrations() {
 
       return true;
     });
-  }, [registrations, statusFilter, categoryFilter, esportsFilter, gameFilter, searchQuery]);
+  }, [registrations, viewScope, statusFilter, categoryFilter, esportsFilter, gameFilter, searchQuery]);
 
   // Metrics
   const metrics = useMemo(() => {
-    if (!registrations) return { total: 0, students: 0, general: 0, faculty: 0, esports: 0 };
+    if (!registrations) return { totalActive: 0, students: 0, general: 0, faculty: 0, esports: 0, archived: 0 };
+    let totalActive = 0;
     let students = 0;
     let general = 0;
     let faculty = 0;
     let esports = 0;
+    let archived = 0;
 
     registrations.forEach((r) => {
-      const cat = getParsedCategory(r);
-      if (cat === "Student") students++;
-      else if (cat === "Faculty / Staff") faculty++;
-      else general++;
+      if (r.archived_at) {
+        archived++;
+      } else {
+        totalActive++;
+        const cat = getParsedCategory(r);
+        if (cat === "Student") students++;
+        else if (cat === "Faculty / Staff") faculty++;
+        else general++;
 
-      if (getEsportsInterest(r)) esports++;
+        if (getEsportsInterest(r)) esports++;
+      }
     });
 
-    return {
-      total: registrations.length,
-      students,
-      general,
-      faculty,
-      esports,
-    };
+    return { totalActive, students, general, faculty, esports, archived };
   }, [registrations]);
 
   // Export to CSV
   const exportCsv = () => {
     if (!filteredRegistrations.length) return;
+
+    const sanitizeCsv = (val: string | number | null | undefined): string => {
+      const str = String(val ?? "");
+      const safe = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
+
     const headers = [
       "Reference",
       "Full Name",
@@ -258,26 +345,28 @@ export default function AdminVisitorRegistrations() {
       "In-Game ID",
       "Team Name",
       "Status",
+      "Archived",
       "Submitted At",
     ];
 
     const rows = filteredRegistrations.map((r) => [
-      `"${r.registration_ref}"`,
-      `"${r.full_name}"`,
-      `"${getParsedCategory(r)}"`,
-      `"${r.email}"`,
-      `"${r.phone}"`,
-      `"${r.institution || ""}"`,
-      `"${r.student_class || ""}"`,
-      `"${r.student_id || ""}"`,
-      `"${r.designation || ""}"`,
-      `"${getEsportsInterest(r) ? "Yes" : "No"}"`,
-      `"${getPreferredGame(r) || ""}"`,
-      `"${r.esports_intent || ""}"`,
-      `"${r.in_game_id || ""}"`,
-      `"${r.team_name || ""}"`,
-      `"${r.status}"`,
-      `"${r.submitted_at}"`,
+      sanitizeCsv(r.registration_ref),
+      sanitizeCsv(r.full_name),
+      sanitizeCsv(getParsedCategory(r)),
+      sanitizeCsv(r.email),
+      sanitizeCsv(r.phone),
+      sanitizeCsv(r.institution || "Independent"),
+      sanitizeCsv(r.student_class || ""),
+      sanitizeCsv(r.student_id || ""),
+      sanitizeCsv(r.designation || ""),
+      sanitizeCsv(getEsportsInterest(r) ? "Yes" : "No"),
+      sanitizeCsv(getPreferredGame(r) || ""),
+      sanitizeCsv(r.esports_intent || ""),
+      sanitizeCsv(r.in_game_id || ""),
+      sanitizeCsv(r.team_name || ""),
+      sanitizeCsv(r.status),
+      sanitizeCsv(r.archived_at ? "YES" : "NO"),
+      sanitizeCsv(r.submitted_at),
     ]);
 
     const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
@@ -292,520 +381,573 @@ export default function AdminVisitorRegistrations() {
 
   return (
     <div className="space-y-6">
-      {/* Header & Realtime Connection */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[#EAEAF2]">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl sm:text-3xl font-heading font-black uppercase text-[#191936]">
-              Visitor Registrations
-            </h1>
-            <span className="px-3 py-1 rounded-full bg-[#4549D8]/10 text-[#4549D8] font-mono text-xs font-bold">
-              {metrics.total} Total Records
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+              Visitor Passes & Gate RSVPs
             </span>
           </div>
-          <p className="text-xs sm:text-sm text-[#191936]/70 mt-1">
-            Review and manage visitor passes, student cohorts, faculty RSVPs, and esports interest submissions.
+          <h1 className="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight mt-1 mb-1">
+            Visitor Registrations
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500">
+            Manage student cohorts, general public attendee passes, faculty RSVPs, and spectator esports preferences.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} />
           <button
             type="button"
             onClick={loadData}
             disabled={loading}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-[#EAEAF2] text-xs font-mono font-bold text-[#191936] hover:bg-[#F8F7FC] transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
           >
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-            <span>Refresh</span>
+            <span>Sync</span>
           </button>
-          <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} />
+          <button
+            type="button"
+            onClick={exportCsv}
+            disabled={!filteredRegistrations.length}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <Download size={13} />
+            <span>Export CSV</span>
+          </button>
         </div>
       </div>
 
       {/* Metrics Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
-        <div className="p-4 rounded-2xl bg-white border border-[#EAEAF2] shadow-sm">
-          <div className="flex items-center justify-between text-[#191936]/60 mb-1">
-            <span className="text-xs font-mono font-bold uppercase">Total Visitors</span>
-            <Users size={16} />
-          </div>
-          <div className="text-2xl font-black text-[#191936] font-display">{metrics.total}</div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-slate-500 font-semibold">Active Visitors</p>
+          <p className="text-2xl font-display font-extrabold text-slate-900 mt-1">{metrics.totalActive}</p>
         </div>
-
-        <div className="p-4 rounded-2xl bg-white border border-[#EAEAF2] shadow-sm">
-          <div className="flex items-center justify-between text-[#4549D8] mb-1">
-            <span className="text-xs font-mono font-bold uppercase">Students</span>
-            <GraduationCap size={16} />
-          </div>
-          <div className="text-2xl font-black text-[#4549D8] font-display">{metrics.students}</div>
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-blue-700 font-semibold">Students</p>
+          <p className="text-2xl font-display font-extrabold text-blue-700 mt-1">{metrics.students}</p>
         </div>
-
-        <div className="p-4 rounded-2xl bg-white border border-[#EAEAF2] shadow-sm">
-          <div className="flex items-center justify-between text-[#191936]/80 mb-1">
-            <span className="text-xs font-mono font-bold uppercase">General Visitors</span>
-            <Users size={16} />
-          </div>
-          <div className="text-2xl font-black text-[#191936] font-display">{metrics.general}</div>
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-slate-700 font-semibold">General Public</p>
+          <p className="text-2xl font-display font-extrabold text-slate-800 mt-1">{metrics.general}</p>
         </div>
-
-        <div className="p-4 rounded-2xl bg-white border border-[#EAEAF2] shadow-sm">
-          <div className="flex items-center justify-between text-[#FF873D] mb-1">
-            <span className="text-xs font-mono font-bold uppercase">Faculty / Staff</span>
-            <Building2 size={16} />
-          </div>
-          <div className="text-2xl font-black text-[#FF873D] font-display">{metrics.faculty}</div>
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-amber-700 font-semibold">Faculty / Staff</p>
+          <p className="text-2xl font-display font-extrabold text-amber-700 mt-1">{metrics.faculty}</p>
         </div>
-
-        <div className="p-4 rounded-2xl bg-white border border-[#EAEAF2] shadow-sm col-span-2 sm:col-span-1">
-          <div className="flex items-center justify-between text-[#FF4655] mb-1">
-            <span className="text-xs font-mono font-bold uppercase">Esports Fans</span>
-            <Gamepad2 size={16} />
-          </div>
-          <div className="text-2xl font-black text-[#FF4655] font-display">{metrics.esports}</div>
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-purple-700 font-semibold">Esports Fans</p>
+          <p className="text-2xl font-display font-extrabold text-purple-700 mt-1">{metrics.esports}</p>
+        </div>
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
+          <p className="text-[11px] font-mono uppercase text-slate-500 font-semibold">Archived</p>
+          <p className="text-2xl font-display font-extrabold text-slate-600 mt-1">{metrics.archived}</p>
         </div>
       </div>
 
-      {/* Alert Banner */}
       {statusMsg && (
         <div
-          className={`p-3.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-between ${
+          className={`p-3.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-between border shadow-2xs ${
             statusMsg.type === "success"
-              ? "bg-emerald-50 border border-emerald-300 text-emerald-800"
-              : "bg-red-50 border border-red-300 text-red-800"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-rose-50 border-rose-200 text-rose-900"
           }`}
         >
-          <span>{statusMsg.text}</span>
-          <button type="button" onClick={() => setStatusMsg(null)} className="opacity-60 hover:opacity-100">
+          <div className="flex items-center gap-2">
+            {statusMsg.type === "success" ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+            <span>{statusMsg.text}</span>
+          </div>
+          <button type="button" onClick={() => setStatusMsg(null)} className="p-1 text-slate-400 hover:text-slate-700">
             <X size={14} />
           </button>
         </div>
       )}
 
-      {/* Filter Toolbar (Part B Requirements: Student, General, Faculty, Esports Interest, Preferred Game) */}
-      <div className="p-4 sm:p-5 rounded-2xl bg-white border border-[#EAEAF2] shadow-sm space-y-4">
-        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-          {/* Search Bar */}
-          <div className="relative flex-1">
-            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#191936]/40" />
+      {/* Filter Toolbar */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="inline-flex rounded-xl p-1 bg-slate-100 border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setViewScope("active")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                viewScope === "active" ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Active Visitors ({metrics.totalActive})
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewScope("archived")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                viewScope === "archived" ? "bg-white text-rose-700 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Archived ({metrics.archived})
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewScope("all")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                viewScope === "all" ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              All Passes
+            </button>
+          </div>
+
+          <span className="text-xs text-slate-500 font-mono">
+            Showing <strong className="text-slate-900">{filteredRegistrations.length}</strong> matching passes
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-3 border-t border-slate-100">
+          {/* Search */}
+          <div className="relative lg:col-span-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
             <input
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by name, reference, email, roll no, team, or institution..."
-              className="w-full pl-10 pr-4 py-2 text-xs sm:text-sm rounded-xl border border-[#D8D8E5] focus:border-[#4549D8] focus:outline-none"
+              placeholder="Search name, ref, email, roll no..."
+              className="w-full h-9 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-hidden focus:border-blue-500 transition-colors"
             />
           </div>
 
-          {/* Export CSV Button */}
-          <button
-            type="button"
-            onClick={exportCsv}
-            disabled={!filteredRegistrations.length}
-            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#F8F7FC] border border-[#D8D8E5] text-xs font-mono font-bold text-[#191936] hover:bg-[#EAEAF2] transition-colors disabled:opacity-50"
+          {/* Category */}
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:bg-white focus:outline-hidden focus:border-blue-500"
           >
-            <Download size={14} />
-            <span>Export CSV ({filteredRegistrations.length})</span>
-          </button>
-        </div>
+            <option value="all">All Categories</option>
+            <option value="Student">Student Cohorts</option>
+            <option value="General Visitor">General Visitors</option>
+            <option value="Faculty / Staff">Faculty / Staff</option>
+          </select>
 
-        {/* 5 Multi-Criteria Filter Controls */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-[#EAEAF2]">
-          {/* 1. Category Filter */}
-          <div>
-            <label htmlFor="filter-category" className="block text-[11px] font-mono font-bold uppercase tracking-wider text-[#191936]/70 mb-1">
-              Visitor Category
-            </label>
-            <select
-              id="filter-category"
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-xl border border-[#D8D8E5] bg-white focus:border-[#4549D8] outline-none"
-            >
-              <option value="all">All Categories</option>
-              <option value="Student">Student</option>
-              <option value="General Visitor">General Visitor</option>
-              <option value="Faculty / Staff">Faculty / Staff</option>
-            </select>
-          </div>
+          {/* Esports Interest */}
+          <select
+            value={esportsFilter}
+            onChange={(e) => setEsportsFilter(e.target.value)}
+            className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:bg-white focus:outline-hidden focus:border-blue-500"
+          >
+            <option value="all">All Esports Interests</option>
+            <option value="yes">Interested (Yes)</option>
+            <option value="no">Not Interested (No)</option>
+          </select>
 
-          {/* 2. Esports Interest Filter */}
-          <div>
-            <label htmlFor="filter-esports" className="block text-[11px] font-mono font-bold uppercase tracking-wider text-[#191936]/70 mb-1">
-              Esports Interest
-            </label>
-            <select
-              id="filter-esports"
-              value={esportsFilter}
-              onChange={(e) => setEsportsFilter(e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-xl border border-[#D8D8E5] bg-white focus:border-[#4549D8] outline-none"
-            >
-              <option value="all">All Interests</option>
-              <option value="yes">Interested (Yes)</option>
-              <option value="no">Not Interested (No)</option>
-            </select>
-          </div>
+          {/* Game Filter */}
+          <select
+            value={gameFilter}
+            onChange={(e) => setGameFilter(e.target.value)}
+            className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:bg-white focus:outline-hidden focus:border-blue-500"
+          >
+            <option value="all">All Esports Titles</option>
+            <option value="valorant">VALORANT</option>
+            <option value="bgmi">BGMI</option>
+            <option value="free fire">Free Fire</option>
+          </select>
 
-          {/* 3. Preferred Game Filter */}
-          <div>
-            <label htmlFor="filter-game" className="block text-[11px] font-mono font-bold uppercase tracking-wider text-[#191936]/70 mb-1">
-              Preferred Game
-            </label>
-            <select
-              id="filter-game"
-              value={gameFilter}
-              onChange={(e) => setGameFilter(e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-xl border border-[#D8D8E5] bg-white focus:border-[#4549D8] outline-none"
-            >
-              <option value="all">All Games</option>
-              <option value="valorant">VALORANT</option>
-              <option value="bgmi">BGMI</option>
-              <option value="free fire">Free Fire</option>
-            </select>
-          </div>
-
-          {/* 4. Status Filter */}
-          <div>
-            <label htmlFor="filter-status" className="block text-[11px] font-mono font-bold uppercase tracking-wider text-[#191936]/70 mb-1">
-              Approval Status
-            </label>
-            <select
-              id="filter-status"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-xl border border-[#D8D8E5] bg-white focus:border-[#4549D8] outline-none"
-            >
-              <option value="all">All Statuses</option>
-              {REGISTRATION_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status.replace("_", " ").toUpperCase()}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Status Filter */}
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:bg-white focus:outline-hidden focus:border-blue-500"
+          >
+            <option value="all">All Statuses</option>
+            {REGISTRATION_STATUSES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
-      {/* Main Data Table */}
-      {loading && !registrations && <LoadingBlock />}
-
-      {error && (
-        <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-
-      {!loading && filteredRegistrations.length === 0 && (
-        <EmptyState
-          title="No registrations matching filter criteria"
-          message="Try adjusting your category, esports interest, or search parameters."
-        />
-      )}
-
-      {!loading && filteredRegistrations.length > 0 && (
-        <div className="bg-white rounded-2xl border border-[#EAEAF2] shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs sm:text-sm">
-              <thead>
-                <tr className="border-b border-[#EAEAF2] bg-[#F8F7FC] text-[#191936]/70 font-mono text-[11px] uppercase tracking-wider">
-                  <th className="py-3 px-4">Reference</th>
-                  <th className="py-3 px-4">Visitor & Category</th>
-                  <th className="py-3 px-4">Academic / Organization</th>
-                  <th className="py-3 px-4">Esports Track</th>
-                  <th className="py-3 px-4">Contact</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+      {/* Main SaaS Table */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-2xs">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 uppercase font-mono tracking-wider text-[11px]">
+                <th className="py-3 px-4 font-semibold">Reference</th>
+                <th className="py-3 px-4 font-semibold">Visitor & Category</th>
+                <th className="py-3 px-4 font-semibold">Academic / Organization</th>
+                <th className="py-3 px-4 font-semibold">Esports Track</th>
+                <th className="py-3 px-4 font-semibold">Contact Info</th>
+                <th className="py-3 px-4 font-semibold">Status</th>
+                <th className="py-3 px-4 font-semibold">Submitted</th>
+                <th className="py-3 px-4 text-right font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center text-slate-500 font-mono">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-blue-600" />
+                    Loading visitor records...
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EAEAF2]">
-                {filteredRegistrations.map((row) => {
+              ) : filteredRegistrations.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center text-slate-500">
+                    <p className="font-semibold text-slate-800">No visitor records match your filters.</p>
+                  </td>
+                </tr>
+              ) : (
+                filteredRegistrations.map((row) => {
                   const parsedCategory = getParsedCategory(row);
                   const isEsports = getEsportsInterest(row);
                   const preferredGame = getPreferredGame(row);
+                  const isArchived = Boolean(row.archived_at);
 
                   return (
-                    <tr key={row.id} className="hover:bg-[#F8F7FC]/70 transition-colors">
-                      {/* Reference Code & Timestamp */}
-                      <td className="py-3 px-4 align-top">
-                        <span className="font-mono font-bold text-[#4549D8] block">
-                          {row.registration_ref}
-                        </span>
-                        <span className="text-[10px] text-[#191936]/50 font-mono block mt-0.5">
-                          {new Date(row.submitted_at).toLocaleDateString("en-IN", {
-                            day: "numeric",
-                            month: "short",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </span>
+                    <tr
+                      key={row.id}
+                      onClick={() => setInspectedRecord(row)}
+                      className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
+                    >
+                      {/* Reference */}
+                      <td className="py-3.5 px-4 font-mono font-bold text-blue-700 whitespace-nowrap">
+                        {row.registration_ref}
                       </td>
 
-                      {/* Visitor Name & Category Badge */}
-                      <td className="py-3 px-4 align-top">
-                        <strong className="text-[#191936] block font-semibold">
+                      {/* Visitor Name & Category */}
+                      <td className="py-3.5 px-4">
+                        <strong className="text-slate-900 block group-hover:text-blue-700 transition-colors">
                           {row.full_name}
                         </strong>
-                        <div className="flex items-center gap-1.5 mt-1">
+                        <div className="flex items-center gap-1.5 mt-0.5">
                           <span
                             className={`inline-block px-2 py-0.5 rounded-full font-mono text-[10px] font-bold uppercase tracking-wider ${
                               parsedCategory === "Student"
-                                ? "bg-blue-100 text-blue-800"
+                                ? "bg-blue-50 text-blue-700 border border-blue-200"
                                 : parsedCategory === "Faculty / Staff"
-                                ? "bg-orange-100 text-orange-800"
-                                : "bg-gray-100 text-gray-800"
+                                ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                : "bg-slate-100 text-slate-700 border border-slate-200"
                             }`}
                           >
                             {parsedCategory}
                           </span>
                           {row.days_attending && (
-                            <span className="text-[10px] text-[#191936]/60 font-mono">
+                            <span className="text-[10px] text-slate-500 font-mono">
                               ({row.days_attending})
                             </span>
                           )}
                         </div>
                       </td>
 
-                      {/* Academic / Organization Details */}
-                      <td className="py-3 px-4 align-top">
-                        <span className="text-[#191936] font-medium block">
-                          {row.institution || "Institution not specified"}
+                      {/* Academic / Organization */}
+                      <td className="py-3.5 px-4">
+                        <span className="text-slate-800 font-medium block truncate max-w-[200px]">
+                          {row.institution || "Independent Visitor"}
                         </span>
                         {parsedCategory === "Student" && (
-                          <div className="text-[11px] text-[#191936]/70 mt-0.5 space-y-0.5 font-mono">
+                          <div className="text-[11px] text-slate-500 mt-0.5 font-mono">
                             {row.student_class && <span>Class: {row.student_class}</span>}
                             {row.student_id && <span> · Roll: {row.student_id}</span>}
                           </div>
                         )}
                         {parsedCategory === "Faculty / Staff" && row.designation && (
-                          <div className="text-[11px] text-[#191936]/70 mt-0.5 font-mono">
+                          <div className="text-[11px] text-slate-500 mt-0.5 font-mono">
                             Desig: {row.designation}
                           </div>
                         )}
                       </td>
 
-                      {/* Esports Details */}
-                      <td className="py-3 px-4 align-top">
+                      {/* Esports Track */}
+                      <td className="py-3.5 px-4 whitespace-nowrap">
                         {isEsports ? (
-                          <div className="space-y-1">
-                            <span
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[10px] font-bold uppercase ${
-                                preferredGame?.toLowerCase().includes("valorant")
-                                  ? "bg-[#FF4655]/15 text-[#FF4655]"
-                                  : preferredGame?.toLowerCase().includes("bgmi")
-                                  ? "bg-[#F5A623]/20 text-[#D98200]"
-                                  : "bg-[#FF6A00]/15 text-[#FF6A00]"
-                              }`}
-                            >
-                              <Gamepad2 size={11} />
-                              <span>{preferredGame || "General Esports"}</span>
-                            </span>
-                            {row.esports_intent && (
-                              <div className="text-[11px] text-[#191936]/70 font-mono">
-                                Track: {row.esports_intent === "competing" ? "Competitor" : "Spectator"}
-                                {row.in_game_id && ` (ID: ${row.in_game_id})`}
-                              </div>
-                            )}
-                            {row.team_name && (
-                              <div className="text-[10px] text-[#191936]/60 font-mono">
-                                Team: {row.team_name}
-                              </div>
-                            )}
-                          </div>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-50 border border-purple-200 text-purple-700 font-mono text-[11px] font-semibold">
+                            <Gamepad2 size={11} />
+                            <span>{preferredGame || "General"}</span>
+                          </span>
                         ) : (
-                          <span className="text-xs text-[#191936]/40 font-mono">No</span>
+                          <span className="text-slate-400 font-mono text-xs">No</span>
                         )}
                       </td>
 
-                      {/* Contact Info */}
-                      <td className="py-3 px-4 align-top font-mono text-xs">
-                        <span className="block text-[#191936]">{row.email}</span>
-                        <span className="text-[#191936]/60 text-[11px]">{row.phone}</span>
+                      {/* Contact */}
+                      <td className="py-3.5 px-4 font-mono text-xs">
+                        <span className="block text-slate-800 truncate max-w-[170px]">{row.email}</span>
+                        <span className="text-slate-500 text-[11px]">{row.phone}</span>
                       </td>
 
-                      {/* Status Selector */}
-                      <td className="py-3 px-4 align-top">
-                        <select
-                          value={row.status}
-                          disabled={savingId === row.id}
-                          onChange={(e) => handleStatusChange(row.id, row.registration_ref, e.target.value)}
-                          className={`text-xs px-2.5 py-1.5 rounded-lg border font-mono font-bold uppercase outline-none transition-colors ${
-                            row.status === "confirmed"
-                              ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                              : row.status === "declined"
-                              ? "bg-red-50 border-red-300 text-red-800"
-                              : row.status === "correction_requested"
-                              ? "bg-amber-50 border-amber-300 text-amber-800"
-                              : "bg-blue-50 border-blue-300 text-blue-800"
-                          }`}
-                        >
-                          {REGISTRATION_STATUSES.map((status) => (
-                            <option key={status} value={status}>
-                              {status.replace("_", " ")}
-                            </option>
-                          ))}
-                        </select>
+                      {/* Status */}
+                      <td className="py-3.5 px-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <AdminStatusBadge status={row.status} isArchived={isArchived} />
+                      </td>
+
+                      {/* Submitted Date */}
+                      <td className="py-3.5 px-4 font-mono text-slate-500 whitespace-nowrap">
+                        {new Date(row.submitted_at).toLocaleDateString("en-IN", {
+                          month: "short",
+                          day: "numeric",
+                        })}
                       </td>
 
                       {/* Actions */}
-                      <td className="py-3 px-4 align-top text-right">
-                        <button
-                          type="button"
-                          onClick={() => setInspectedRecord(row)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#F8F7FC] border border-[#D8D8E5] text-xs font-mono font-bold text-[#191936] hover:bg-[#D5F542] transition-colors"
-                          title="Inspect complete registration record"
-                        >
-                          <Eye size={12} />
-                          <span>View</span>
-                        </button>
+                      <td className="py-3.5 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="inline-flex items-center gap-1.5 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setInspectedRecord(row)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
+                          >
+                            <Eye size={12} />
+                            <span>View</span>
+                          </button>
+
+                          {isArchived ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRestore(row)}
+                              disabled={savingId === row.id}
+                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
+                              title="Restore to active passes"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Restore</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setArchiveTarget(row)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Archive visitor pass"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
+                })
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
 
-      {/* Record Inspection Modal */}
+      {/* Record Inspection Detail Drawer */}
       {inspectedRecord && (
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex justify-end animate-fadeIn"
           onClick={() => setInspectedRecord(null)}
         >
           <div
-            className="bg-white rounded-3xl border-2 border-[#191936] shadow-[8px_8px_0px_#191936] max-w-xl w-full p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto"
+            className="w-full max-w-xl bg-white border-l border-slate-200 h-full overflow-y-auto p-6 sm:p-8 flex flex-col justify-between shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <button
-              type="button"
-              onClick={() => setInspectedRecord(null)}
-              className="absolute top-5 right-5 w-8 h-8 rounded-full border border-[#D8D8E5] flex items-center justify-center hover:bg-gray-100 transition-colors"
-            >
-              <X size={16} />
-            </button>
+            <div className="space-y-6">
+              {/* Header */}
+              <div className="flex items-start justify-between pb-4 border-b border-slate-200">
+                <div>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded">
+                      {inspectedRecord.registration_ref}
+                    </span>
+                    <AdminStatusBadge status={inspectedRecord.status} isArchived={Boolean(inspectedRecord.archived_at)} />
+                  </div>
+                  <h2 className="text-xl font-display font-black text-slate-900 tracking-tight m-0">
+                    {inspectedRecord.full_name}
+                  </h2>
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">
+                    Category: {getParsedCategory(inspectedRecord)} · Days: {inspectedRecord.days_attending || "Both Days"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInspectedRecord(null)}
+                  className="p-1.5 rounded-xl border border-slate-200 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
 
-            <div className="flex items-center gap-2 mb-2">
-              <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#4549D8]">
-                Visitor Record Details
-              </span>
-              <span className="font-mono text-xs text-gray-400">•</span>
-              <span className="font-mono text-xs font-bold text-gray-600">
-                {inspectedRecord.registration_ref}
-              </span>
-            </div>
-
-            <h2 className="font-heading text-2xl font-black text-[#191936] uppercase mb-4">
-              {inspectedRecord.full_name}
-            </h2>
-
-            <div className="space-y-4 text-xs sm:text-sm">
-              <div className="p-4 rounded-xl bg-[#F8F7FC] border border-[#EAEAF2] space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-[#191936]/60 font-mono">Category</span>
-                  <strong className="text-[#191936]">{getParsedCategory(inspectedRecord)}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#191936]/60 font-mono">Email</span>
-                  <span className="font-mono">{inspectedRecord.email}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#191936]/60 font-mono">Mobile Number</span>
-                  <span className="font-mono">{inspectedRecord.phone}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#191936]/60 font-mono">Institution</span>
-                  <span>{inspectedRecord.institution || "Not specified"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#191936]/60 font-mono">Days Attending</span>
-                  <span>{inspectedRecord.days_attending || "Both Days"}</span>
+              {/* Status Verification Actions */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2.5">
+                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                  Update Approval Status
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <button
+                    type="button"
+                    disabled={savingId === inspectedRecord.id || inspectedRecord.status === "confirmed"}
+                    onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "confirmed")}
+                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingId === inspectedRecord.id || inspectedRecord.status === "correction_requested"}
+                    onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "correction_requested")}
+                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    Correction
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingId === inspectedRecord.id || inspectedRecord.status === "declined"}
+                    onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "declined")}
+                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    Decline
+                  </button>
+                  {Boolean(inspectedRecord.archived_at) ? (
+                    <button
+                      type="button"
+                      disabled={savingId === inspectedRecord.id}
+                      onClick={() => handleRestore(inspectedRecord)}
+                      className="py-2 px-3 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
+                    >
+                      Restore
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setArchiveTarget(inspectedRecord)}
+                      className="py-2 px-3 rounded-lg text-xs font-semibold bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                    >
+                      Archive
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {/* Student Specific Details */}
+              {/* General Contact Details */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2 text-xs">
+                <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                  Contact Information
+                </h3>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Full Name:</span>
+                  <strong className="text-slate-900">{inspectedRecord.full_name}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Email Address:</span>
+                  <a href={`mailto:${inspectedRecord.email}`} className="text-blue-700 font-mono hover:underline">
+                    {inspectedRecord.email}
+                  </a>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Phone Number:</span>
+                  <a href={`tel:${inspectedRecord.phone}`} className="text-blue-700 font-mono hover:underline">
+                    {inspectedRecord.phone}
+                  </a>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Institution:</span>
+                  <span className="font-medium text-slate-900">{inspectedRecord.institution || "Not specified"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Days Attending:</span>
+                  <span className="font-medium text-slate-900">{inspectedRecord.days_attending || "Both Days"}</span>
+                </div>
+              </div>
+
+              {/* Student Academic Details (Conditional) */}
               {getParsedCategory(inspectedRecord) === "Student" && (
-                <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 space-y-2">
-                  <h4 className="font-mono text-xs font-bold uppercase text-blue-900">
+                <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200/80 space-y-2 text-xs">
+                  <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-blue-900 mb-2">
                     Student Academic Information
-                  </h4>
+                  </h3>
                   <div className="flex justify-between">
-                    <span className="text-blue-800/70 font-mono">Class / Standard</span>
-                    <strong className="text-blue-950">{inspectedRecord.student_class || "N/A"}</strong>
+                    <span className="text-blue-800">Class / Standard:</span>
+                    <strong className="text-blue-950 font-mono">{inspectedRecord.student_class || "N/A"}</strong>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-blue-800/70 font-mono">Roll Number / Student ID</span>
+                    <span className="text-blue-800">Student Roll No / ID:</span>
                     <strong className="text-blue-950 font-mono">{inspectedRecord.student_id || "N/A"}</strong>
                   </div>
                 </div>
               )}
 
-              {/* Faculty Specific Details */}
+              {/* Faculty / Staff Details (Conditional) */}
               {getParsedCategory(inspectedRecord) === "Faculty / Staff" && (
-                <div className="p-4 rounded-xl bg-orange-50 border border-orange-200 space-y-2">
-                  <h4 className="font-mono text-xs font-bold uppercase text-orange-900">
-                    Faculty Designation
-                  </h4>
+                <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-2 text-xs">
+                  <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-amber-900 mb-2">
+                    Faculty Details
+                  </h3>
                   <div className="flex justify-between">
-                    <span className="text-orange-800/70 font-mono">Department / Role</span>
-                    <strong className="text-orange-950">{inspectedRecord.designation || "N/A"}</strong>
+                    <span className="text-amber-800">Designation / Role:</span>
+                    <strong className="text-amber-950">{inspectedRecord.designation || "Faculty / Staff"}</strong>
                   </div>
                 </div>
               )}
 
-              {/* Esports Details */}
+              {/* Esports Arena Interest (Conditional) */}
               {getEsportsInterest(inspectedRecord) && (
-                <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 space-y-2">
-                  <h4 className="font-mono text-xs font-bold uppercase text-purple-900">
+                <div className="p-4 rounded-xl bg-purple-50/70 border border-purple-200/80 space-y-2 text-xs">
+                  <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-purple-900 mb-2">
                     Esports Arena Participation
-                  </h4>
+                  </h3>
                   <div className="flex justify-between">
-                    <span className="text-purple-800/70 font-mono">Preferred Title</span>
-                    <strong className="text-purple-950">{getPreferredGame(inspectedRecord) || "N/A"}</strong>
+                    <span className="text-purple-800">Preferred Game:</span>
+                    <strong className="text-purple-950">{getPreferredGame(inspectedRecord) || "General"}</strong>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-purple-800/70 font-mono">Participation Mode</span>
-                    <span className="font-mono font-bold capitalize">
+                    <span className="text-purple-800">Mode:</span>
+                    <span className="font-semibold text-purple-950 capitalize">
                       {inspectedRecord.esports_intent || "Spectator"}
                     </span>
                   </div>
                   {inspectedRecord.in_game_id && (
                     <div className="flex justify-between">
-                      <span className="text-purple-800/70 font-mono">In-Game ID</span>
-                      <span className="font-mono font-bold">{inspectedRecord.in_game_id}</span>
+                      <span className="text-purple-800">In-Game Tag / ID:</span>
+                      <strong className="text-purple-950 font-mono">{inspectedRecord.in_game_id}</strong>
                     </div>
                   )}
                   {inspectedRecord.team_name && (
                     <div className="flex justify-between">
-                      <span className="text-purple-800/70 font-mono">Team Name</span>
-                      <span>{inspectedRecord.team_name}</span>
+                      <span className="text-purple-800">Team Name:</span>
+                      <span className="text-purple-950 font-medium">{inspectedRecord.team_name}</span>
                     </div>
                   )}
                   {inspectedRecord.competition_notes && (
-                    <div>
-                      <span className="text-purple-800/70 font-mono block mb-1">Competition Notes</span>
-                      <p className="p-2 rounded bg-white/60 text-xs">{inspectedRecord.competition_notes}</p>
+                    <div className="pt-2 border-t border-purple-200">
+                      <span className="text-purple-800 block mb-1">Competition Notes:</span>
+                      <p className="p-2.5 rounded bg-white border border-purple-200 text-purple-950">
+                        {inspectedRecord.competition_notes}
+                      </p>
                     </div>
                   )}
                 </div>
               )}
+            </div>
 
-              <div className="pt-2 flex items-center justify-between">
-                <span className="text-[11px] text-gray-500 font-mono">
-                  Submitted: {new Date(inspectedRecord.submitted_at).toLocaleString()}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setInspectedRecord(null)}
-                  className="px-4 py-2 rounded-xl bg-[#191936] text-white font-mono text-xs font-bold hover:bg-[#4549D8] transition-colors"
-                >
-                  Close Inspection
-                </button>
-              </div>
+            <div className="pt-4 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setInspectedRecord(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer"
+              >
+                Close Drawer
+              </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Safe Archive Modal */}
+      {archiveTarget && (
+        <AdminArchiveConfirmModal
+          isOpen={true}
+          onClose={() => setArchiveTarget(null)}
+          onConfirm={handleConfirmArchive}
+          isProcessing={isArchiving}
+          registrationRef={archiveTarget.registration_ref}
+          name={archiveTarget.full_name}
+          category={`Visitor Pass (${getParsedCategory(archiveTarget)})`}
+        />
       )}
     </div>
   );

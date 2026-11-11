@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import type { AdminRole } from "@/types/database";
@@ -21,7 +22,9 @@ import {
   SlidersHorizontal,
   ListPlus,
   ClipboardCheck,
-  Download
+  Download,
+  Menu,
+  X
 } from "lucide-react";
 
 interface NavItem {
@@ -83,6 +86,7 @@ const navSections: NavSection[] = [
 export default function AdminLayout() {
   const { signOut, user, role } = useAuth();
   const navigate = useNavigate();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const handleSignOut = async () => {
     await signOut();
@@ -99,69 +103,103 @@ export default function AdminLayout() {
     .filter((sec) => sec.items.length > 0);
 
   return (
-    <div className="admin-layout" style={{ display: "flex", minHeight: "100vh" }}>
+    <div className="min-h-screen flex flex-col md:flex-row bg-[#F8FAFC] text-slate-900 font-sans">
+      {/* Mobile Top App Bar */}
+      <div className="md:hidden flex items-center justify-between px-4 py-3 bg-[#0B1120] text-white border-b border-slate-800 sticky top-0 z-40">
+        <Link to="/admin" className="flex items-center gap-2.5 text-white no-underline">
+          <img src="/logo.svg" alt="Supernova" className="w-6 h-6" />
+          <div className="flex flex-col">
+            <span className="font-display font-black text-sm tracking-wide leading-none">SUPERNOVA 3.0</span>
+            <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider">CMS & CRM</span>
+          </div>
+        </Link>
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white"
+          aria-label="Toggle navigation"
+        >
+          {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
+      </div>
+
+      {/* Backdrop for mobile drawer */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-40 md:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar: Deep Navy, Professional SaaS Structure */}
       <aside
-        className="admin-sidebar"
-        style={{
-          width: 270,
-          flexShrink: 0,
-          background: "var(--navy-900)",
-          borderRight: "1px solid var(--border-subtle)",
-          minHeight: "100vh",
-          display: "flex",
-          flexDirection: "column",
-        }}
+        className={`fixed md:sticky top-0 left-0 bottom-0 z-50 md:z-10 w-64 lg:w-72 flex-shrink-0 bg-[#0B1120] text-slate-300 border-r border-slate-800 flex flex-col transition-transform duration-200 ease-out md:translate-x-0 ${
+          mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        }`}
+        style={{ height: "100vh" }}
       >
-        <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border-subtle)" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <Link to="/admin" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
-              <img src="/logo.svg" alt="Supernova Crest" style={{ width: 28, height: 28 }} />
+        {/* Brand Header */}
+        <div className="p-5 border-b border-slate-800 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <Link to="/admin" className="flex items-center gap-2.5 text-white no-underline">
+              <img src="/logo.svg" alt="Supernova Crest" className="w-7 h-7" />
               <div>
-                <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "0.95rem", color: "var(--text-primary)", letterSpacing: "0.02em" }}>
+                <span className="font-display font-black text-sm text-white tracking-wide block leading-tight">
                   SUPERNOVA 3.0
                 </span>
-                <span style={{ display: "block", fontSize: "0.7rem", color: "var(--cyan-400)", fontWeight: 700, textTransform: "uppercase" }}>
-                  CMS & Operations
+                <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider block">
+                  Operations & CRM
                 </span>
               </div>
             </Link>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(false)}
+              className="md:hidden p-1 text-slate-400 hover:text-white"
+            >
+              <X size={18} />
+            </button>
           </div>
-          <div style={{ marginTop: 12 }}>
-            <Link to="/" target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.76rem", color: "var(--text-muted)", textDecoration: "none" }}>
-              <span>View Live Public Portal</span> <ExternalLink size={12} />
+          <div>
+            <Link
+              to="/"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-cyan-400 transition-colors no-underline font-medium"
+            >
+              <span>View Public Portal</span>
+              <ExternalLink size={11} />
             </Link>
           </div>
         </div>
 
-        <nav className="admin-nav" style={{ flex: 1, overflowY: "auto", padding: "16px 12px", display: "flex", flexDirection: "column", gap: 18 }}>
+        {/* Navigation Sections */}
+        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
           {visibleSections.map((sec) => (
             <div key={sec.title}>
-              <p style={{ fontSize: "0.68rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-faint)", padding: "0 14px 6px" }}>
+              <p className="px-3 pb-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
                 {sec.title}
               </p>
-              <div style={{ display: "grid", gap: 2 }}>
+              <div className="space-y-0.5">
                 {sec.items.map((item) => {
                   const Icon = item.icon;
                   return (
                     <NavLink
                       key={item.to}
                       to={item.to}
-                      style={({ isActive }) => ({
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        padding: "8px 14px",
-                        borderRadius: "var(--radius-sm)",
-                        fontSize: "0.85rem",
-                        fontWeight: 500,
-                        color: isActive ? "var(--cyan-400)" : "var(--text-muted)",
-                        background: isActive ? "rgba(34,211,238,0.1)" : "transparent",
-                        textDecoration: "none",
-                        transition: "all var(--transition-fast)",
-                      })}
+                      end={item.to === "/admin"}
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={({ isActive }) =>
+                        `flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-all no-underline ${
+                          isActive
+                            ? "bg-cyan-500/15 text-cyan-300 font-semibold shadow-xs"
+                            : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+                        }`
+                      }
                     >
-                      <Icon size={16} />
-                      {item.label}
+                      <Icon size={15} className="shrink-0" />
+                      <span className="truncate">{item.label}</span>
                     </NavLink>
                   );
                 })}
@@ -170,32 +208,38 @@ export default function AdminLayout() {
           ))}
         </nav>
 
-        <div style={{ padding: "16px 20px", borderTop: "1px solid var(--border-subtle)", background: "rgba(0,0,0,0.2)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div style={{ overflow: "hidden" }}>
-              <p style={{ fontSize: "0.74rem", color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                Active Operator
-              </p>
-              <p style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {/* Active Operator Footer */}
+        <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex flex-col gap-2.5">
+          <div className="flex items-center justify-between gap-2 overflow-hidden">
+            <div className="overflow-hidden">
+              <span className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider">
+                Operator
+              </span>
+              <span className="block text-xs font-semibold text-white truncate">
                 {user?.email || "admin@supernova"}
-              </p>
-              <span style={{ display: "inline-block", fontSize: "0.7rem", fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "rgba(34,211,238,0.15)", color: "var(--cyan-400)", marginTop: 2 }}>
-                {role || "super_admin"}
               </span>
             </div>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-cyan-950 border border-cyan-800 text-cyan-400 shrink-0">
+              {role || "admin"}
+            </span>
           </div>
+
           <button
-            className="btn btn-ghost"
+            type="button"
             onClick={handleSignOut}
-            style={{ width: "100%", justifyContent: "center", fontSize: "0.82rem", padding: "6px 10px" }}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white text-xs font-medium transition-colors cursor-pointer"
           >
-            <LogOut size={14} /> Sign Out
+            <LogOut size={13} />
+            <span>Sign Out</span>
           </button>
         </div>
       </aside>
 
-      <main style={{ flex: 1, overflow: "auto", padding: "32px 40px" }}>
-        <Outlet />
+      {/* Main SaaS Canvas: White/Off-White Background with Deep Navy Typography */}
+      <main className="flex-1 min-w-0 bg-[#F8FAFC] text-slate-900 overflow-y-auto">
+        <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
+          <Outlet />
+        </div>
       </main>
     </div>
   );

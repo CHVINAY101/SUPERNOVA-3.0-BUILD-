@@ -7,7 +7,6 @@ import {
   Search, 
   CheckCircle, 
   XCircle, 
-  UserCheck, 
   Users, 
   Gamepad2, 
   Sparkles, 
@@ -412,101 +411,94 @@ export default function AdminCheckin() {
   };
 
   return (
-    <div style={{ maxWidth: 880, margin: "0 auto", paddingBottom: 60 }}>
+    <div className="max-w-4xl mx-auto space-y-6 pb-12">
       {/* Top Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 20 }}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(16, 185, 129, 0.15)", color: "#10b981", display: "grid", placeItems: "center" }}>
-              <UserCheck size={20} />
-            </div>
-            <h1 style={{ fontSize: "1.75rem", fontWeight: 800, margin: 0, color: "var(--text-primary)" }}>
-              Entrance Check-in Desk
-            </h1>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+              Entrance Operations
+            </span>
           </div>
-          <p style={{ fontSize: "0.88rem", color: "var(--text-muted)", marginTop: 6 }}>
+          <h1 className="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight mt-1 mb-1">
+            Entrance Check-in Desk
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500">
             Event-day check-in for festival passes, student exhibitors, and competitive esports squads.
           </p>
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} variant="dark" />
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} />
           <button
+            type="button"
             onClick={() => setWalkInOpen(true)}
-            className="btn btn-primary"
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "10px 18px", fontSize: "0.9rem", fontWeight: 700 }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
           >
-            <UserPlus size={16} /> Walk-in Pass
+            <UserPlus size={14} />
+            <span>Walk-in Pass</span>
           </button>
           <button
+            type="button"
             onClick={() => setQrModalOpen(true)}
-            className="btn btn-secondary"
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "10px 16px", fontSize: "0.9rem" }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
           >
-            <QrCode size={16} /> Scan QR
+            <QrCode size={14} />
+            <span>Scan QR</span>
           </button>
           <button
+            type="button"
             onClick={fetchAttendees}
             title="Refresh Live Data"
-            className="btn btn-ghost"
-            style={{ padding: "10px" }}
+            className="p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-slate-900 shadow-2xs transition-colors cursor-pointer"
           >
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
           </button>
         </div>
       </div>
 
-      {/* Live Counter Widget (Refreshes every 15s) */}
-      <div
-        style={{
-          background: "rgba(23, 23, 27, 0.6)",
-          border: "1.5px solid var(--border-subtle)",
-          borderRadius: 16,
-          padding: "18px 24px",
-          marginBottom: 24,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+      {/* Live Counter Widget (SaaS Card) */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <p style={{ fontSize: "0.74rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--cyan-400)" }}>
+            <p className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500">
               TODAY'S ENTRANCE TOTALS (LIVE)
             </p>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
-              <span style={{ fontSize: "2.4rem", fontWeight: 900, fontFamily: "var(--font-display)", color: "#10b981", lineHeight: 1 }}>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-3xl sm:text-4xl font-display font-black text-emerald-700 leading-none">
                 {stats.totalCheckedIn}
               </span>
-              <span style={{ fontSize: "1.1rem", color: "var(--text-muted)", fontWeight: 600 }}>
+              <span className="text-sm font-semibold text-slate-500 font-mono">
                 / {stats.totalExpected} Expected
               </span>
             </div>
           </div>
 
-          {/* Breakdown badges */}
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            <div style={{ background: "rgba(255,255,255,0.04)", padding: "8px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.72rem", color: "#38bdf8", fontWeight: 700 }}>
+          {/* Breakdown Badges */}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="bg-slate-50 border border-slate-200/80 px-3.5 py-2 rounded-xl">
+              <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase text-blue-700">
                 <Users size={12} /> Visitors
               </div>
-              <p style={{ fontSize: "1.1rem", fontWeight: 800, margin: "2px 0 0", color: "#ffffff" }}>
+              <p className="text-base font-extrabold text-slate-900 mt-0.5 m-0 font-display">
                 {stats.visitorCheckedIn} / {stats.visitorExpected}
               </p>
             </div>
 
-            <div style={{ background: "rgba(255,255,255,0.04)", padding: "8px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.72rem", color: "#a855f7", fontWeight: 700 }}>
+            <div className="bg-slate-50 border border-slate-200/80 px-3.5 py-2 rounded-xl">
+              <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase text-purple-700">
                 <Sparkles size={12} /> Projects
               </div>
-              <p style={{ fontSize: "1.1rem", fontWeight: 800, margin: "2px 0 0", color: "#ffffff" }}>
+              <p className="text-base font-extrabold text-slate-900 mt-0.5 m-0 font-display">
                 {stats.projectCheckedIn} / {stats.projectExpected}
               </p>
             </div>
 
-            <div style={{ background: "rgba(255,255,255,0.04)", padding: "8px 14px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.72rem", color: "var(--coral)", fontWeight: 700 }}>
+            <div className="bg-slate-50 border border-slate-200/80 px-3.5 py-2 rounded-xl">
+              <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase text-amber-700">
                 <Gamepad2 size={12} /> Esports Teams
               </div>
-              <p style={{ fontSize: "1.1rem", fontWeight: 800, margin: "2px 0 0", color: "#ffffff" }}>
+              <p className="text-base font-extrabold text-slate-900 mt-0.5 m-0 font-display">
                 {stats.esportsCheckedIn} / {stats.esportsExpected}
               </p>
             </div>
@@ -514,56 +506,27 @@ export default function AdminCheckin() {
         </div>
       </div>
 
-      {/* Huge Search Box (Autofocus) */}
-      <div style={{ position: "relative", marginBottom: 20 }}>
+      {/* Large Search Box */}
+      <div className="relative">
         <input
           ref={searchInputRef}
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search by attendee name, phone, or pass reference (e.g. SN3-VIS-205118)..."
-          style={{
-            width: "100%",
-            padding: "18px 24px 18px 56px",
-            fontSize: "1.15rem",
-            fontWeight: 600,
-            background: "rgba(15, 23, 42, 0.8)",
-            border: "2px solid var(--border-subtle)",
-            borderRadius: 14,
-            color: "#ffffff",
-            outline: "none",
-            boxShadow: "0 4px 18px rgba(0,0,0,0.25)",
-            transition: "border-color 0.2s ease",
-          }}
-          onFocus={(e) => (e.target.style.borderColor = "var(--cyan-400)")}
-          onBlur={(e) => (e.target.style.borderColor = "var(--border-subtle)")}
+          className="w-full h-14 pl-12 pr-10 text-base font-medium bg-white border-2 border-slate-200 focus:border-blue-600 rounded-2xl shadow-2xs text-slate-900 placeholder-slate-400 focus:outline-hidden transition-all"
         />
         <Search
-          size={24}
-          color="var(--cyan-400)"
-          style={{
-            position: "absolute",
-            left: 20,
-            top: "50%",
-            transform: "translateY(-50%)",
-            pointerEvents: "none",
-          }}
+          size={20}
+          className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
         />
         {searchQuery && (
           <button
+            type="button"
             onClick={() => setSearchQuery("")}
-            style={{
-              position: "absolute",
-              right: 18,
-              top: "50%",
-              transform: "translateY(-50%)",
-              background: "transparent",
-              border: 0,
-              color: "var(--text-muted)",
-              cursor: "pointer",
-            }}
+            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-1"
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         )}
       </div>
@@ -571,236 +534,148 @@ export default function AdminCheckin() {
       {/* Status Alert Banner */}
       {statusMessage && (
         <div
-          style={{
-            padding: "14px 20px",
-            borderRadius: 12,
-            marginBottom: 20,
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            fontSize: "0.95rem",
-            fontWeight: 700,
-            background: statusMessage.type === "success" ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-            border: `1.5px solid ${statusMessage.type === "success" ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)"}`,
-            color: statusMessage.type === "success" ? "#10b981" : "#ef4444",
-          }}
+          className={`p-3.5 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-between border shadow-2xs ${
+            statusMessage.type === "success"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-rose-50 border-rose-200 text-rose-900"
+          }`}
         >
-          {statusMessage.type === "success" ? <CheckCircle size={20} /> : <AlertTriangle size={20} />}
-          <span>{statusMessage.text}</span>
+          <div className="flex items-center gap-2">
+            {statusMessage.type === "success" ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+            <span>{statusMessage.text}</span>
+          </div>
+          <button type="button" onClick={() => setStatusMessage(null)} className="p-1 text-slate-400 hover:text-slate-700">
+            <X size={14} />
+          </button>
         </div>
       )}
 
       {/* Results List */}
       <div>
         {searchQuery.trim() === "" ? (
-          <div
-            style={{
-              textAlign: "center",
-              padding: "48px 24px",
-              background: "rgba(255,255,255,0.02)",
-              borderRadius: 16,
-              border: "1.5px dashed var(--border-subtle)",
-            }}
-          >
-            <Search size={36} color="var(--text-muted)" style={{ margin: "0 auto 12px" }} />
-            <h3 style={{ fontSize: "1.15rem", fontWeight: 700, color: "var(--text-primary)" }}>
+          <div className="text-center py-12 px-6 bg-white border-2 border-dashed border-slate-200 rounded-2xl">
+            <Search size={32} className="mx-auto mb-2 text-slate-400" />
+            <h3 className="text-base font-bold text-slate-900">
               Ready for Gate Check-in
             </h3>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", maxWidth: 440, margin: "8px auto 0" }}>
+            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
               Type any part of the visitor's name, phone number, or pass reference above to find their entry record.
             </p>
           </div>
         ) : filtered.length === 0 ? (
-          <div
-            style={{
-              textAlign: "center",
-              padding: "40px 24px",
-              background: "rgba(239, 68, 68, 0.05)",
-              borderRadius: 16,
-              border: "1px solid rgba(239, 68, 68, 0.2)",
-            }}
-          >
-            <XCircle size={36} color="#ef4444" style={{ margin: "0 auto 12px" }} />
-            <h3 style={{ fontSize: "1.15rem", fontWeight: 700, color: "#f87171" }}>
+          <div className="text-center py-10 px-6 bg-rose-50/50 border border-rose-200 rounded-2xl">
+            <XCircle size={32} className="mx-auto mb-2 text-rose-500" />
+            <h3 className="text-base font-bold text-rose-900">
               No Registrations Found
             </h3>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", margin: "8px auto 16px" }}>
+            <p className="text-xs text-slate-600 max-w-md mx-auto mt-1 mb-4">
               No pass matching "{searchQuery}". You can create an on-the-spot walk-in pass below.
             </p>
             <button
+              type="button"
               onClick={() => {
                 setWalkInName(searchQuery);
                 setWalkInOpen(true);
               }}
-              className="btn btn-primary"
-              style={{ padding: "8px 20px" }}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs"
             >
-              <UserPlus size={16} /> Issue Walk-in Pass
+              <UserPlus size={14} />
+              <span>Issue Walk-in Pass</span>
             </button>
           </div>
         ) : (
-          <div style={{ display: "grid", gap: 14 }}>
+          <div className="space-y-3.5">
             {filtered.map((attendee) => {
               const isConfirmed = attendee.status === "confirmed";
 
               return (
                 <div
                   key={attendee.id}
-                  style={{
-                    background: "rgba(23, 23, 27, 0.8)",
-                    border: `1.5px solid ${attendee.checkedIn ? "#10b981" : "var(--border-subtle)"}`,
-                    borderRadius: 14,
-                    padding: "20px 24px",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    gap: 16,
-                    boxShadow: "0 6px 18px rgba(0,0,0,0.15)",
-                  }}
+                  className={`bg-white border rounded-2xl p-5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all ${
+                    attendee.checkedIn ? "border-emerald-400 bg-emerald-50/20" : "border-slate-200/90"
+                  }`}
                 >
-                  <div style={{ flex: 1, minWidth: 260 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
                       <span
-                        style={{
-                          fontSize: "0.72rem",
-                          fontWeight: 800,
-                          textTransform: "uppercase",
-                          padding: "3px 10px",
-                          borderRadius: 9999,
-                          letterSpacing: "0.06em",
-                          background:
-                            attendee.type === "visitor"
-                              ? "rgba(56, 189, 248, 0.15)"
-                              : attendee.type === "participation"
-                              ? "rgba(168, 85, 247, 0.15)"
-                              : "rgba(240, 120, 85, 0.15)",
-                          color:
-                            attendee.type === "visitor"
-                              ? "#38bdf8"
-                              : attendee.type === "participation"
-                              ? "#a855f7"
-                              : "var(--coral)",
-                        }}
+                        className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                          attendee.type === "visitor"
+                            ? "bg-blue-50 text-blue-700 border border-blue-200"
+                            : attendee.type === "participation"
+                            ? "bg-purple-50 text-purple-700 border border-purple-200"
+                            : "bg-amber-50 text-amber-700 border border-amber-200"
+                        }`}
                       >
                         {attendee.type === "visitor" ? "Visitor Pass" : attendee.type === "participation" ? "Project Exhibitor" : "Esports Team"}
                       </span>
 
-                      <span style={{ fontSize: "0.82rem", fontFamily: "monospace", color: "var(--text-muted)" }}>
+                      <span className="text-xs font-mono font-bold text-slate-500">
                         {attendee.ref}
                       </span>
 
                       <span
-                        style={{
-                          fontSize: "0.74rem",
-                          fontWeight: 700,
-                          padding: "2px 8px",
-                          borderRadius: 6,
-                          background: isConfirmed ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
-                          color: isConfirmed ? "#10b981" : "#f87171",
-                        }}
+                        className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                          isConfirmed ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"
+                        }`}
                       >
                         {attendee.status.toUpperCase()}
                       </span>
                     </div>
 
-                    <h3 style={{ fontSize: "1.35rem", fontWeight: 800, color: "var(--text-primary)", margin: "8px 0 4px" }}>
+                    <h3 className="text-base sm:text-lg font-bold text-slate-900 m-0 leading-snug">
                       {attendee.name}
                     </h3>
 
-                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: "0.85rem", color: "var(--text-muted)", marginTop: 6 }}>
+                    <div className="flex items-center gap-4 flex-wrap text-xs text-slate-500 mt-1">
                       {attendee.institution && (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                          <Building2 size={13} /> {attendee.institution}
+                        <span className="inline-flex items-center gap-1 text-slate-600">
+                          <Building2 size={12} /> {attendee.institution}
                         </span>
                       )}
                       {attendee.phone && (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                          <Phone size={13} /> {attendee.phone}
+                        <span className="inline-flex items-center gap-1 font-mono text-slate-600">
+                          <Phone size={12} /> {attendee.phone}
                         </span>
                       )}
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontWeight: 700, color: "#ffffff" }}>
-                        <Users size={13} /> Party Size: {attendee.count} {attendee.count > 1 ? "people" : "person"}
+                      <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
+                        <Users size={12} /> Party Size: {attendee.count} {attendee.count > 1 ? "people" : "person"}
                       </span>
                     </div>
 
-                    <p style={{ fontSize: "0.78rem", color: "var(--text-faint)", marginTop: 4 }}>
+                    <p className="text-[11px] text-slate-400 mt-1 m-0 font-mono">
                       {attendee.categoryOrGame}
                     </p>
                   </div>
 
                   {/* Actions & States */}
-                  <div>
+                  <div className="shrink-0">
                     {!isConfirmed ? (
-                      <div
-                        style={{
-                          background: "rgba(239, 68, 68, 0.1)",
-                          border: "1px solid rgba(239, 68, 68, 0.25)",
-                          borderRadius: 8,
-                          padding: "10px 16px",
-                          textAlign: "center",
-                        }}
-                      >
-                        <p style={{ fontSize: "0.82rem", fontWeight: 800, color: "#f87171", margin: 0 }}>
-                          NOT CONFIRMED
-                        </p>
-                        <p style={{ fontSize: "0.74rem", color: "var(--text-muted)", margin: "2px 0 0" }}>
-                          Ask Event Admin to review
-                        </p>
+                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-center">
+                        <p className="text-xs font-bold text-rose-800 m-0">NOT CONFIRMED</p>
+                        <p className="text-[10px] text-slate-500 m-0">Event Admin review required</p>
                       </div>
                     ) : attendee.checkedIn ? (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-                        <div
-                          style={{
-                            background: "rgba(16, 185, 129, 0.15)",
-                            border: "1.5px solid #10b981",
-                            borderRadius: 10,
-                            padding: "8px 16px",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            color: "#10b981",
-                            fontWeight: 800,
-                            fontSize: "0.92rem",
-                          }}
-                        >
-                          <CheckCircle size={18} />
-                          <span>ALREADY CHECKED IN {formatTime(attendee.checkedInAt)}</span>
+                      <div className="flex flex-col sm:items-end gap-1.5">
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold text-xs">
+                          <CheckCircle size={15} className="text-emerald-600" />
+                          <span>CHECKED IN {formatTime(attendee.checkedInAt)}</span>
                         </div>
                         <button
+                          type="button"
                           onClick={() => setUndoTarget(attendee)}
-                          style={{
-                            background: "transparent",
-                            border: 0,
-                            color: "var(--text-muted)",
-                            fontSize: "0.78rem",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 4,
-                            cursor: "pointer",
-                            padding: "2px 4px",
-                          }}
+                          className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-rose-600 cursor-pointer transition-colors"
                         >
-                          <RotateCcw size={12} /> Undo check-in
+                          <RotateCcw size={11} /> Undo check-in
                         </button>
                       </div>
                     ) : (
                       <button
+                        type="button"
                         onClick={() => handleCheckIn(attendee)}
-                        className="btn"
-                        style={{
-                          background: "#10b981",
-                          color: "#ffffff",
-                          borderColor: "#10b981",
-                          padding: "14px 28px",
-                          fontSize: "1.05rem",
-                          fontWeight: 800,
-                          borderRadius: 10,
-                          boxShadow: "0 4px 14px rgba(16, 185, 129, 0.35)",
-                          cursor: "pointer",
-                        }}
+                        className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm shadow-xs transition-colors cursor-pointer"
                       >
-                        <CheckCircle size={20} /> CHECK IN
+                        <CheckCircle size={16} />
+                        <span>CHECK IN</span>
                       </button>
                     )}
                   </div>
@@ -815,45 +690,44 @@ export default function AdminCheckin() {
       {undoTarget && (
         <div
           role="dialog"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.75)",
-            backdropFilter: "blur(6px)",
-            display: "grid",
-            placeItems: "center",
-            zIndex: 1000,
-            padding: 20,
-          }}
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-xs"
           onClick={() => setUndoTarget(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--navy-900)",
-              border: "1.5px solid var(--border-subtle)",
-              borderRadius: 16,
-              padding: 28,
-              maxWidth: 440,
-              width: "100%",
-            }}
+            className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 text-slate-900 animate-in fade-in zoom-in-95 duration-150"
           >
-            <h3 style={{ fontSize: "1.25rem", fontWeight: 800, color: "#ffffff", margin: 0 }}>
-              Undo Check-in?
-            </h3>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", lineHeight: 1.5, margin: "12px 0 20px" }}>
-              Are you sure you want to revert check-in for <strong>{undoTarget.name}</strong>? Their status will be set back to not checked in.
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200">
+                <RotateCcw size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 m-0">
+                  Undo Gate Check-in?
+                </h3>
+                <p className="text-xs text-slate-500 m-0">Revert checked-in status</p>
+              </div>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed my-4">
+              Are you sure you want to revert check-in for <strong className="text-slate-900 font-semibold">{undoTarget.name}</strong> ({undoTarget.ref})? Their status will be reverted to not checked in.
             </p>
-            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-              <button onClick={() => setUndoTarget(null)} className="btn btn-secondary">
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setUndoTarget(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={confirmUndo}
-                className="btn btn-ghost"
-                style={{ color: "#ef4444", borderColor: "#ef4444" }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
               >
-                Yes, Undo
+                Yes, Undo Check-in
               </button>
             </div>
           </div>
@@ -864,47 +738,38 @@ export default function AdminCheckin() {
       {walkInOpen && (
         <div
           role="dialog"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.75)",
-            backdropFilter: "blur(6px)",
-            display: "grid",
-            placeItems: "center",
-            zIndex: 1000,
-            padding: 20,
-          }}
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-xs"
           onClick={() => setWalkInOpen(false)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--navy-900)",
-              border: "1.5px solid var(--border-subtle)",
-              borderRadius: 18,
-              padding: 30,
-              maxWidth: 480,
-              width: "100%",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.4)",
-            }}
+            className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 text-slate-900 animate-in fade-in zoom-in-95 duration-150"
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(34, 211, 238, 0.15)", color: "var(--cyan-400)", display: "grid", placeItems: "center" }}>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-200">
                   <UserPlus size={20} />
                 </div>
-                <h3 style={{ fontSize: "1.3rem", fontWeight: 800, color: "#ffffff", margin: 0 }}>
-                  Issue Walk-in Pass
-                </h3>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 m-0">
+                    Issue Walk-in Pass
+                  </h3>
+                  <p className="text-xs text-slate-500 m-0">Instant entrance generation for unannounced visitors</p>
+                </div>
               </div>
-              <button onClick={() => setWalkInOpen(false)} style={{ background: "transparent", border: 0, color: "var(--text-muted)", cursor: "pointer" }}>
-                <X size={20} />
+              <button
+                type="button"
+                onClick={() => setWalkInOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleWalkInSubmit} style={{ display: "grid", gap: 16 }}>
+            <form onSubmit={handleWalkInSubmit} className="space-y-4">
               <div>
-                <label style={{ display: "block", fontSize: "0.82rem", fontWeight: 700, color: "var(--text-secondary)", marginBottom: 6 }}>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   Full Name *
                 </label>
                 <input
@@ -912,13 +777,13 @@ export default function AdminCheckin() {
                   required
                   value={walkInName}
                   onChange={(e) => setWalkInName(e.target.value)}
-                  placeholder="Visitor full name"
-                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--border-subtle)", color: "#ffffff" }}
+                  placeholder="e.g. Ramesh Kumar"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                 />
               </div>
 
               <div>
-                <label style={{ display: "block", fontSize: "0.82rem", fontWeight: 700, color: "var(--text-secondary)", marginBottom: 6 }}>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   Phone Number
                 </label>
                 <input
@@ -926,14 +791,14 @@ export default function AdminCheckin() {
                   value={walkInPhone}
                   onChange={(e) => setWalkInPhone(e.target.value)}
                   placeholder="10-digit mobile number"
-                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--border-subtle)", color: "#ffffff" }}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono"
                 />
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label style={{ display: "block", fontSize: "0.82rem", fontWeight: 700, color: "var(--text-secondary)", marginBottom: 6 }}>
-                    Number of People
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Party Size
                   </label>
                   <input
                     type="number"
@@ -941,34 +806,38 @@ export default function AdminCheckin() {
                     max={20}
                     value={walkInCount}
                     onChange={(e) => setWalkInCount(Number(e.target.value) || 1)}
-                    style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--border-subtle)", color: "#ffffff" }}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono"
                   />
                 </div>
                 <div>
-                  <label style={{ display: "block", fontSize: "0.82rem", fontWeight: 700, color: "var(--text-secondary)", marginBottom: 6 }}>
-                    Institution / School
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    School / Institution
                   </label>
                   <input
                     type="text"
                     value={walkInInstitution}
                     onChange={(e) => setWalkInInstitution(e.target.value)}
                     placeholder="Optional institution"
-                    style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--border-subtle)", color: "#ffffff" }}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                 </div>
               </div>
 
-              <div style={{ marginTop: 8, display: "flex", gap: 12, justifyContent: "flex-end" }}>
-                <button type="button" onClick={() => setWalkInOpen(false)} className="btn btn-secondary">
+              <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setWalkInOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={walkInSubmitting}
-                  className="btn btn-primary"
-                  style={{ fontWeight: 800 }}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold shadow-xs cursor-pointer flex items-center gap-1.5"
                 >
-                  {walkInSubmitting ? "Generating Pass..." : "Confirm & Check In"}
+                  <UserPlus size={14} />
+                  <span>{walkInSubmitting ? "Generating Pass..." : "Confirm & Check In"}</span>
                 </button>
               </div>
             </form>
@@ -980,55 +849,30 @@ export default function AdminCheckin() {
       {qrModalOpen && (
         <div
           role="dialog"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.75)",
-            backdropFilter: "blur(6px)",
-            display: "grid",
-            placeItems: "center",
-            zIndex: 1000,
-            padding: 20,
-          }}
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-xs"
           onClick={() => setQrModalOpen(false)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--navy-900)",
-              border: "1.5px solid var(--border-subtle)",
-              borderRadius: 18,
-              padding: 28,
-              maxWidth: 440,
-              width: "100%",
-              textAlign: "center",
-            }}
+            className="w-full max-w-sm bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 text-slate-900 text-center animate-in fade-in zoom-in-95 duration-150"
           >
-            <div style={{ width: 56, height: 56, borderRadius: "50%", background: "rgba(56, 189, 248, 0.15)", color: "#38bdf8", display: "grid", placeItems: "center", margin: "0 auto 16px" }}>
-              <QrCode size={30} />
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-3 border border-blue-100">
+              <QrCode size={24} />
             </div>
-            <h3 style={{ fontSize: "1.25rem", fontWeight: 800, color: "#ffffff" }}>
-              Scan Registration Pass QR
+            <h3 className="text-base font-bold text-slate-900 m-0">
+              Scan Pass or Enter Reference
             </h3>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.88rem", marginTop: 6, lineHeight: 1.5 }}>
-              Use your device camera scanner or type the pass code below:
+            <p className="text-xs text-slate-500 mt-1 mb-4 leading-relaxed">
+              Use a barcode/QR reader or paste the registration pass code below:
             </p>
 
-            <div style={{ margin: "20px 0" }}>
+            <div className="mb-4">
               <input
                 type="text"
-                placeholder="Paste or type pass reference (e.g. SN3-VIS-205118)"
-                style={{
-                  width: "100%",
-                  padding: "12px 16px",
-                  borderRadius: 10,
-                  background: "rgba(0,0,0,0.3)",
-                  border: "1.5px solid var(--border-subtle)",
-                  color: "#ffffff",
-                  fontSize: "1rem",
-                  fontFamily: "monospace",
-                  textAlign: "center",
-                }}
+                autoFocus
+                placeholder="e.g. SN3-VIS-205118"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono text-center tracking-wider"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     const val = (e.target as HTMLInputElement).value.trim();
@@ -1041,8 +885,12 @@ export default function AdminCheckin() {
               />
             </div>
 
-            <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-              <button onClick={() => setQrModalOpen(false)} className="btn btn-secondary">
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => setQrModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
                 Close
               </button>
             </div>
