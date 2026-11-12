@@ -258,3 +258,25 @@ export interface UserRole {
   role: AdminRole;
   created_at: string;
 }
+
+export type CrmEmailStatus = "pending" | "sending" | "sent" | "failed";
+
+export interface CrmEmail {
+  id: string;
+  recipient: string;
+  cc?: string | null;
+  bcc?: string | null;
+  subject: string;
+  body_html: string;
+  sender_email: string;
+  sent_by?: string | null;
+  sent_by_email?: string | null;
+  status: CrmEmailStatus;
+  gmail_message_id?: string | null;
+  gmail_thread_id?: string | null;
+  error_message?: string | null;
+  idempotency_key?: string | null;
+  created_at: string;
+  sent_at?: string | null;
+}
+

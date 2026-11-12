@@ -23,6 +23,7 @@ import {
   ListPlus,
   ClipboardCheck,
   Download,
+  Mail,
   Menu,
   X
 } from "lucide-react";
@@ -49,8 +50,9 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    title: "Registrations",
+    title: "Registrations & CRM",
     items: [
+      { to: "/admin/crm-emails", label: "Email Centre (Gmail)", icon: Mail, allowedRoles: ["super_admin", "event_admin"] },
       { to: "/admin/registration-controls", label: "Registration Controls", icon: SlidersHorizontal, allowedRoles: ["super_admin", "event_admin"] },
       { to: "/admin/participation-registrations", label: "Participation", icon: Users, allowedRoles: ["super_admin", "event_admin"] },
       { to: "/admin/esports-registrations", label: "Esports Teams", icon: Gamepad2, allowedRoles: ["super_admin", "event_admin"] },
