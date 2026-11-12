@@ -40,7 +40,7 @@ function loadDotEnv() {
 
 const fileEnv = loadDotEnv();
 const url = process.env.VITE_SUPABASE_URL || fileEnv.VITE_SUPABASE_URL;
-const key = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || fileEnv.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || fileEnv.VITE_SUPABASE_ANON_KEY;
+const key = process.env.VITE_SUPABASE_ANON_KEY || fileEnv.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || fileEnv.VITE_SUPABASE_PUBLISHABLE_KEY;
 const mock = process.env.VITE_USE_MOCK || fileEnv.VITE_USE_MOCK;
 
 console.log('\n=============================================================');

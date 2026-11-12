@@ -9,13 +9,14 @@ import { supabase, checkSupabaseClientConfig } from "@/utils/supabase";
 export { supabase, checkSupabaseClientConfig };
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 export const isConfigured = Boolean(
   supabaseUrl &&
   supabaseKey &&
   supabaseUrl.startsWith("http") &&
-  !supabaseUrl.includes("your-project")
+  !supabaseUrl.includes("your-project") &&
+  !supabaseUrl.includes("placeholder")
 );
 
 export const isMockAllowed = false;
@@ -36,9 +37,9 @@ export function getSupabaseConnectionInfo() {
     : `Missing configuration: ${
         !supabaseUrl
           ? "VITE_SUPABASE_URL is missing"
-          : supabaseUrl.includes("your-project")
+          : supabaseUrl.includes("your-project") || supabaseUrl.includes("placeholder")
           ? "VITE_SUPABASE_URL contains placeholder value"
-          : "VITE_SUPABASE_PUBLISHABLE_KEY is missing"
+          : "VITE_SUPABASE_ANON_KEY is missing"
       }`;
 
   return {
