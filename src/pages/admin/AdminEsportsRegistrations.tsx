@@ -8,9 +8,12 @@ import {
   restoreRegistrationRecord,
   isRegistrationArchived,
   markRegistrationArchivedLocal,
+  sendRegistrationConfirmationEmail,
 } from "@/lib/registrationOperations";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
+import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import { archiveTicketToNas, getLocalNasArchives } from "@/lib/nasArchivalService";
 import {
   Search,
   CheckCircle2,
@@ -41,6 +44,7 @@ export interface EsportsRegistrationItem {
   phone: string;
   institution: string | null;
   status: string;
+  email_status?: string | null;
   admin_notes?: string | null;
   submitted_at: string;
   archived_at?: string | null;
@@ -159,21 +163,136 @@ export default function AdminEsportsRegistrations() {
 
       if (error) throw error;
 
+      let emailNotice = "";
+      if (newStatus === "confirmed") {
+        // 1. Generate and Archive Team Confirmation Document
+        try {
+          const teamDoc = await generateTicketPdf({
+            ticketRef: item.registration_ref,
+            recipientName: item.captain_name,
+            category: "Esports Squad",
+            email: item.email,
+            phone: item.phone,
+            institution: item.institution || undefined,
+            registrationType: "esports_team",
+            teamName: item.team_name,
+            projectTitle: item.gameTitle,
+          });
+
+          await archiveTicketToNas(teamDoc, {
+            ticketRef: item.registration_ref,
+            recipientName: item.captain_name,
+            category: "Esports Squad",
+            email: item.email,
+            phone: item.phone,
+            institution: item.institution || undefined,
+            registrationType: "esports_team",
+            teamName: item.team_name,
+            projectTitle: item.gameTitle,
+          }, item.id);
+
+          // 2. Generate and Archive Each Player's Individual Ticket
+          const squadPlayers = item.players || [];
+          for (let pIdx = 0; pIdx < squadPlayers.length; pIdx++) {
+            const player = squadPlayers[pIdx];
+            const playerTicketRef = `${item.registration_ref}-P${pIdx + 1}`;
+            const playerDoc = await generateTicketPdf({
+              ticketRef: playerTicketRef,
+              recipientName: player.player_name,
+              category: "Esports Player",
+              email: item.email,
+              phone: item.phone,
+              institution: item.institution || undefined,
+              registrationType: "esports_player",
+              applicationRef: item.registration_ref,
+              teamName: item.team_name,
+              gamerTag: player.gamer_tag || undefined,
+              playerSlot: pIdx + 1,
+            });
+
+            await archiveTicketToNas(playerDoc, {
+              ticketRef: playerTicketRef,
+              recipientName: player.player_name,
+              category: "Esports Player",
+              email: item.email,
+              phone: item.phone,
+              institution: item.institution || undefined,
+              registrationType: "esports_player",
+              applicationRef: item.registration_ref,
+              teamName: item.team_name,
+              gamerTag: player.gamer_tag || undefined,
+              playerSlot: pIdx + 1,
+            }, item.id);
+          }
+        } catch (nasErr) {
+          console.warn("Esports ticket generation / NAS archival notice:", nasErr);
+        }
+
+        const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", false);
+        if (emailRes.ok) {
+          emailNotice = " · Squad confirmation email dispatched to captain & tickets archived to NAS.";
+        } else {
+          emailNotice = ` · Email notice: ${emailRes.error}`;
+        }
+      }
+
       setRegistrations((prev) =>
-        prev.map((r) => (r.id === item.id ? { ...r, status: newStatus } : r))
+        prev.map((r) =>
+          r.id === item.id
+            ? {
+                ...r,
+                status: newStatus,
+                ...(newStatus === "confirmed" ? { email_status: "sent" } : {}),
+              }
+            : r
+        )
       );
       if (selectedReg && selectedReg.id === item.id) {
-        setSelectedReg({ ...selectedReg, status: newStatus });
+        setSelectedReg({
+          ...selectedReg,
+          status: newStatus,
+          ...(newStatus === "confirmed" ? { email_status: "sent" } : {}),
+        });
       }
       setStatusMessage({
         type: "success",
-        text: `Team "${item.team_name}" (${item.registration_ref}) status changed to ${newStatus}.`,
+        text: `Team "${item.team_name}" (${item.registration_ref}) status changed to ${newStatus}${emailNotice}`,
       });
-      setTimeout(() => setStatusMessage(null), 4000);
+      setTimeout(() => setStatusMessage(null), 5000);
     } catch (err: any) {
       setStatusMessage({
         type: "error",
         text: `Failed to update status: ${err.message || "Unknown error"}`,
+      });
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleResendEmail = async (item: ProcessedEsportsRegistration) => {
+    setUpdatingId(item.id);
+    setStatusMessage(null);
+    try {
+      const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", true);
+      if (emailRes.ok) {
+        setStatusMessage({
+          type: "success",
+          text: `Squad confirmation email re-sent successfully to captain (${item.email}).`,
+        });
+        setRegistrations((prev) =>
+          prev.map((r) => (r.id === item.id ? { ...r, email_status: "sent" } : r))
+        );
+        if (selectedReg && selectedReg.id === item.id) {
+          setSelectedReg({ ...selectedReg, email_status: "sent" });
+        }
+      } else {
+        throw new Error(emailRes.error || "Email delivery failed");
+      }
+      setTimeout(() => setStatusMessage(null), 5000);
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: `Failed to resend confirmation email: ${err.message || "Unknown error"}`,
       });
     } finally {
       setUpdatingId(null);
@@ -725,9 +844,27 @@ export default function AdminEsportsRegistrations() {
                       })}
                     </td>
 
-                    {/* Status Badge */}
+                    {/* Status Badge & Email Pill */}
                     <td className="py-3.5 px-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                      <AdminStatusBadge status={item.status} isArchived={item.isArchived} />
+                      <div className="space-y-1">
+                        <AdminStatusBadge status={item.status} isArchived={item.isArchived} />
+                        {item.status === "confirmed" && (
+                          <div>
+                            <span
+                              className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                                (item as any).email_status === "sent"
+                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                  : (item as any).email_status === "failed"
+                                  ? "bg-rose-50 text-rose-700 border border-rose-200"
+                                  : "bg-amber-50 text-amber-700 border border-amber-200"
+                              }`}
+                            >
+                              <Mail size={10} />
+                              <span>{(item as any).email_status || "sent"}</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </td>
 
                     {/* Actions */}
@@ -742,6 +879,18 @@ export default function AdminEsportsRegistrations() {
                           <Eye size={12} />
                           <span>View</span>
                         </button>
+
+                        {item.status === "confirmed" && (
+                          <button
+                            type="button"
+                            onClick={() => handleResendEmail(item)}
+                            disabled={updatingId === item.id}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer"
+                            title="Resend squad confirmation email to captain"
+                          >
+                            <Mail size={13} />
+                          </button>
+                        )}
 
                         {item.isArchived ? (
                           <button
@@ -923,9 +1072,10 @@ export default function AdminEsportsRegistrations() {
                     <table className="w-full text-left text-xs border-collapse">
                       <thead>
                         <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-500 font-mono text-[11px] uppercase">
-                          <th className="py-2.5 px-3 w-16">Slot</th>
+                          <th className="py-2.5 px-3 w-14">Slot</th>
                           <th className="py-2.5 px-3">Player Name</th>
                           <th className="py-2.5 px-3">In-Game Tag / ID</th>
+                          <th className="py-2.5 px-3">Visitor Ticket</th>
                           <th className="py-2.5 px-3 text-right">Role</th>
                         </tr>
                       </thead>
@@ -941,6 +1091,11 @@ export default function AdminEsportsRegistrations() {
                             <td className="py-2.5 px-3 font-mono text-slate-600">
                               <span className="bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
                                 {p.gamer_tag || "Not provided"}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-xs font-bold text-blue-700">
+                              <span className="bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                                {selectedReg.registration_ref}-P{idx + 1}
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-right">
@@ -960,6 +1115,88 @@ export default function AdminEsportsRegistrations() {
                     </table>
                   </div>
                 )}
+              </div>
+
+              {/* Ticketing & Email Dispatch Card */}
+              {/* Squad Ticketing, NAS Archival & Email Dispatch Card */}
+              <div className="p-4 rounded-xl bg-purple-50/60 border border-purple-200 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs font-bold uppercase tracking-wider text-purple-900">
+                    Squad Ticketing & NAS Archival
+                  </span>
+                  <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-white text-purple-700 border border-purple-200">
+                    Auto-Linked Roster Passes
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-1">
+                  <span className="text-slate-600">Captain Email:</span>
+                  <strong className="font-mono text-xs text-purple-900">{selectedReg.email}</strong>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-600">Email Status:</span>
+                  <span className="font-semibold text-slate-800 capitalize">
+                    {(selectedReg as any).email_status || (selectedReg.status === "confirmed" ? "sent" : "pending approval")}
+                  </span>
+                </div>
+
+                {/* NAS Archive Status */}
+                {(() => {
+                  const nasRecord = getLocalNasArchives().find((a) => a.ticketRef === selectedReg.registration_ref);
+                  return (
+                    <div className="pt-2 border-t border-purple-200/60 space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600">NAS Backup (Team Doc):</span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                          nasRecord?.status === "completed" 
+                            ? "bg-emerald-100 text-emerald-800" 
+                            : nasRecord?.status === "failed"
+                            ? "bg-rose-100 text-rose-800"
+                            : "bg-amber-100 text-amber-800"
+                        }`}>
+                          {nasRecord?.status || (selectedReg.status === "confirmed" ? "completed" : "pending approval")}
+                        </span>
+                      </div>
+                      {nasRecord && (
+                        <div className="text-[10px] font-mono text-slate-500 truncate" title={nasRecord.nasRelativePath}>
+                          Path: {nasRecord.nasRelativePath}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTicketPdfFile({
+                        ticketRef: selectedReg.registration_ref,
+                        recipientName: selectedReg.captain_name,
+                        category: "Esports Squad",
+                        email: selectedReg.email,
+                        phone: selectedReg.phone,
+                        institution: selectedReg.institution || undefined,
+                        registrationType: "esports_team",
+                        teamName: selectedReg.team_name,
+                        projectTitle: selectedReg.gameTitle,
+                      });
+                    }}
+                    className="py-2 px-3 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download size={13} />
+                    <span>Download Team Doc</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={updatingId === selectedReg.id}
+                    onClick={() => handleResendEmail(selectedReg)}
+                    className="py-2 px-3 rounded-lg bg-white hover:bg-purple-50 border border-purple-300 text-purple-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Mail size={13} />
+                    <span>Resend Captain Email</span>
+                  </button>
+                </div>
               </div>
 
               {/* SECTION D: Administrative Verification & Status Actions */}

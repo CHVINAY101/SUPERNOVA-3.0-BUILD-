@@ -11,6 +11,8 @@ import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription"
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
+import { downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import { getLocalNasArchives } from "@/lib/nasArchivalService";
 import { 
   Gamepad2, 
   Search, 
@@ -21,7 +23,8 @@ import {
   RotateCcw,
   Trash2,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Mail
 } from "lucide-react";
 
 export interface VisitorRegistrationRecord {
@@ -44,6 +47,7 @@ export interface VisitorRegistrationRecord {
   days_attending?: string | null;
   visitor_count?: number;
   status: string;
+  email_status?: string | null;
   admin_notes?: string | null;
   submitted_at: string;
   archived_at?: string | null;
@@ -132,7 +136,17 @@ export default function AdminVisitorRegistrations() {
       }
 
       if (newStatus === "confirmed") {
-        const emailRes = await sendRegistrationConfirmationEmail(id, "visitor", false);
+        const item = registrations?.find((r) => r.id === id) || inspectedRecord;
+        const emailRes = await sendRegistrationConfirmationEmail(id, "visitor", false, {
+          recipientEmail: item?.email,
+          recipientName: item?.full_name,
+          registrationRef: ref,
+          institution: item?.institution || undefined,
+          extraDetails: {
+            category: item?.visitor_category,
+            days: item?.days_attending,
+          },
+        });
         setStatusMsg({
           type: emailRes.ok ? "success" : "error",
           text: emailRes.ok
@@ -271,6 +285,71 @@ export default function AdminVisitorRegistrations() {
     if (cat.includes("BGMI")) return "BGMI";
     if (cat.includes("FREE FIRE")) return "Free Fire";
     return null;
+  };
+
+  const getRegistrationSource = (record: VisitorRegistrationRecord): { label: string; badge: string; linkedRef?: string } => {
+    const notes = record.admin_notes || "";
+    const cat = (record.visitor_category || "").toLowerCase();
+
+    if (notes.includes("LINKED_PARTICIPATION") || cat.includes("participant")) {
+      const match = notes.match(/LINKED_PARTICIPATION:\s*([A-Za-z0-9-]+)/);
+      return {
+        label: "Project Participant",
+        badge: "bg-emerald-50 text-emerald-700 border-emerald-200",
+        linkedRef: match ? match[1] : undefined,
+      };
+    }
+    if (notes.includes("LINKED_ESPORTS") || cat.includes("esports player")) {
+      const match = notes.match(/LINKED_ESPORTS_[A-Z]+:\s*([A-Za-z0-9-]+)/);
+      return {
+        label: "Esports Player",
+        badge: "bg-purple-50 text-purple-700 border-purple-200",
+        linkedRef: match ? match[1] : undefined,
+      };
+    }
+    return {
+      label: "Direct Visitor",
+      badge: "bg-blue-50 text-blue-700 border-blue-200",
+    };
+  };
+
+  const handleResendEmail = async (record: VisitorRegistrationRecord) => {
+    setSavingId(record.id);
+    setStatusMsg(null);
+    try {
+      const res = await sendRegistrationConfirmationEmail(record.id, "visitor", true, {
+        recipientEmail: record.email,
+        recipientName: record.full_name,
+        registrationRef: record.registration_ref,
+        institution: record.institution || undefined,
+        extraDetails: {
+          category: record.visitor_category,
+          days: record.days_attending,
+        },
+      });
+      if (res.ok) {
+        setStatusMsg({
+          type: "success",
+          text: `Visitor ticket pass resent successfully to ${record.email}.`,
+        });
+        setRegistrations((prev) =>
+          prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: "sent" } : item)) : null
+        );
+        if (inspectedRecord && inspectedRecord.id === record.id) {
+          setInspectedRecord({ ...inspectedRecord, email_status: "sent" });
+        }
+      } else {
+        throw new Error(res.error || "Email delivery failed");
+      }
+      setTimeout(() => setStatusMsg(null), 5000);
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: `Failed to resend confirmation email: ${err.message || "Unknown error"}`,
+      });
+    } finally {
+      setSavingId(null);
+    }
   };
 
   // Filtered registrations
@@ -642,6 +721,7 @@ export default function AdminVisitorRegistrations() {
                   const isEsports = getEsportsInterest(row);
                   const preferredGame = getPreferredGame(row);
                   const isArchived = isRegistrationArchived(row);
+                  const source = getRegistrationSource(row);
 
                   return (
                     <tr
@@ -649,9 +729,19 @@ export default function AdminVisitorRegistrations() {
                       onClick={() => setInspectedRecord(row)}
                       className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
                     >
-                      {/* Reference */}
+                      {/* Reference & Source */}
                       <td className="py-3.5 px-4 font-mono font-bold text-blue-700 whitespace-nowrap">
-                        {row.registration_ref}
+                        <div>{row.registration_ref}</div>
+                        <div className="mt-1 flex flex-col gap-0.5">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border ${source.badge}`}>
+                            {source.label}
+                          </span>
+                          {source.linkedRef && (
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              App: {source.linkedRef}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Visitor Name & Category */}
@@ -717,7 +807,23 @@ export default function AdminVisitorRegistrations() {
 
                       {/* Status */}
                       <td className="py-3.5 px-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        <AdminStatusBadge status={row.status} isArchived={isArchived} />
+                        <div className="space-y-1">
+                          <AdminStatusBadge status={row.status} isArchived={isArchived} />
+                          {row.status === "confirmed" && (
+                            <div>
+                              <span
+                                className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                                  row.email_status === "failed"
+                                    ? "bg-rose-50 text-rose-700 border border-rose-200"
+                                    : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                }`}
+                              >
+                                <Mail size={10} />
+                                <span>{row.email_status || "sent"}</span>
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       {/* Submitted Date */}
@@ -739,6 +845,18 @@ export default function AdminVisitorRegistrations() {
                             <Eye size={12} />
                             <span>View</span>
                           </button>
+
+                          {row.status === "confirmed" && (
+                            <button
+                              type="button"
+                              onClick={() => handleResendEmail(row)}
+                              disabled={savingId === row.id}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer"
+                              title="Resend visitor pass email"
+                            >
+                              <Mail size={13} />
+                            </button>
+                          )}
 
                           {isArchived ? (
                             <button
@@ -858,6 +976,95 @@ export default function AdminVisitorRegistrations() {
                       Archive
                     </button>
                   )}
+                </div>
+              </div>
+
+              {/* Ticketing & Email Dispatch Card */}
+              <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs font-bold uppercase tracking-wider text-blue-900">
+                    Visitor Ticket & Email Pass
+                  </span>
+                  <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-white text-blue-700 border border-blue-200">
+                    {getRegistrationSource(inspectedRecord).label}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-1">
+                  <span className="text-slate-600">Ticket Reference:</span>
+                  <strong className="font-mono text-xs text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-200">
+                    {inspectedRecord.registration_ref}
+                  </strong>
+                </div>
+                {getRegistrationSource(inspectedRecord).linkedRef && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Linked Application:</span>
+                    <strong className="font-mono text-xs text-slate-800">
+                      {getRegistrationSource(inspectedRecord).linkedRef}
+                    </strong>
+                  </div>
+                )}
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-600">Email Status:</span>
+                  <span className="font-semibold text-slate-800 capitalize">
+                    {inspectedRecord.email_status || (inspectedRecord.status === "confirmed" ? "sent" : "pending confirmation")}
+                  </span>
+                </div>
+                {/* NAS Archive Status */}
+                {(() => {
+                  const nasRecord = getLocalNasArchives().find((a) => a.ticketRef === inspectedRecord.registration_ref);
+                  return (
+                    <div className="pt-2 border-t border-blue-200/60 space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600">NAS Backup:</span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                          nasRecord?.status === "completed" 
+                            ? "bg-emerald-100 text-emerald-800" 
+                            : nasRecord?.status === "failed"
+                            ? "bg-rose-100 text-rose-800"
+                            : "bg-amber-100 text-amber-800"
+                        }`}>
+                          {nasRecord?.status || (inspectedRecord.status === "confirmed" ? "completed" : "pending")}
+                        </span>
+                      </div>
+                      {nasRecord && (
+                        <div className="text-[10px] font-mono text-slate-500 truncate" title={nasRecord.nasRelativePath}>
+                          Path: {nasRecord.nasRelativePath}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadTicketPdfFile({
+                        ticketRef: inspectedRecord.registration_ref,
+                        recipientName: inspectedRecord.full_name,
+                        category: inspectedRecord.visitor_category || "General Visitor",
+                        email: inspectedRecord.email,
+                        phone: inspectedRecord.phone,
+                        institution: inspectedRecord.institution || undefined,
+                        registrationType: "visitor",
+                        daysAttending: inspectedRecord.days_attending || undefined,
+                      });
+                    }}
+                    className="py-2 px-3 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download size={13} />
+                    <span>Download Ticket</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={savingId === inspectedRecord.id}
+                    onClick={() => handleResendEmail(inspectedRecord)}
+                    className="py-2 px-3 rounded-lg bg-white hover:bg-blue-50 border border-blue-300 text-blue-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Mail size={13} />
+                    <span>Resend Email</span>
+                  </button>
                 </div>
               </div>
 

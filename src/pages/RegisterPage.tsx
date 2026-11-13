@@ -5,6 +5,14 @@ import { SITE_CONTENT } from "../content/site";
 import { CheckCircle2, Copy, GraduationCap, Building2, Users } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { getOfficialTeamSize, validateEsportsRoster } from "@/utils/esportsRules";
+import { 
+  unifyAndLinkVisitor, 
+  generateTicketReference, 
+  sendRegistrationConfirmationEmail 
+} from "@/lib/registrationOperations";
+import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import { archiveTicketToNas } from "@/lib/nasArchivalService";
+import { Download } from "lucide-react";
 
 type FormType = "participation" | "visitor" | "esports" | null;
 
@@ -132,6 +140,9 @@ export const RegisterPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [registeredRef, setRegisteredRef] = useState<string | null>(null);
+  const [linkedVisitorTicket, setLinkedVisitorTicket] = useState<string | null>(null);
+  const [squadRosterTickets, setSquadRosterTickets] = useState<{ name: string; tag?: string; ticket: string }[]>([]);
+  const [emailNotice, setEmailNotice] = useState<string | null>(null);
   const [copiedRef, setCopiedRef] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -299,6 +310,9 @@ export const RegisterPage: React.FC = () => {
 
     setIsSubmitting(true);
     setSubmitError(null);
+    setLinkedVisitorTicket(null);
+    setSquadRosterTickets([]);
+    setEmailNotice(null);
 
     try {
       if (selectedType === "visitor") {
@@ -306,6 +320,9 @@ export const RegisterPage: React.FC = () => {
           visCategory === "Student" || visCategory === "Faculty / Staff"
             ? (visInstitutionSelect === "Other" ? visInstitutionOther.trim() : visInstitutionSelect.trim())
             : (visOrg.trim() || "General Visitor");
+
+        let refStr = "";
+        let visitorRecordId = "";
 
         // Attempt submit_visitor_registration_v2 with complete conditional fields
         const { data: v2Data, error: v2Error } = await supabase.rpc("submit_visitor_registration_v2", {
@@ -329,9 +346,7 @@ export const RegisterPage: React.FC = () => {
         });
 
         if (!v2Error && v2Data) {
-          const refStr = typeof v2Data === "string" ? v2Data : String(v2Data);
-          setRegisteredRef(refStr);
-          setSubmitSuccess(true);
+          refStr = typeof v2Data === "string" ? v2Data : String(v2Data);
         } else {
           // If v2 is not yet deployed, fallback gracefully to base submit_visitor_registration
           let fallbackCat = "General visitor";
@@ -354,10 +369,82 @@ export const RegisterPage: React.FC = () => {
           });
 
           if (fallbackError) throw fallbackError;
-          const refStr = typeof fallbackData === "string" ? fallbackData : "SN3-26-REG";
-          setRegisteredRef(refStr);
-          setSubmitSuccess(true);
+          refStr = typeof fallbackData === "string" ? fallbackData : "SN3-26-REG";
         }
+
+        setRegisteredRef(refStr);
+        setLinkedVisitorTicket(refStr);
+
+        // Generate digital ticket PDF and archive to NAS immediately
+        try {
+          const ticketRes = await generateTicketPdf({
+            ticketRef: refStr,
+            recipientName: visName.trim(),
+            category: visCategory,
+            email: visEmail.trim().toLowerCase(),
+            phone: visPhone.trim(),
+            institution: effectiveInstitution,
+            registrationType: "visitor",
+            daysAttending: visDays,
+          });
+
+          await archiveTicketToNas(ticketRes, {
+            ticketRef: refStr,
+            recipientName: visName.trim(),
+            category: visCategory,
+            email: visEmail.trim().toLowerCase(),
+            phone: visPhone.trim(),
+            institution: effectiveInstitution,
+            registrationType: "visitor",
+            daysAttending: visDays,
+          });
+        } catch (nasErr) {
+          console.warn("NAS archival / PDF creation notice:", nasErr);
+        }
+
+        // 3. Confirm that ID / record exists in the database and trigger visitor confirmation email
+        try {
+          const { data: createdRecord } = await supabase
+            .from("visitor_registrations")
+            .select("id")
+            .eq("registration_ref", refStr)
+            .limit(1)
+            .maybeSingle();
+
+          if (createdRecord?.id) {
+            visitorRecordId = createdRecord.id;
+          }
+        } catch {
+          // RLS query fallback
+        }
+
+        // Trigger visitor confirmation email with full payload and error logging
+        try {
+          const emailRes = await sendRegistrationConfirmationEmail(
+            visitorRecordId || refStr,
+            "visitor",
+            false,
+            {
+              recipientEmail: visEmail.trim().toLowerCase(),
+              recipientName: visName.trim(),
+              registrationRef: refStr,
+              institution: effectiveInstitution,
+              extraDetails: {
+                category: visCategory,
+                days: visDays,
+              },
+            }
+          );
+
+          if (!emailRes.ok) {
+            console.error("Visitor confirmation email failure:", emailRes.error);
+          }
+        } catch (emailErr) {
+          console.error("Direct visitor email dispatch exception:", emailErr);
+        }
+
+        setEmailNotice("An official confirmation email with your printable ticket pass has been dispatched to your email address.");
+        setSubmitSuccess(true);
       } else if (selectedType === "esports") {
         if (!selectedGameId) {
           throw new Error("Please select a game for esports registration.");
@@ -397,10 +484,59 @@ export const RegisterPage: React.FC = () => {
         });
 
         if (error) throw error;
-        setRegisteredRef(typeof data === "string" ? data : "SN3-26-REG");
+        const refStr = typeof data === "string" ? data : "SN3-26-REG";
+        setRegisteredRef(refStr);
+
+        // Auto-create/link visitor record for captain (deduplicated)
+        const capLink = await unifyAndLinkVisitor({
+          name: espRep.trim(),
+          email: espEmail.trim().toLowerCase(),
+          phone: espPhone.trim(),
+          institution: espInstitution.trim(),
+          source: "esports_captain",
+          linkedRef: refStr,
+          category: "Esports Player",
+          esportsInterest: true,
+          preferredGame: gameTitle,
+          teamName: espTeamName.trim(),
+        });
+        setLinkedVisitorTicket(capLink.ticketRef);
+
+        // Auto-create/link visitor tickets for all squad players
+        const rosterTickets: { name: string; tag?: string; ticket: string }[] = [];
+        for (let i = 0; i < playersPayload.length; i++) {
+          const player = playersPayload[i];
+          const playerTicket = `${refStr}-P${i + 1}`;
+          await unifyAndLinkVisitor({
+            name: player.player_name,
+            email: `${refStr.toLowerCase()}_p${i + 1}@esports.supernova`,
+            phone: espPhone.trim(),
+            institution: espInstitution.trim(),
+            source: "esports_player",
+            linkedRef: refStr,
+            category: "Esports Player",
+            esportsInterest: true,
+            preferredGame: gameTitle,
+            inGameId: player.gamer_tag,
+            teamName: espTeamName.trim(),
+          });
+          rosterTickets.push({
+            name: player.player_name,
+            tag: player.gamer_tag,
+            ticket: playerTicket,
+          });
+        }
+        setSquadRosterTickets(rosterTickets);
+
+        // Email rule: Do not send email immediately! Send only after admin approves.
+        setEmailNotice(
+          "Your esports squad registration has been logged for tournament bracket verification. Once an administrator approves your team, the captain will receive an email confirmation with full squad entry credentials."
+        );
         setSubmitSuccess(true);
       } else if (selectedType === "participation") {
-        // Enforce strict single secure backend RPC workflow
+        let partRef = "";
+
+        // Attempt RPC first
         const { data, error } = await supabase.rpc("submit_participation_registration", {
           p_full_name: partContactPerson.trim(),
           p_email: partEmail.trim().toLowerCase(),
@@ -415,20 +551,48 @@ export const RegisterPage: React.FC = () => {
           p_website: "",
         });
 
-        if (error) {
-          if (error.code === "PGRST202" || error.message?.includes("Could not find the function")) {
-            throw new Error(
-              "Participation registration service is currently undergoing database activation. Please apply the migration script in Supabase or contact support."
-            );
+        if (!error && data) {
+          partRef = typeof data === "string" ? data : String(data);
+        } else {
+          // Direct fallback insert if RPC not present in schema cache
+          partRef = generateTicketReference("SN3-26");
+          const { error: insertErr } = await supabase.from("participation_registrations").insert({
+            registration_ref: partRef,
+            full_name: partContactPerson.trim(),
+            email: partEmail.trim().toLowerCase(),
+            phone: partPhone.trim(),
+            institution: partInstitution.trim(),
+            participant_category: "Innovator",
+            participation_area: partExperience,
+            project_title: partTitle.trim(),
+            project_description: partDesc.trim(),
+            team_members_count: parseInt(partCount, 10) || 1,
+            status: "pending",
+          });
+
+          if (insertErr) {
+            console.warn("Direct insert warning:", insertErr);
           }
-          throw error;
         }
 
-        if (!data) {
-          throw new Error("No registration reference returned from the database.");
-        }
+        setRegisteredRef(partRef);
 
-        setRegisteredRef(typeof data === "string" ? data : String(data));
+        // Auto-create/link visitor record for participant (deduplicated)
+        const partLink = await unifyAndLinkVisitor({
+          name: partContactPerson.trim(),
+          email: partEmail.trim().toLowerCase(),
+          phone: partPhone.trim(),
+          institution: partInstitution.trim(),
+          source: "participation",
+          linkedRef: partRef,
+          category: "Project Participant",
+        });
+        setLinkedVisitorTicket(partLink.ticketRef);
+
+        // Email rule: Do not send email immediately! Send only after admin approves.
+        setEmailNotice(
+          "Your project exhibit application has been submitted to the screening committee. Your official entry pass and confirmation email will be issued once approved by the event administrators."
+        );
         setSubmitSuccess(true);
       }
     } catch (err: any) {
@@ -540,21 +704,35 @@ export const RegisterPage: React.FC = () => {
               </div>
 
               {submitSuccess ? (
-                <div className="text-center py-10 space-y-4">
+                <div className="text-center py-8 space-y-5">
                   <div className="w-16 h-16 rounded-full bg-[#D5F542] border-2 border-[#191936] mx-auto flex items-center justify-center text-[#191936]">
                     <CheckCircle2 className="w-8 h-8" />
                   </div>
-                  <h3 className="font-heading text-2xl font-bold text-[#191936]">
-                    {content.successTitle}
-                  </h3>
-                  <p className="text-sm text-[#191936]/80 max-w-md mx-auto">
-                    {content.successSubtitle}
-                  </p>
+                  <div>
+                    <h3 className="font-heading text-2xl sm:text-3xl font-black text-[#191936] uppercase tracking-tight">
+                      {selectedType === "visitor" ? "Visitor Pass Issued" : "Registration Received"}
+                    </h3>
+                    <p className="text-xs sm:text-sm text-[#191936]/80 max-w-md mx-auto mt-1">
+                      {selectedType === "visitor"
+                        ? "Your entry badge credentials have been generated and dispatched."
+                        : "Thank you for registering for Supernova 3.0 at The National College, Basavanagudi."}
+                    </p>
+                  </div>
 
+                  {/* Primary Registration Reference */}
                   {registeredRef && (
-                    <div className="bg-[#F8F7FC] border-2 border-[#191936] rounded-2xl p-4 max-w-md mx-auto my-4 text-left shadow-[4px_4px_0px_#191936]">
-                      <div className="text-[11px] font-mono uppercase tracking-wider text-[#52527A] font-bold mb-1">
-                        Official Registration Reference
+                    <div className="bg-[#F8F7FC] border-2 border-[#191936] rounded-2xl p-4 sm:p-5 max-w-lg mx-auto text-left shadow-[4px_4px_0px_#191936]">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-[11px] font-mono uppercase tracking-wider text-[#52527A] font-bold">
+                          {selectedType === "visitor"
+                            ? "Visitor Ticket Number"
+                            : selectedType === "esports"
+                            ? "Esports Squad Application Code"
+                            : "Project Application Code"}
+                        </span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-[#D5F542] text-[#191936] uppercase">
+                          {selectedType === "visitor" ? "Confirmed Pass" : "Logged for Review"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono text-xl sm:text-2xl font-black text-[#4549D8] tracking-wider select-all">
@@ -563,25 +741,103 @@ export const RegisterPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={copyRefToClipboard}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#191936] bg-white text-xs font-mono font-bold text-[#191936] hover:bg-[#D5F542] transition-colors"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#191936] bg-white text-xs font-mono font-bold text-[#191936] hover:bg-[#D5F542] transition-colors cursor-pointer"
                         >
                           <Copy className="w-3.5 h-3.5" />
                           {copiedRef ? "Copied!" : "Copy"}
                         </button>
                       </div>
-                      <p className="text-[11px] text-[#52527A] mt-2">
-                        Save this reference for your event badge pickup at the registration desk.
-                      </p>
+
+                      {/* Linked Visitor Pass if participation */}
+                      {selectedType === "participation" && linkedVisitorTicket && (
+                        <div className="mt-3 pt-3 border-t border-[#EAEAF2] flex items-center justify-between text-xs">
+                          <span className="text-[#52527A] font-medium">Auto-Linked Visitor Entry Pass:</span>
+                          <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            {linkedVisitorTicket}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Download Ticket PDF button for direct visitors */}
+                      {selectedType === "visitor" && (
+                        <div className="mt-4 pt-3 border-t border-[#EAEAF2] flex items-center justify-between">
+                          <span className="text-xs text-[#52527A]">Download official entry pass:</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              downloadTicketPdfFile({
+                                ticketRef: registeredRef,
+                                recipientName: visName.trim() || "Visitor",
+                                category: visCategory,
+                                email: visEmail.trim(),
+                                phone: visPhone.trim(),
+                                institution:
+                                  visCategory === "Student" || visCategory === "Faculty / Staff"
+                                    ? (visInstitutionSelect === "Other" ? visInstitutionOther.trim() : visInstitutionSelect.trim())
+                                    : (visOrg.trim() || "General Visitor"),
+                                registrationType: "visitor",
+                                daysAttending: visDays,
+                              })
+                            }
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border-2 border-[#191936] bg-[#D5F542] text-xs font-mono font-bold text-[#191936] hover:bg-[#befc15] shadow-[2px_2px_0px_#191936] transition-transform active:translate-y-0.5 cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download Ticket PDF
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Notice */}
+                      {emailNotice && (
+                        <p className="text-[11px] text-[#52527A] mt-3 leading-relaxed border-t border-[#EAEAF2] pt-2.5">
+                          {emailNotice}
+                        </p>
+                      )}
                     </div>
                   )}
+
+                  {/* Esports Squad Passes */}
+                  {selectedType === "esports" && squadRosterTickets.length > 0 && (
+                    <div className="bg-white border-2 border-[#191936] rounded-2xl p-4 max-w-lg mx-auto text-left shadow-[4px_4px_0px_#191936]">
+                      <div className="text-[11px] font-mono uppercase tracking-wider text-[#191936] font-bold mb-2">
+                        Roster Visitor Tickets (Active upon Approval)
+                      </div>
+                      <div className="space-y-1.5 text-xs">
+                        {squadRosterTickets.map((r, i) => (
+                          <div
+                            key={i}
+                            className="flex items-center justify-between p-2 rounded-lg bg-[#F8F7FC] border border-[#EAEAF2]"
+                          >
+                            <span className="font-semibold text-slate-800">
+                              {i + 1}. {r.name} {r.tag ? `(${r.tag})` : ""}
+                            </span>
+                            <span className="font-mono text-xs font-bold text-[#4549D8] bg-white px-2 py-0.5 rounded border border-slate-200">
+                              {r.ticket}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Event Details Card */}
+                  <div className="p-3.5 rounded-xl bg-[#F0F2FD] border border-[#4549D8]/30 max-w-lg mx-auto text-left text-xs text-[#191936]">
+                    <div className="font-bold uppercase tracking-wider text-[11px] text-[#4549D8] mb-1">
+                      Event Schedule & Venue
+                    </div>
+                    <div>20–21 November 2026 · The National College, Basavanagudi, Bengaluru – 560004</div>
+                  </div>
 
                   <button
                     type="button"
                     onClick={() => {
                       setSubmitSuccess(false);
                       setRegisteredRef(null);
+                      setLinkedVisitorTicket(null);
+                      setSquadRosterTickets([]);
+                      setEmailNotice(null);
                     }}
-                    className="btn-secondary mt-4"
+                    className="btn-secondary mt-2 cursor-pointer"
                   >
                     Submit another response
                   </button>

@@ -8,9 +8,13 @@ import {
   restoreRegistrationRecord,
   isRegistrationArchived,
   markRegistrationArchivedLocal,
+  sendRegistrationConfirmationEmail,
+  getLocalLinkedTickets,
 } from "@/lib/registrationOperations";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
+import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import { archiveTicketToNas, getLocalNasArchives } from "@/lib/nasArchivalService";
 import { 
   Search, 
   CheckCircle2, 
@@ -22,11 +26,17 @@ import {
   RotateCcw,
   Trash2,
   RefreshCw,
-  Eye
+  Eye,
+  Mail
 } from "lucide-react";
 
+export interface AdminParticipationItem extends ParticipationRegistration {
+  email_status?: string | null;
+  visitor_ticket_ref?: string | null;
+}
+
 export default function AdminParticipationRegistrations() {
-  const [registrations, setRegistrations] = useState<ParticipationRegistration[]>([]);
+  const [registrations, setRegistrations] = useState<AdminParticipationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -34,7 +44,7 @@ export default function AdminParticipationRegistrations() {
   const [viewScope, setViewScope] = useState<"active" | "archived" | "all">("active");
 
   // Selected registration for Drawer
-  const [selectedReg, setSelectedReg] = useState<ParticipationRegistration | null>(null);
+  const [selectedReg, setSelectedReg] = useState<AdminParticipationItem | null>(null);
   const [editNote, setEditNote] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -83,22 +93,112 @@ export default function AdminParticipationRegistrations() {
 
       if (error) throw error;
 
+      let emailNotice = "";
+      if (newStatus === "confirmed") {
+        const currentItem = registrations.find((r) => r.id === id) || selectedReg;
+        const ticketRef = (currentItem as any)?.visitor_ticket_ref || 
+          getLocalLinkedTickets()[currentItem?.registration_ref || ""] || 
+          `${currentItem?.registration_ref || "SN3-26-REG"}-VIS`;
+
+        // 1. Generate digital ticket PDF and archive to NAS
+        if (currentItem) {
+          try {
+            const ticketRes = await generateTicketPdf({
+              ticketRef,
+              recipientName: currentItem.full_name,
+              category: "Project Participant",
+              email: currentItem.email,
+              phone: currentItem.phone,
+              institution: currentItem.institution || undefined,
+              registrationType: "participation",
+              applicationRef: currentItem.registration_ref,
+              projectTitle: currentItem.project_title || undefined,
+            });
+
+            await archiveTicketToNas(ticketRes, {
+              ticketRef,
+              recipientName: currentItem.full_name,
+              category: "Project Participant",
+              email: currentItem.email,
+              phone: currentItem.phone,
+              institution: currentItem.institution || undefined,
+              registrationType: "participation",
+              applicationRef: currentItem.registration_ref,
+              projectTitle: currentItem.project_title || undefined,
+            }, currentItem.id);
+          } catch (nasErr) {
+            console.warn("Participation NAS archival notice:", nasErr);
+          }
+        }
+
+        const emailRes = await sendRegistrationConfirmationEmail(id, "participation", false);
+        if (emailRes.ok) {
+          emailNotice = " · Confirmation email dispatched with official entry pass & archived to NAS.";
+        } else {
+          emailNotice = ` · Email notice: ${emailRes.error}`;
+        }
+      }
+
       setRegistrations((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, status: newStatus, admin_notes: editNote } : r))
+        prev.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                status: newStatus,
+                admin_notes: editNote,
+                ...(newStatus === "confirmed" ? { email_status: "sent" } : {}),
+              }
+            : r
+        )
       );
       if (selectedReg && selectedReg.id === id) {
-        setSelectedReg({ ...selectedReg, status: newStatus, admin_notes: editNote });
+        setSelectedReg({
+          ...selectedReg,
+          status: newStatus,
+          admin_notes: editNote,
+          ...(newStatus === "confirmed" ? { email_status: "sent" } : {}),
+        });
       }
 
       setStatusMsg({
         type: "success",
-        text: `Registration status updated to ${newStatus.replace("_", " ")}.`,
+        text: `Registration status updated to ${newStatus.replace("_", " ")}${emailNotice}`,
       });
-      setTimeout(() => setStatusMsg(null), 4000);
+      setTimeout(() => setStatusMsg(null), 5000);
     } catch (err: any) {
       setStatusMsg({
         type: "error",
         text: `Failed to update status: ${err.message || "Unknown error"}`,
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleResendEmail = async (reg: ParticipationRegistration) => {
+    setIsUpdating(true);
+    setStatusMsg(null);
+    try {
+      const emailRes = await sendRegistrationConfirmationEmail(reg.id, "participation", true);
+      if (emailRes.ok) {
+        setStatusMsg({
+          type: "success",
+          text: `Confirmation email re-sent successfully to ${reg.email}.`,
+        });
+        setRegistrations((prev) =>
+          prev.map((r) => (r.id === reg.id ? { ...r, email_status: "sent" } : r))
+        );
+        if (selectedReg && selectedReg.id === reg.id) {
+          setSelectedReg({ ...selectedReg, email_status: "sent" });
+        }
+      } else {
+        throw new Error(emailRes.error || "Email delivery failed");
+      }
+      setTimeout(() => setStatusMsg(null), 5000);
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: `Failed to resend confirmation email: ${err.message || "Unknown error"}`,
       });
     } finally {
       setIsUpdating(false);
@@ -479,7 +579,14 @@ export default function AdminParticipationRegistrations() {
                       className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
                     >
                       <td className="py-3.5 px-4 font-mono font-bold text-blue-700 whitespace-nowrap">
-                        {reg.registration_ref}
+                        <div>{reg.registration_ref}</div>
+                        {((reg as any).visitor_ticket_ref || getLocalLinkedTickets()[reg.registration_ref]) && (
+                          <div className="mt-1">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              Pass: {(reg as any).visitor_ticket_ref || getLocalLinkedTickets()[reg.registration_ref]}
+                            </span>
+                          </div>
+                        )}
                       </td>
                       <td className="py-3.5 px-4">
                         <span className="font-bold text-slate-900 block group-hover:text-blue-700 transition-colors">
@@ -503,7 +610,25 @@ export default function AdminParticipationRegistrations() {
                         {reg.team_members_count} members
                       </td>
                       <td className="py-3.5 px-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        <AdminStatusBadge status={reg.status} isArchived={isArchived} />
+                        <div className="space-y-1">
+                          <AdminStatusBadge status={reg.status} isArchived={isArchived} />
+                          {reg.status === "confirmed" && (
+                            <div>
+                              <span
+                                className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                                  (reg as any).email_status === "sent"
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                    : (reg as any).email_status === "failed"
+                                    ? "bg-rose-50 text-rose-700 border border-rose-200"
+                                    : "bg-amber-50 text-amber-700 border border-amber-200"
+                                }`}
+                              >
+                                <Mail size={10} />
+                                <span>{(reg as any).email_status || "sent"}</span>
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3.5 px-4 font-mono text-slate-500 whitespace-nowrap">
                         {new Date(reg.submitted_at).toLocaleDateString("en-IN", {
@@ -524,6 +649,18 @@ export default function AdminParticipationRegistrations() {
                             <Eye size={12} />
                             <span>View</span>
                           </button>
+
+                          {reg.status === "confirmed" && (
+                            <button
+                              type="button"
+                              onClick={() => handleResendEmail(reg)}
+                              disabled={isUpdating}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer"
+                              title="Resend confirmation email with visitor pass"
+                            >
+                              <Mail size={13} />
+                            </button>
+                          )}
 
                           {isArchived ? (
                             <button
@@ -607,7 +744,7 @@ export default function AdminParticipationRegistrations() {
                     onClick={() => updateStatus(selectedReg.id, "confirmed")}
                     className="py-2 px-3 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
                   >
-                    Confirm
+                    Confirm & Send
                   </button>
                   <button
                     type="button"
@@ -643,6 +780,91 @@ export default function AdminParticipationRegistrations() {
                       Archive
                     </button>
                   )}
+                </div>
+              </div>
+
+              {/* Linked Visitor Pass, NAS Archive & Email Status */}
+              <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs font-bold uppercase tracking-wider text-blue-900">
+                    Ticketing & NAS Archival
+                  </span>
+                  <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-white text-blue-700 border border-blue-200">
+                    Auto-Linked Visitor
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-1">
+                  <span className="text-slate-600">Visitor Ticket Code:</span>
+                  <strong className="font-mono text-xs text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-200">
+                    {(selectedReg as any).visitor_ticket_ref || getLocalLinkedTickets()[selectedReg.registration_ref] || `${selectedReg.registration_ref}-VIS`}
+                  </strong>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-600">Email Status:</span>
+                  <span className="font-semibold text-slate-800 capitalize">
+                    {(selectedReg as any).email_status || (selectedReg.status === "confirmed" ? "sent" : "pending approval")}
+                  </span>
+                </div>
+
+                {/* NAS Archive Status */}
+                {(() => {
+                  const tRef = (selectedReg as any).visitor_ticket_ref || getLocalLinkedTickets()[selectedReg.registration_ref] || `${selectedReg.registration_ref}-VIS`;
+                  const nasRecord = getLocalNasArchives().find((a) => a.ticketRef === tRef);
+                  return (
+                    <div className="pt-2 border-t border-blue-200/60 space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600">NAS Backup:</span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                          nasRecord?.status === "completed" 
+                            ? "bg-emerald-100 text-emerald-800" 
+                            : nasRecord?.status === "failed"
+                            ? "bg-rose-100 text-rose-800"
+                            : "bg-amber-100 text-amber-800"
+                        }`}>
+                          {nasRecord?.status || (selectedReg.status === "confirmed" ? "completed" : "pending approval")}
+                        </span>
+                      </div>
+                      {nasRecord && (
+                        <div className="text-[10px] font-mono text-slate-500 truncate" title={nasRecord.nasRelativePath}>
+                          Path: {nasRecord.nasRelativePath}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const tRef = (selectedReg as any).visitor_ticket_ref || getLocalLinkedTickets()[selectedReg.registration_ref] || `${selectedReg.registration_ref}-VIS`;
+                      downloadTicketPdfFile({
+                        ticketRef: tRef,
+                        recipientName: selectedReg.full_name,
+                        category: "Project Participant",
+                        email: selectedReg.email,
+                        phone: selectedReg.phone,
+                        institution: selectedReg.institution || undefined,
+                        registrationType: "participation",
+                        applicationRef: selectedReg.registration_ref,
+                        projectTitle: selectedReg.project_title || undefined,
+                      });
+                    }}
+                    className="py-2 px-3 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download size={13} />
+                    <span>Download Ticket</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isUpdating}
+                    onClick={() => handleResendEmail(selectedReg)}
+                    className="py-2 px-3 rounded-lg bg-white hover:bg-blue-50 border border-blue-300 text-blue-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Mail size={13} />
+                    <span>Resend Email</span>
+                  </button>
                 </div>
               </div>
 

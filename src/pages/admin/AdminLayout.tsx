@@ -25,8 +25,10 @@ import {
   Download,
   Mail,
   Menu,
-  X
+  X,
+  Search
 } from "lucide-react";
+import { TicketVerificationModal } from "@/components/admin/TicketVerificationModal";
 
 interface NavItem {
   to: string;
@@ -89,6 +91,7 @@ export default function AdminLayout() {
   const { signOut, user, role } = useAuth();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isLookupOpen, setIsLookupOpen] = useState(false);
 
   const handleSignOut = async () => {
     await signOut();
@@ -115,14 +118,24 @@ export default function AdminLayout() {
             <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider">CMS & CRM</span>
           </div>
         </Link>
-        <button
-          type="button"
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white"
-          aria-label="Toggle navigation"
-        >
-          {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsLookupOpen(true)}
+            className="p-1.5 rounded-lg bg-cyan-950 border border-cyan-800 text-cyan-300 hover:text-white"
+            title="Search & Verify Ticket"
+          >
+            <Search size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white"
+            aria-label="Toggle navigation"
+          >
+            {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+        </div>
       </div>
 
       {/* Backdrop for mobile drawer */}
@@ -163,7 +176,7 @@ export default function AdminLayout() {
               <X size={18} />
             </button>
           </div>
-          <div>
+          <div className="flex flex-col gap-2">
             <Link
               to="/"
               target="_blank"
@@ -173,6 +186,15 @@ export default function AdminLayout() {
               <span>View Public Portal</span>
               <ExternalLink size={11} />
             </Link>
+
+            <button
+              type="button"
+              onClick={() => setIsLookupOpen(true)}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 text-xs font-semibold transition-all cursor-pointer shadow-xs"
+            >
+              <Search size={13} />
+              <span>Verify Ticket / Pass</span>
+            </button>
           </div>
         </div>
 
@@ -243,6 +265,12 @@ export default function AdminLayout() {
           <Outlet />
         </div>
       </main>
+
+      {/* Universal Ticket Lookup & Verification Modal */}
+      <TicketVerificationModal
+        isOpen={isLookupOpen}
+        onClose={() => setIsLookupOpen(false)}
+      />
     </div>
   );
 }
