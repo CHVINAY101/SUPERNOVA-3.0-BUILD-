@@ -56,7 +56,7 @@ const navSections: NavSection[] = [
   {
     title: "Registrations & CRM",
     items: [
-      { to: "/admin/crm-emails", label: "Email Centre (Gmail)", icon: Mail },
+      { to: "/admin/crm-emails", label: "Email Centre", icon: Mail },
       { to: "/admin/participation-registrations", label: "Participation", icon: Users },
       { to: "/admin/esports-registrations", label: "Esports Teams", icon: Gamepad2 },
       { to: "/admin/visitor-registrations", label: "Visitors", icon: UserCheck },

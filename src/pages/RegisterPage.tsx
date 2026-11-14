@@ -461,7 +461,7 @@ export const RegisterPage: React.FC = () => {
 
         // Best-effort email copy (ticket issuance does NOT depend on email delivery)
         let emailNoticeText =
-          "Your official pass is active immediately above — download your PDF ticket or screenshot your QR pass now. You can also retrieve it anytime using your Ticket Reference, Email, and Phone.";
+          "Your official pass is active immediately above — download your PDF ticket or screenshot your QR pass now. Email delivery unavailable; please save or download your pass directly.";
         try {
           const emailRes = await sendRegistrationConfirmationEmail(
             submissionRes.registrationId || ticketRef,
@@ -483,6 +483,9 @@ export const RegisterPage: React.FC = () => {
           if (emailRes.ok && !emailRes.simulated) {
             emailNoticeText =
               "Your official pass is active immediately above, and a copy of your PDF ticket has also been emailed to you.";
+          } else if (emailRes.unavailable) {
+            emailNoticeText =
+              "Your official pass is active immediately above — download your PDF ticket or screenshot your QR pass now. Email delivery unavailable; please save or download your pass directly.";
           }
         } catch {
           // Email is optional; ticket pass is already generated and downloadable directly

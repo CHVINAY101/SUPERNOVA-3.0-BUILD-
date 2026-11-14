@@ -1,11 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildCheckInInsertPayload,
+  buildRegistrationCheckInPatch,
   computeEntryStatistics,
   DEFAULT_WRISTBAND_CATEGORIES,
   evaluateEsportsPlayerEntry,
   evaluateVisitorEntry,
+  isUuidString,
   parseTicketQrPayload,
+  toUuidOrNull,
   validateWristbandIssuance,
 } from "./entryOperations.ts";
 import type {
@@ -336,5 +340,60 @@ describe("Event Entry, QR Verification & Wristband Operations (Scenarios 1–9)"
     assert.equal(stats.entriesByDay["2026-11-20"], 2);
     assert.equal(stats.checkInsByStaff["staffA@supernova.edu"], 1);
     assert.equal(stats.checkInsByStaff["staffB@supernova.edu"], 1);
+  });
+
+  it("Scenario 10: UUID-safe check-in payloads NEVER pass staff email into checked_in_by UUID columns", () => {
+    const validUuid = "550e8400-e29b-41d4-a716-446655440000";
+    const staffEmail = "animationthenationalcollege@gmail.com";
+
+    assert.equal(isUuidString(validUuid), true);
+    assert.equal(isUuidString(staffEmail), false);
+    assert.equal(toUuidOrNull(validUuid), validUuid);
+    assert.equal(toUuidOrNull(staffEmail), null);
+    assert.equal(toUuidOrNull(undefined), null);
+
+    // When actorUserId is mistakenly an email or missing, checked_in_by becomes null (never the email)
+    const fallbackWithEmailId = buildCheckInInsertPayload({
+      registrationId: validUuid,
+      ticketRef: "SN3-VIS-100001",
+      subjectType: "visitor",
+      eventDay: "2026-11-20",
+      actorUserId: staffEmail,
+      actorEmail: staffEmail,
+    });
+    assert.equal(fallbackWithEmailId.checked_in_by, null);
+    assert.equal(fallbackWithEmailId.checked_in_by_email, staffEmail);
+
+    // When actorUserId is a valid UUID, checked_in_by preserves UUID and checked_in_by_email preserves email
+    const validPayload = buildCheckInInsertPayload({
+      registrationId: validUuid,
+      ticketRef: "SN3-VIS-100001",
+      subjectType: "visitor",
+      eventDay: "2026-11-20",
+      actorUserId: validUuid,
+      actorEmail: staffEmail,
+      wristbandCategory: "General Visitor",
+    });
+    assert.equal(validPayload.checked_in_by, validUuid);
+    assert.equal(validPayload.checked_in_by_email, staffEmail);
+
+    // Registration patch also protects UUID column checked_in_by
+    const regPatchBadId = buildRegistrationCheckInPatch({
+      checkedIn: true,
+      actorUserId: staffEmail,
+      actorEmail: staffEmail,
+      includeEmailColumn: true,
+    });
+    assert.equal(regPatchBadId.checked_in_by, null);
+    assert.equal(regPatchBadId.checked_in_by_email, staffEmail);
+
+    const regPatchValidId = buildRegistrationCheckInPatch({
+      checkedIn: true,
+      actorUserId: validUuid,
+      actorEmail: staffEmail,
+      includeEmailColumn: false,
+    });
+    assert.equal(regPatchValidId.checked_in_by, validUuid);
+    assert.equal("checked_in_by_email" in regPatchValidId, false);
   });
 });

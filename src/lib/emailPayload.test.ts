@@ -63,6 +63,17 @@ describe("Email Validation, MIME Construction, & Honest Delivery Checks", () => 
       false
     );
 
+    const unavailableRes = evaluateProviderDelivery({
+      httpOk: true,
+      statusCode: 200,
+      okFlag: false,
+      unavailable: true,
+      error: "Email delivery unavailable",
+    });
+    assert.equal(unavailableRes.delivered, false);
+    assert.equal(unavailableRes.status, "unavailable");
+    assert.equal(unavailableRes.error, "Email delivery unavailable");
+
     const okRes = evaluateProviderDelivery({
       httpOk: true,
       statusCode: 200,
@@ -126,26 +137,26 @@ describe("Email Validation, MIME Construction, & Honest Delivery Checks", () => 
     assert.match(httpErr.message, /HTTP 503: Gmail OAuth secrets missing/);
   });
 
-  it("Resolves configured email provider without silently substituting Resend when Gmail is intended", () => {
+  it("Resolves configured email provider as unavailable when disabled and never falls back to Gmail", () => {
     assert.equal(
-      resolveConfiguredEmailProvider({ explicitProvider: "", hasGmailCreds: false, hasResendKey: false }),
-      "gmail"
+      resolveConfiguredEmailProvider({ enabled: false, explicitProvider: "resend", hasResendKey: true }),
+      "unavailable"
     );
     assert.equal(
-      resolveConfiguredEmailProvider({ explicitProvider: "gmail", hasGmailCreds: false, hasResendKey: true }),
-      "gmail"
+      resolveConfiguredEmailProvider({ explicitProvider: "", hasResendKey: true }),
+      "unavailable"
     );
     assert.equal(
-      resolveConfiguredEmailProvider({ explicitProvider: "resend", hasGmailCreds: true, hasResendKey: true }),
+      resolveConfiguredEmailProvider({ enabled: true, explicitProvider: "gmail", hasResendKey: true }),
+      "unavailable"
+    );
+    assert.equal(
+      resolveConfiguredEmailProvider({ enabled: true, explicitProvider: "resend", hasResendKey: true }),
       "resend"
     );
     assert.equal(
-      resolveConfiguredEmailProvider({ explicitProvider: "", hasGmailCreds: true, hasResendKey: true }),
-      "gmail"
-    );
-    assert.equal(
-      resolveConfiguredEmailProvider({ explicitProvider: "", hasGmailCreds: false, hasResendKey: true }),
-      "resend"
+      resolveConfiguredEmailProvider({ enabled: true, explicitProvider: "", hasResendKey: false }),
+      "unavailable"
     );
   });
 });

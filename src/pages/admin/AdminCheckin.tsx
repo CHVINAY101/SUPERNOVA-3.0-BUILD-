@@ -3,13 +3,16 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
-import { QrTicketScannerModal } from "@/components/admin/QrTicketScannerModal";
+import { LiveGateQrScanner } from "@/components/admin/LiveGateQrScanner";
 import {
   DEFAULT_WRISTBAND_CATEGORIES,
+  buildCheckInInsertPayload,
+  buildRegistrationCheckInPatch,
   computeEntryStatistics,
   evaluateEsportsPlayerEntry,
   evaluateVisitorEntry,
   isAutoLinkedEsportsVisitorRecord,
+  toUuidOrNull,
   validateWristbandIssuance,
 } from "@/lib/entryOperations";
 import type {
@@ -41,6 +44,7 @@ import {
   Settings,
   Repeat,
   ShieldCheck,
+  Camera,
 } from "lucide-react";
 
 interface EntrySubject {
@@ -64,6 +68,17 @@ interface EntrySubject {
   adminNotes?: string | null;
 }
 
+function isMissingRpcError(err: any): boolean {
+  const code = String(err?.code || "").toUpperCase();
+  const msg = String(err?.message || "").toLowerCase();
+  return (
+    code === "PGRST202" ||
+    code === "42883" ||
+    msg.includes("could not find the function") ||
+    (msg.includes("function") && msg.includes("does not exist"))
+  );
+}
+
 export default function AdminCheckin() {
   const { user, hasPermission } = useAuth();
 
@@ -77,6 +92,17 @@ export default function AdminCheckin() {
   const canCreateWalkIn = hasPermission("visitor:create");
   const canViewParticipation = hasPermission("participation:view");
   const canCheckInParticipation = hasPermission("participation:edit");
+  const canUseGateScanner = canScanVisitor || canScanEsports || canViewParticipation;
+
+  const canCheckInGateCategory = useCallback(
+    (category?: string | null) => {
+      if (category === "visitor") return canCheckInVisitor;
+      if (category === "esports") return canCheckInEsports;
+      if (category === "participation") return canCheckInParticipation;
+      return false;
+    },
+    [canCheckInVisitor, canCheckInEsports, canCheckInParticipation]
+  );
 
   const [eventDay, setEventDay] = useState<EventDaySession>("2026-11-20");
   const [allowUnselectedEntry, setAllowUnselectedEntry] = useState(true);
@@ -104,7 +130,7 @@ export default function AdminCheckin() {
   const [gateVerification, setGateVerification] = useState<GateVerificationResult | null>(null);
   const [verifyingGate, setVerifyingGate] = useState(false);
   const [checkingInGate, setCheckingInGate] = useState(false);
-  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [cameraScannerActive, setCameraScannerActive] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Selected wristband choice per ticket key
@@ -177,11 +203,19 @@ export default function AdminCheckin() {
 
   const handleAuthoritativeGateCheckIn = async () => {
     if (!gateVerification?.ticket?.ticket_ref) return;
+    const tkt = gateVerification.ticket;
+    if (!canCheckInGateCategory(tkt.registration_category)) {
+      setStatusMessage({
+        type: "error",
+        text: `Forbidden: Your staff role cannot confirm check-in for "${tkt.registration_category}" passes.`,
+      });
+      return;
+    }
+
     setCheckingInGate(true);
     setStatusMessage(null);
     try {
       const parsed = parseSecureQrPayload(rawQrInput);
-      const tkt = gateVerification.ticket;
       const defaultBand =
         tkt.registration_category === "esports"
           ? wristbandCategories.find((c) => c.slug === "esports-participant")?.name || "Esports Participant"
@@ -194,19 +228,43 @@ export default function AdminCheckin() {
         wristbandCategory: canIssueWristband ? defaultBand : null,
       });
 
-      setGateVerification(res);
       if (res.ok && res.verdict === "VALID") {
+        setGateVerification({
+          ...res,
+          verdict: "VALID",
+          can_check_in: false,
+          reason: `Checked in atomically for ${eventDay} — pass is now marked as used.`,
+          ticket: {
+            ...tkt,
+            checked_in_at: res.checked_in_at || new Date().toISOString(),
+            checked_in_by_email: res.checked_in_by || user?.email || null,
+          },
+        });
         setStatusMessage({
           type: "success",
           text: `Gate Entry Approved & Checked In: ${tkt.display_name} (${tkt.ticket_ref}) on ${eventDay}.`,
         });
         await fetchEntryData();
       } else {
+        setGateVerification({
+          ...res,
+          can_check_in: false,
+          ticket: {
+            ...tkt,
+            checked_in_at: res.checked_in_at || tkt.checked_in_at || null,
+            checked_in_by_email: res.checked_in_by || tkt.checked_in_by_email || null,
+          },
+        });
         setStatusMessage({
           type: "error",
           text: res.error || res.reason || `Entry blocked: ${res.verdict}`,
         });
       }
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: err?.message || "Gate check-in failed.",
+      });
     } finally {
       setCheckingInGate(false);
     }
@@ -498,44 +556,107 @@ export default function AdminCheckin() {
           });
           return;
         }
-      } else {
-        // Fallback when 20261114 migration hasn't been pushed yet
-        const { error: insertErr } = await supabase.from("check_ins").insert({
-          registration_id: subject.registrationId,
-          check_in_type: subject.subjectType === "esports_player" ? "team" : "individual",
-          checked_in_by: actorEmail,
-          checked_in_at: nowIso,
-          notes: `[${eventDay}] ${subject.ticketRef} (${subject.subjectType})${
-            bandCategory ? ` · Wristband: ${bandCategory}` : ""
-          }${isOverride ? ` · OVERRIDE: ${reason}` : ""}`,
+      } else if (isMissingRpcError(rpcErr)) {
+        // Fallback only when RPC migration hasn't been pushed yet — never pass email into UUID checked_in_by
+        const fullPayload = buildCheckInInsertPayload({
+          registrationId: subject.registrationId,
+          ticketRef: subject.ticketRef,
+          subjectType: subject.subjectType,
+          eventDay,
+          actorUserId: user?.id,
+          actorEmail,
+          checkedInAt: nowIso,
+          wristbandCategory: bandCategory,
+          isOverride,
+          overrideReason: reason,
+          includeExtendedColumns: true,
         });
+        let { error: insertErr } = await supabase.from("check_ins").insert(fullPayload);
+        if (
+          insertErr &&
+          (insertErr.code === "42703" ||
+            String(insertErr.message || "").toLowerCase().includes("checked_in_by_email") ||
+            String(insertErr.message || "").toLowerCase().includes("ticket_ref"))
+        ) {
+          const minimalPayload = buildCheckInInsertPayload({
+            registrationId: subject.registrationId,
+            ticketRef: subject.ticketRef,
+            subjectType: subject.subjectType,
+            eventDay,
+            actorUserId: user?.id,
+            actorEmail,
+            checkedInAt: nowIso,
+            wristbandCategory: bandCategory,
+            isOverride,
+            overrideReason: reason,
+            includeExtendedColumns: false,
+          });
+          const retryRes = await supabase.from("check_ins").insert(minimalPayload);
+          insertErr = retryRes.error;
+        }
         if (insertErr) throw insertErr;
+      } else if (rpcErr) {
+        throw rpcErr;
       }
 
-      // Sync check_in_status on primary table
+      // Sync check_in_status on primary table (UUID-safe checked_in_by)
       if (subject.subjectType === "visitor") {
-        await supabase
+        const patch = buildRegistrationCheckInPatch({
+          checkedIn: true,
+          actorUserId: user?.id,
+          actorEmail,
+          checkedInAt: nowIso,
+          includeEmailColumn: true,
+        });
+        const { error: visErr } = await supabase
           .from("visitor_registrations")
-          .update({
-            check_in_status: "checked_in",
-            checked_in_at: nowIso,
-            checked_in_by: actorEmail,
-          })
+          .update(patch)
           .eq("id", subject.id);
+        if (visErr && (visErr.code === "42703" || String(visErr.message || "").includes("checked_in_by_email"))) {
+          await supabase
+            .from("visitor_registrations")
+            .update(
+              buildRegistrationCheckInPatch({
+                checkedIn: true,
+                actorUserId: user?.id,
+                actorEmail,
+                checkedInAt: nowIso,
+                includeEmailColumn: false,
+              })
+            )
+            .eq("id", subject.id);
+        }
       } else if (subject.subjectType === "esports_player") {
         await supabase
           .from("players")
           .update({ check_in_status: "checked_in", check_in_at: nowIso })
           .eq("id", subject.id);
       } else if (subject.subjectType === "participation") {
-        await supabase
+        const patch = buildRegistrationCheckInPatch({
+          checkedIn: true,
+          actorUserId: user?.id,
+          actorEmail,
+          checkedInAt: nowIso,
+          includeEmailColumn: true,
+        });
+        const { error: partErr } = await supabase
           .from("participation_registrations")
-          .update({
-            check_in_status: "checked_in",
-            checked_in_at: nowIso,
-            checked_in_by: actorEmail,
-          })
+          .update(patch)
           .eq("id", subject.id);
+        if (partErr && (partErr.code === "42703" || String(partErr.message || "").includes("checked_in_by_email"))) {
+          await supabase
+            .from("participation_registrations")
+            .update(
+              buildRegistrationCheckInPatch({
+                checkedIn: true,
+                actorUserId: user?.id,
+                actorEmail,
+                checkedInAt: nowIso,
+                includeEmailColumn: false,
+              })
+            )
+            .eq("id", subject.id);
+        }
       }
 
       setStatusMessage({
@@ -692,7 +813,7 @@ export default function AdminCheckin() {
           admin_notes: `On-the-spot walk-in at Gate Desk by ${actor}`,
           check_in_status: "checked_in",
           checked_in_at: nowIso,
-          checked_in_by: actor,
+          checked_in_by: toUuidOrNull(user?.id),
           submitted_at: nowIso,
         })
         .select();
@@ -774,14 +895,21 @@ export default function AdminCheckin() {
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => setQrModalOpen(true)}
-            className="min-h-[44px] inline-flex items-center gap-1.5 px-4 rounded-xl bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
-          >
-            <QrCode size={15} />
-            <span>Scan Camera QR</span>
-          </button>
+          {canUseGateScanner && (
+            <button
+              type="button"
+              onClick={() => setCameraScannerActive((prev) => !prev)}
+              aria-pressed={cameraScannerActive}
+              className={`min-h-[44px] inline-flex items-center gap-2 px-5 rounded-xl text-xs font-mono font-black uppercase tracking-wide cursor-pointer transition-colors shadow-xs ${
+                cameraScannerActive
+                  ? "bg-rose-600 hover:bg-rose-700 text-white"
+                  : "bg-[#0B1120] hover:bg-slate-800 text-[#D5F542] border border-slate-700"
+              }`}
+            >
+              <Camera size={16} />
+              <span>{cameraScannerActive ? "STOP CAMERA SCANNER" : "START CAMERA SCANNER"}</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -913,7 +1041,31 @@ export default function AdminCheckin() {
         </div>
       </div>
 
-      {/* Search & DB Ticket Verification Bar */}
+      {/* Live Camera QR Scanner (Permission requested ONLY after clicking START CAMERA SCANNER) */}
+      <LiveGateQrScanner
+        active={cameraScannerActive}
+        isAuthorized={canUseGateScanner}
+        onStop={() => setCameraScannerActive(false)}
+        onVerifyDecodedQr={async (decodedText) => {
+          await handleVerifyGateInput(decodedText);
+        }}
+        onInvalidQrScan={(reason) => {
+          setGateVerification({
+            ok: false,
+            verdict: "INVALID",
+            can_check_in: false,
+            reason,
+            error: reason,
+          });
+        }}
+        title={
+          canScanEsports && !canScanVisitor
+            ? "Live Esports Pass Camera Scanner"
+            : "Live Gate Camera QR Scanner"
+        }
+      />
+
+      {/* Search & DB Ticket Verification Bar (Backup Manual Search) */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -998,17 +1150,23 @@ export default function AdminCheckin() {
               )}
             </div>
 
-            {gateVerification.can_check_in && gateVerification.ticket && (
-              <button
-                type="button"
-                disabled={checkingInGate}
-                onClick={handleAuthoritativeGateCheckIn}
-                className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <CheckCircle size={16} />
-                <span>{checkingInGate ? "Checking In..." : `Check In Ticket (${eventDay.slice(-2)} Nov)`}</span>
-              </button>
-            )}
+            {gateVerification.can_check_in &&
+              gateVerification.ticket &&
+              canCheckInGateCategory(gateVerification.ticket.registration_category) && (
+                <button
+                  type="button"
+                  disabled={checkingInGate}
+                  onClick={handleAuthoritativeGateCheckIn}
+                  className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <CheckCircle size={16} />
+                  <span>
+                    {checkingInGate
+                      ? "Confirming Check-In..."
+                      : `Confirm Check-In (${eventDay.slice(-2)} Nov)`}
+                  </span>
+                </button>
+              )}
           </div>
 
           {gateVerification.ticket ? (
@@ -1062,12 +1220,28 @@ export default function AdminCheckin() {
 
       {/* Search Results */}
       {searchQuery.trim() === "" ? (
-        <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center">
-          <QrCode size={32} className="mx-auto mb-2 text-slate-400" />
-          <h3 className="text-base font-bold text-slate-900 m-0">Ready for Gate Verification ({eventDay})</h3>
-          <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
-            Tap "Scan Camera QR" or search by Ticket ID, Attendee Name, or Esports Player Code above.
-          </p>
+        <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center space-y-3">
+          <QrCode size={32} className="mx-auto text-slate-400" />
+          <div>
+            <h3 className="text-base font-bold text-slate-900 m-0">
+              Ready for Gate Verification ({eventDay})
+            </h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-0">
+              Click <strong>START CAMERA SCANNER</strong> to scan attendee QR passes with live rear-camera support, or use the manual ticket-number search above as a backup.
+            </p>
+          </div>
+          {canUseGateScanner && !cameraScannerActive && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setCameraScannerActive(true)}
+                className="min-h-[44px] inline-flex items-center gap-2 px-5 rounded-xl bg-[#0B1120] hover:bg-slate-800 text-[#D5F542] font-mono text-xs font-black uppercase tracking-wide cursor-pointer"
+              >
+                <Camera size={16} />
+                <span>START CAMERA SCANNER</span>
+              </button>
+            </div>
+          )}
           {Object.keys(stats.checkInsByStaff).length > 0 && (
             <div className="mt-4 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono text-slate-500">
               <span className="font-bold text-slate-700">Check-ins by staff:</span>
@@ -1361,20 +1535,6 @@ export default function AdminCheckin() {
           })}
         </div>
       )}
-
-      {/* Real Camera QR Scanner Modal */}
-      <QrTicketScannerModal
-        isOpen={qrModalOpen}
-        onClose={() => setQrModalOpen(false)}
-        onScanSuccess={(rawPayloadOrRef) => {
-          void handleVerifyGateInput(rawPayloadOrRef);
-        }}
-        title={
-          canScanEsports && !canScanVisitor
-            ? "Scan Esports Player QR"
-            : "Scan Festival Pass QR"
-        }
-      />
 
       {/* Supervisor Override Modal */}
       {overrideTarget && (

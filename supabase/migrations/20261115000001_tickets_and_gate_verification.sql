@@ -1178,18 +1178,18 @@ BEGIN
     updated_at = v_now
   WHERE id = v_tkt.id;
 
-  -- Sync registration table check-in fields
+  -- Sync registration table check-in fields (checked_in_by stores auth.uid() uuid cleanly)
   IF v_tkt.registration_category = 'visitor' THEN
     UPDATE public.visitor_registrations
-    SET check_in_status = 'checked_in', checked_in_at = v_now, checked_in_by = v_actor_email
+    SET check_in_status = 'checked_in', checked_in_at = v_now, checked_in_by = v_uid
     WHERE id = v_tkt.registration_id;
   ELSIF v_tkt.registration_category = 'participation' THEN
     UPDATE public.participation_registrations
-    SET check_in_status = 'checked_in', checked_in_at = v_now, checked_in_by = v_actor_email
+    SET check_in_status = 'checked_in', checked_in_at = v_now, checked_in_by = v_uid
     WHERE id = v_tkt.registration_id;
   ELSE
     UPDATE public.registrations
-    SET check_in_status = 'checked_in', checked_in_at = v_now, checked_in_by = v_actor_email
+    SET check_in_status = 'checked_in', checked_in_at = v_now, checked_in_by = v_uid
     WHERE id = v_tkt.registration_id;
   END IF;
 
@@ -1200,7 +1200,7 @@ BEGIN
   )
   VALUES (
     v_tkt.registration_id, v_tkt.ticket_ref, v_subject_type, coalesce(p_event_day, '2026-11-20'), 'individual',
-    coalesce(v_actor_email, v_uid::text), v_actor_email, v_now,
+    v_uid, v_actor_email, v_now,
     p_wristband_category, p_wristband_code, false,
     coalesce(nullif(trim(coalesce(p_notes, '')), ''), 'Verified ticket gate entry (' || v_tkt.registration_category || ')')
   )
@@ -1277,3 +1277,5 @@ BEGIN
     PERFORM public._issue_ticket_internal('esports', r.id);
   END LOOP;
 END $$;
+
+NOTIFY pgrst, 'reload schema';

@@ -237,7 +237,7 @@ export async function verifyGateTicket(rawInput: string): Promise<GateVerificati
       verdict: "INVALID",
       can_check_in: false,
       error: isMissingRpcError(error)
-        ? "Gate verification RPC (verify_gate_ticket) is not yet deployed in Supabase."
+        ? "Gate verification RPC (verify_gate_ticket) is not yet deployed or schema cache needs reload. Apply migration 20261115000003_fix_gate_verification_uuid_and_schema_cache.sql in Supabase."
         : error.message,
       reason: error.message,
     };
@@ -249,6 +249,14 @@ export async function verifyGateTicket(rawInput: string): Promise<GateVerificati
 /**
  * Atomic single-use DB check-in using SELECT ... FOR UPDATE row lock.
  */
+export interface GateCheckinResult extends GateVerificationResult {
+  duplicate?: boolean;
+  checked_in_at?: string | null;
+  checked_in_by?: string | null;
+  ticket_ref?: string;
+  checkin_id?: string | null;
+}
+
 export async function checkinGateTicket(params: {
   ticketRef: string;
   qrToken?: string | null;
@@ -256,7 +264,7 @@ export async function checkinGateTicket(params: {
   wristbandCategory?: string | null;
   wristbandCode?: string | null;
   notes?: string | null;
-}): Promise<GateVerificationResult & { duplicate?: boolean }> {
+}): Promise<GateCheckinResult> {
   const { data, error } = await supabase.rpc("checkin_gate_ticket", {
     p_ticket_ref: params.ticketRef.trim(),
     p_qr_token: params.qrToken || null,
@@ -267,14 +275,17 @@ export async function checkinGateTicket(params: {
   });
 
   if (error) {
+    const friendlyError = isMissingRpcError(error)
+      ? "Gate check-in RPC (checkin_gate_ticket) is not yet deployed or schema cache needs reload. Apply migration 20261115000003_fix_gate_verification_uuid_and_schema_cache.sql in Supabase."
+      : error.message;
     return {
       ok: false,
       verdict: "INVALID",
       can_check_in: false,
-      error: error.message,
+      error: friendlyError,
       reason: error.message,
     };
   }
 
-  return data as GateVerificationResult & { duplicate?: boolean };
+  return data as GateCheckinResult;
 }

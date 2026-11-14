@@ -17,6 +17,7 @@ import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
 import { archiveTicketToNas, getLocalNasArchives } from "@/lib/nasArchivalService";
 import { fetchTicketByRegistration, issueTicketForRegistration } from "@/lib/ticketClient";
+import { EMAIL_DELIVERY_ENABLED } from "@/lib/emailPayload";
 import { 
   Search, 
   CheckCircle2, 
@@ -191,12 +192,21 @@ export default function AdminParticipationRegistrations() {
             attachments: pdfAttachments,
           });
           const emailOk = Boolean(emailRes.ok && !emailRes.simulated);
-          nextEmailStatus = emailOk ? "sent" : "failed";
+          const isUnavailable = Boolean(emailRes.unavailable || !EMAIL_DELIVERY_ENABLED);
+          nextEmailStatus = emailOk
+            ? "sent"
+            : isUnavailable
+            ? (currentItem as any)?.email_status === "sent"
+              ? "sent"
+              : "unavailable"
+            : "failed";
           if (emailOk) {
             ticketNotice += " & emailed to participant.";
+          } else if (isUnavailable) {
+            ticketNotice += " (Email delivery unavailable)";
           }
         } catch {
-          nextEmailStatus = "failed";
+          nextEmailStatus = EMAIL_DELIVERY_ENABLED ? "failed" : "unavailable";
         }
       }
 
@@ -288,6 +298,18 @@ export default function AdminParticipationRegistrations() {
         if (selectedReg && selectedReg.id === reg.id) {
           setSelectedReg({ ...selectedReg, email_status: "sent" });
         }
+      } else if (emailRes.unavailable || !EMAIL_DELIVERY_ENABLED) {
+        const nextStatus = (reg as any).email_status === "sent" ? "sent" : "unavailable";
+        setRegistrations((prev) =>
+          prev.map((r) => (r.id === reg.id ? { ...r, email_status: nextStatus } : r))
+        );
+        if (selectedReg && selectedReg.id === reg.id) {
+          setSelectedReg({ ...selectedReg, email_status: nextStatus });
+        }
+        setStatusMsg({
+          type: "error",
+          text: "Email delivery unavailable — use Download Ticket PDF instead.",
+        });
       } else {
         const nextStatus = (reg as any).email_status === "sent" ? "sent" : "failed";
         setRegistrations((prev) =>
@@ -731,7 +753,13 @@ export default function AdminParticipationRegistrations() {
                                 }`}
                               >
                                 <Mail size={10} />
-                                <span>{(reg as any).email_status || "not_sent"}</span>
+                                <span>
+                                  {(reg as any).email_status === "sent"
+                                    ? "sent"
+                                    : (reg as any).email_status === "failed"
+                                    ? "failed"
+                                    : "Email delivery unavailable"}
+                                </span>
                               </span>
                             </div>
                           )}
@@ -932,8 +960,14 @@ export default function AdminParticipationRegistrations() {
                 )}
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600">Email Status:</span>
-                  <span className="font-semibold text-slate-800 capitalize">
-                    {(selectedReg as any).email_status || (selectedReg.status === "confirmed" ? "not sent" : "pending approval")}
+                  <span className="font-semibold text-slate-800">
+                    {(selectedReg as any).email_status === "sent"
+                      ? "Sent"
+                      : (selectedReg as any).email_status === "failed"
+                      ? "Failed"
+                      : selectedReg.status === "confirmed"
+                      ? "Email delivery unavailable"
+                      : "Pending approval"}
                   </span>
                 </div>
 

@@ -5,6 +5,8 @@ import {
 } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
+  EMAIL_DELIVERY_ENABLED,
+  EMAIL_UNAVAILABLE_MESSAGE,
   classifyEdgeFunctionError,
   evaluateProviderDelivery,
   redactSensitiveText,
@@ -223,7 +225,7 @@ export async function searchTicketOrReference(query: string): Promise<UniversalL
           institution: v.institution || "Independent",
           status: v.status || "confirmed",
           isArchived: isRegistrationArchived(v),
-          emailStatus: v.email_status || "sent",
+          emailStatus: v.email_status || "unavailable",
           submittedAt: v.submitted_at,
           extraDetails: {
             days: v.days_attending,
@@ -317,9 +319,9 @@ export interface EmailDeliveryResult {
   recipientEmail?: string;
   registrationRef?: string;
   registrationType: RegistrationTargetType;
-  channel: "supabase_edge_function" | "gmail_api" | "resend_api" | "verified_delivery_pipeline";
+  channel: "supabase_edge_function" | "resend_api" | "verified_delivery_pipeline" | "disabled";
   sender: string;
-  status: "sent" | "failed" | "skipped";
+  status: "sent" | "failed" | "skipped" | "unavailable";
   httpStatusCode?: number;
   errorType?: EdgeFunctionErrorKind | "ValidationError" | "AuthError" | "DuplicateInFlight";
   diagnostic?: string;
@@ -396,6 +398,8 @@ export async function sendRegistrationConfirmationEmail(
   }
 ): Promise<{
   ok: boolean;
+  unavailable?: boolean;
+  status?: "sent" | "failed" | "skipped" | "unavailable";
   error?: string;
   errorType?: EdgeFunctionErrorKind | "ValidationError" | "AuthError" | "DuplicateInFlight";
   httpStatusCode?: number;
@@ -458,7 +462,7 @@ export async function sendRegistrationConfirmationEmail(
       }
     }
 
-    // Track existing DB email_status so we never accidentally overwrite a previously confirmed "sent" status if an Edge Function fails pre-delivery
+    // Track existing DB email_status so we never accidentally overwrite a previously confirmed "sent" status
     let existingDbEmailStatus: string | null = null;
     if (isUuid) {
       try {
@@ -484,11 +488,39 @@ export async function sendRegistrationConfirmationEmail(
             isResend,
           };
           saveLocalEmailDispatchLog(skippedLog);
-          return { ok: true, simulated: false, log: skippedLog };
+          return { ok: true, status: "skipped" as const, simulated: false, log: skippedLog };
         }
       } catch {
         // Continue
       }
+    }
+
+    if (!EMAIL_DELIVERY_ENABLED) {
+      const unavailableLog: EmailDeliveryResult = {
+        ok: false,
+        registrationId: isUuid ? registrationIdOrRef : undefined,
+        recipientEmail,
+        registrationRef: regRef,
+        registrationType,
+        channel: "disabled",
+        sender: officialSender,
+        status: "unavailable",
+        httpStatusCode: 200,
+        apiResponse: EMAIL_UNAVAILABLE_MESSAGE,
+        errorMessage: EMAIL_UNAVAILABLE_MESSAGE,
+        timestamp: nowIso,
+        isResend,
+      };
+      saveLocalEmailDispatchLog(unavailableLog);
+      return {
+        ok: false,
+        unavailable: true,
+        status: "unavailable" as const,
+        httpStatusCode: 200,
+        error: EMAIL_UNAVAILABLE_MESSAGE,
+        simulated: false,
+        log: unavailableLog,
+      };
     }
 
     // Ensure authenticated admin session JWT is fresh and explicitly sent on resend / admin operations
@@ -588,9 +620,38 @@ export async function sendRegistrationConfirmationEmail(
           statusCode: 200,
           okFlag: data?.ok,
           simulated: data?.simulated,
+          unavailable: data?.unavailable || data?.status === "unavailable",
           messageId: data?.messageId,
           error: data?.error,
         });
+
+        if (evalRes.status === "unavailable") {
+          const unavailableLog: EmailDeliveryResult = {
+            ok: false,
+            registrationId: isUuid ? registrationIdOrRef : undefined,
+            recipientEmail: data?.recipient || recipientEmail,
+            registrationRef: regRef,
+            registrationType,
+            channel: "disabled",
+            sender: officialSender,
+            status: "unavailable",
+            httpStatusCode: 200,
+            apiResponse: EMAIL_UNAVAILABLE_MESSAGE,
+            errorMessage: evalRes.error || EMAIL_UNAVAILABLE_MESSAGE,
+            timestamp: nowIso,
+            isResend,
+          };
+          saveLocalEmailDispatchLog(unavailableLog);
+          return {
+            ok: false,
+            unavailable: true,
+            status: "unavailable" as const,
+            httpStatusCode: 200,
+            error: evalRes.error || EMAIL_UNAVAILABLE_MESSAGE,
+            simulated: false,
+            log: unavailableLog,
+          };
+        }
 
         if (evalRes.delivered) {
           const successLog: EmailDeliveryResult = {
@@ -599,7 +660,7 @@ export async function sendRegistrationConfirmationEmail(
             recipientEmail: data?.recipient || recipientEmail,
             registrationRef: regRef,
             registrationType,
-            channel: data?.provider === "gmail" ? "gmail_api" : "resend_api",
+            channel: "resend_api",
             sender: officialSender,
             status: "sent",
             httpStatusCode: 200,
@@ -608,7 +669,7 @@ export async function sendRegistrationConfirmationEmail(
             isResend,
           };
           saveLocalEmailDispatchLog(successLog);
-          return { ok: true, httpStatusCode: 200, simulated: false, log: successLog };
+          return { ok: true, status: "sent" as const, httpStatusCode: 200, simulated: false, log: successLog };
         }
 
         failureMessage = evalRes.error || "Email provider did not confirm delivery.";

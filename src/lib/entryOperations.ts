@@ -559,3 +559,79 @@ export function computeEntryStatistics(params: {
     checkInsByStaff,
   };
 }
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuidString(value: unknown): value is string {
+  return typeof value === "string" && UUID_REGEX.test(value.trim());
+}
+
+export function toUuidOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return UUID_REGEX.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * Builds an insert payload for public.check_ins that strictly enforces UUID-only
+ * values on checked_in_by (never an email string) and stores the staff email
+ * separately in checked_in_by_email.
+ */
+export function buildCheckInInsertPayload(params: {
+  registrationId: string;
+  ticketRef: string;
+  subjectType: "visitor" | "esports_player" | "participation";
+  eventDay: EventDaySession;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  checkedInAt?: string;
+  wristbandCategory?: string;
+  isOverride?: boolean;
+  overrideReason?: string;
+  includeExtendedColumns?: boolean;
+}): Record<string, any> {
+  const checkedInAt = params.checkedInAt || new Date().toISOString();
+  const safeActorUuid = toUuidOrNull(params.actorUserId);
+  const safeEmail = params.actorEmail?.trim() || null;
+
+  const base: Record<string, any> = {
+    registration_id: params.registrationId,
+    check_in_type: params.subjectType === "esports_player" ? "team" : "individual",
+    checked_in_by: safeActorUuid,
+    checked_in_at: checkedInAt,
+    notes: `[${params.eventDay}] ${params.ticketRef} (${params.subjectType})${
+      params.wristbandCategory ? ` · Wristband: ${params.wristbandCategory}` : ""
+    }${params.isOverride && params.overrideReason ? ` · OVERRIDE: ${params.overrideReason}` : ""}`,
+  };
+
+  if (params.includeExtendedColumns !== false && safeEmail) {
+    base.checked_in_by_email = safeEmail;
+  }
+
+  return base;
+}
+
+/**
+ * Builds a registration check-in status patch that guarantees checked_in_by
+ * is always a valid UUID or null (never an email address).
+ */
+export function buildRegistrationCheckInPatch(params: {
+  checkedIn: boolean;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  checkedInAt?: string | null;
+  includeEmailColumn?: boolean;
+}): Record<string, any> {
+  const patch: Record<string, any> = {
+    check_in_status: params.checkedIn ? "checked_in" : "not_checked_in",
+    checked_in_at: params.checkedIn ? params.checkedInAt || new Date().toISOString() : null,
+    checked_in_by: params.checkedIn ? toUuidOrNull(params.actorUserId) : null,
+  };
+
+  if (params.includeEmailColumn) {
+    patch.checked_in_by_email = params.checkedIn ? params.actorEmail?.trim() || null : null;
+  }
+
+  return patch;
+}
+

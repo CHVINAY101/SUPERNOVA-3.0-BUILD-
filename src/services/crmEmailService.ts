@@ -6,6 +6,8 @@ import {
 import { supabase } from "@/lib/supabase";
 import type { CrmEmail, CrmEmailStatus } from "@/types/database";
 import {
+  EMAIL_DELIVERY_ENABLED,
+  EMAIL_UNAVAILABLE_MESSAGE,
   classifyEdgeFunctionError,
   containsHeaderInjection,
   evaluateProviderDelivery,
@@ -27,15 +29,14 @@ export interface SendCrmEmailParams {
   attachments?: EmailAttachmentInput[];
 }
 
-export interface GmailConnectionStatus {
+export interface EmailDeliveryStatus {
   ok: boolean;
   configured: boolean;
+  unavailable: boolean;
+  status: "unavailable" | "configured";
   senderEmail: string;
-  gmailAccount?: string;
-  messagesTotal?: number;
-  missingSecrets?: string[];
+  message: string;
   error?: string;
-  message?: string;
   httpStatus?: number;
 }
 
@@ -155,9 +156,22 @@ async function extractEdgeFunctionError(error: any, data: any): Promise<{ messag
 }
 
 /**
- * Checks live Gmail API connectivity & OAuth token validity via Supabase Edge Function
+ * Reports current CRM email delivery availability without relying on Gmail OAuth.
  */
-export async function checkGmailConnectionStatus(): Promise<GmailConnectionStatus> {
+export async function getEmailDeliveryStatus(): Promise<EmailDeliveryStatus> {
+  if (!EMAIL_DELIVERY_ENABLED) {
+    return {
+      ok: false,
+      configured: false,
+      unavailable: true,
+      status: "unavailable",
+      senderEmail: "animationthenationalcollege@gmail.com",
+      message: EMAIL_UNAVAILABLE_MESSAGE,
+      error: EMAIL_UNAVAILABLE_MESSAGE,
+      httpStatus: 200,
+    };
+  }
+
   try {
     const invokeHeaders = await getAdminInvokeHeaders();
     const { data, error } = await supabase.functions.invoke("send-crm-email", {
@@ -170,128 +184,55 @@ export async function checkGmailConnectionStatus(): Promise<GmailConnectionStatu
       return {
         ok: false,
         configured: false,
+        unavailable: true,
+        status: "unavailable",
         senderEmail: "animationthenationalcollege@gmail.com",
+        message: extracted.message,
         error: extracted.message,
         httpStatus: extracted.status,
       };
     }
 
+    const unavailable = Boolean(data?.unavailable || data?.status === "unavailable" || !data?.configured);
     return {
-      ok: Boolean(data?.ok),
+      ok: Boolean(data?.ok) && !unavailable,
       configured: Boolean(data?.configured),
+      unavailable,
+      status: unavailable ? "unavailable" : "configured",
       senderEmail: data?.senderEmail || "animationthenationalcollege@gmail.com",
-      gmailAccount: data?.gmailAccount,
-      messagesTotal: data?.messagesTotal,
-      missingSecrets: data?.missingSecrets,
-      error: data?.error ? redactSensitiveText(data.error) : undefined,
-      message: data?.message,
+      error: data?.error ? redactSensitiveText(data.error) : unavailable ? EMAIL_UNAVAILABLE_MESSAGE : undefined,
+      message: data?.message || EMAIL_UNAVAILABLE_MESSAGE,
       httpStatus: 200,
     };
   } catch (err: any) {
+    const msg = redactSensitiveText(err?.message || EMAIL_UNAVAILABLE_MESSAGE);
     return {
       ok: false,
       configured: false,
+      unavailable: true,
+      status: "unavailable",
       senderEmail: "animationthenationalcollege@gmail.com",
-      error: redactSensitiveText(err?.message || "Edge Function invocation exception"),
+      message: msg,
+      error: msg,
       httpStatus: 500,
     };
   }
 }
 
 /**
- * Record a client-side authorized Google OAuth Gmail send into Supabase & local cache
- */
-export async function recordClientGmailDelivery(params: {
-  recipient: string;
-  cc?: string;
-  bcc?: string;
-  subject: string;
-  bodyHtml: string;
-  senderEmail: string;
-  status: "sent" | "failed";
-  messageId?: string;
-  threadId?: string;
-  errorMessage?: string;
-  registrationRef?: string;
-  registrationType?: string;
-  attachmentNames?: string[];
-}): Promise<void> {
-  const id = crypto.randomUUID ? crypto.randomUUID() : `crm-${Date.now()}`;
-  const nowIso = new Date().toISOString();
-
-  const record: CrmEmail = {
-    id,
-    recipient: params.recipient,
-    cc: params.cc || null,
-    bcc: params.bcc || null,
-    subject: params.subject,
-    body_html: params.bodyHtml,
-    sender_email: params.senderEmail,
-    status: params.status,
-    gmail_message_id: params.messageId || null,
-    gmail_thread_id: params.threadId || null,
-    error_message: params.errorMessage || null,
-    created_at: nowIso,
-    sent_at: params.status === "sent" ? nowIso : null,
-  };
-  saveLocalCrmEmail(record);
-
-  try {
-    const { data: userData } = await supabase.auth.getUser();
-    const actorId = userData?.user?.id || null;
-    const actorEmail = userData?.user?.email || null;
-
-    const { data: inserted } = await supabase
-      .from("crm_emails")
-      .insert({
-        recipient: params.recipient,
-        cc: params.cc || null,
-        bcc: params.bcc || null,
-        subject: params.subject,
-        body_html: params.bodyHtml,
-        sender_email: params.senderEmail,
-        sent_by: actorId,
-        sent_by_email: actorEmail,
-        status: params.status,
-        gmail_message_id: params.messageId || null,
-        gmail_thread_id: params.threadId || null,
-        error_message: params.errorMessage || null,
-        provider: "gmail_oauth_client",
-        registration_ref: params.registrationRef || null,
-        registration_type: params.registrationType || null,
-        attachment_names: params.attachmentNames || [],
-        sent_at: params.status === "sent" ? nowIso : null,
-      })
-      .select("id")
-      .maybeSingle();
-
-    if (actorId) {
-      await supabase.from("audit_logs").insert({
-        actor_id: actorId,
-        action: params.status === "sent" ? "send_crm_email_oauth" : "send_crm_email_oauth_failed",
-        entity_type: "crm_emails",
-        entity_id: inserted?.id ?? null,
-        metadata: {
-          recipient: params.recipient,
-          subject: params.subject,
-          sender: params.senderEmail,
-          gmail_message_id: params.messageId ?? null,
-          error: params.errorMessage ?? null,
-          attachments: params.attachmentNames ?? [],
-        },
-      });
-    }
-  } catch {
-    // Table may not be migrated yet; local audit preserved
-  }
-}
-
-/**
- * Sends a CRM email using the official college Gmail account via Supabase Edge Function
+ * Sends a CRM email via Supabase Edge Function when email delivery is enabled.
+ * When disabled, safely returns "Email delivery unavailable" without fabricating a "sent" status.
  */
 export async function sendCrmEmail(
   params: SendCrmEmailParams
-): Promise<{ ok: boolean; messageId?: string; threadId?: string; error?: string; skipped?: boolean }> {
+): Promise<{
+  ok: boolean;
+  unavailable?: boolean;
+  messageId?: string;
+  threadId?: string;
+  error?: string;
+  skipped?: boolean;
+}> {
   const recipientCheck = validateRecipientEmail(params.recipient);
   if (!recipientCheck.valid || !recipientCheck.normalizedEmail) {
     return { ok: false, error: recipientCheck.error || "Invalid recipient email address." };
@@ -310,6 +251,10 @@ export async function sendCrmEmail(
 
   if (!params.bodyHtml || !params.bodyHtml.trim()) {
     return { ok: false, error: "Email message body is required." };
+  }
+
+  if (!EMAIL_DELIVERY_ENABLED) {
+    return { ok: false, unavailable: true, error: EMAIL_UNAVAILABLE_MESSAGE };
   }
 
   const idempotencyKey =
@@ -381,18 +326,23 @@ export async function sendCrmEmail(
       statusCode: 200,
       okFlag: data?.ok,
       simulated: data?.simulated,
+      unavailable: data?.unavailable || data?.status === "unavailable",
       messageId: data?.messageId,
       error: data?.error,
     });
 
     if (!evaluation.delivered) {
-      const safeErr = redactSensitiveText(evaluation.error || "Gmail API returned delivery failure");
+      const safeErr = redactSensitiveText(evaluation.error || EMAIL_UNAVAILABLE_MESSAGE);
       saveLocalCrmEmail({
         ...pendingRecord,
         status: "failed",
         error_message: safeErr,
       });
-      return { ok: false, error: safeErr };
+      return {
+        ok: false,
+        unavailable: evaluation.status === "unavailable",
+        error: safeErr,
+      };
     }
 
     saveLocalCrmEmail({

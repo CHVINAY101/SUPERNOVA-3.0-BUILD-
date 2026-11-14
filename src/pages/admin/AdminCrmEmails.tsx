@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Send,
   Search,
-  ExternalLink,
   HardDrive,
   Wifi,
   WifiOff,
@@ -18,9 +17,7 @@ import {
   Activity,
   Paperclip,
   Eye,
-  ShieldCheck,
   X,
-  LogOut,
   Check,
 } from "lucide-react";
 import {
@@ -37,28 +34,16 @@ import { generateTicketPdf } from "@/lib/ticketPdfService";
 import type { CrmEmail } from "@/types/database";
 import {
   CRM_EMAIL_TEMPLATES,
-  checkGmailConnectionStatus,
   getCrmEmailHistory,
+  getEmailDeliveryStatus,
   getSuggestedRecipients,
-  recordClientGmailDelivery,
   sendCrmEmail,
-  type GmailConnectionStatus,
+  type EmailDeliveryStatus,
   type RecipientSuggestion,
 } from "@/services/crmEmailService";
 import {
-  getGoogleAccessToken,
-  logoutGoogle,
-  signInWithGoogle,
-} from "@/lib/googleAuth";
-import {
-  GmailAuthExpiredError,
-  fetchGmailProfile,
-  listRecentSentFromGmail,
-  sendGmailDirect,
-  type GmailProfile,
-  type GmailSentMessage,
-} from "@/services/gmailApiService";
-import {
+  EMAIL_DELIVERY_ENABLED,
+  EMAIL_UNAVAILABLE_MESSAGE,
   validateEmailList,
   validateRecipientEmail,
   type EmailAttachmentInput,
@@ -84,7 +69,6 @@ interface EmailLogItem {
 }
 
 type EmailCentreTab = "dispatch" | "compose" | "history" | "diagnostics";
-type DeliveryTransport = "server_edge" | "google_oauth";
 
 export default function AdminCrmEmails() {
   const { user, hasPermission } = useAuth();
@@ -105,7 +89,6 @@ export default function AdminCrmEmails() {
   const [syncingNas, setSyncingNas] = useState(false);
 
   // Compose & Send state
-  const [transport, setTransport] = useState<DeliveryTransport>("server_edge");
   const [recipient, setRecipient] = useState("");
   const [cc, setCc] = useState("");
   const [bcc, setBcc] = useState("");
@@ -117,21 +100,16 @@ export default function AdminCrmEmails() {
   const [confirmSendOpen, setConfirmSendOpen] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
 
-  // Google Workspace OAuth client-side state
-  const [oauthToken, setOauthToken] = useState<string | null>(null);
-  const [oauthProfile, setOauthProfile] = useState<GmailProfile | null>(null);
-  const [connectingOauth, setConnectingOauth] = useState(false);
-
   // CRM History state
   const [historyItems, setHistoryItems] = useState<CrmEmail[]>([]);
-  const [gmailSent, setGmailSent] = useState<GmailSentMessage[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Diagnostics state
-  const [serverGmailStatus, setServerGmailStatus] = useState<GmailConnectionStatus | null>(null);
+  const [deliveryStatus, setDeliveryStatus] = useState<EmailDeliveryStatus | null>(null);
   const [regConfirmHealth, setRegConfirmHealth] = useState<{
     checked: boolean;
     ok: boolean;
+    unavailable?: boolean;
     detail: string;
   } | null>(null);
   const [checkingDiagnostics, setCheckingDiagnostics] = useState(false);
@@ -179,7 +157,7 @@ export default function AdminCrmEmails() {
 
       visRows.forEach((v: any) => {
         const audit = auditMap.get(v.registration_ref) || auditMap.get(v.id);
-        const realStatus = audit?.status || v.email_status || "not_sent";
+        const realStatus = audit?.status || v.email_status || "unavailable";
         items.push({
           id: v.id,
           recipient: v.email,
@@ -200,7 +178,7 @@ export default function AdminCrmEmails() {
 
       partRows.forEach((p: any) => {
         const audit = auditMap.get(p.registration_ref) || auditMap.get(p.id);
-        const realStatus = audit?.status || p.email_status || (p.status === "confirmed" ? "not_sent" : "pending");
+        const realStatus = audit?.status || p.email_status || (p.status === "confirmed" ? "unavailable" : "pending");
         items.push({
           id: p.id,
           recipient: p.email,
@@ -221,7 +199,7 @@ export default function AdminCrmEmails() {
 
       espRows.forEach((e: any) => {
         const audit = auditMap.get(e.registration_ref) || auditMap.get(e.id);
-        const realStatus = audit?.status || e.email_status || (e.status === "confirmed" ? "not_sent" : "pending");
+        const realStatus = audit?.status || e.email_status || (e.status === "confirmed" ? "unavailable" : "pending");
         items.push({
           id: e.id,
           recipient: e.email,
@@ -249,21 +227,8 @@ export default function AdminCrmEmails() {
   }, []);
 
   const loadComposeMetadata = useCallback(async () => {
-    const [recips, token] = await Promise.all([
-      getSuggestedRecipients(),
-      getGoogleAccessToken(),
-    ]);
+    const recips = await getSuggestedRecipients();
     setSuggestions(recips);
-    if (token) {
-      setOauthToken(token);
-      try {
-        const prof = await fetchGmailProfile(token);
-        setOauthProfile(prof);
-      } catch {
-        setOauthToken(null);
-        setOauthProfile(null);
-      }
-    }
   }, []);
 
   const loadHistory = useCallback(async () => {
@@ -271,18 +236,6 @@ export default function AdminCrmEmails() {
     try {
       const hist = await getCrmEmailHistory();
       setHistoryItems(hist);
-      const token = await getGoogleAccessToken();
-      if (token) {
-        try {
-          const sent = await listRecentSentFromGmail(token, 10);
-          setGmailSent(sent);
-        } catch (err) {
-          if (err instanceof GmailAuthExpiredError) {
-            setOauthToken(null);
-            setOauthProfile(null);
-          }
-        }
-      }
     } finally {
       setLoadingHistory(false);
     }
@@ -291,8 +244,18 @@ export default function AdminCrmEmails() {
   const runDiagnostics = useCallback(async () => {
     setCheckingDiagnostics(true);
     try {
-      const crmStatus = await checkGmailConnectionStatus();
-      setServerGmailStatus(crmStatus);
+      const crmStatus = await getEmailDeliveryStatus();
+      setDeliveryStatus(crmStatus);
+
+      if (!EMAIL_DELIVERY_ENABLED) {
+        setRegConfirmHealth({
+          checked: true,
+          ok: false,
+          unavailable: true,
+          detail: EMAIL_UNAVAILABLE_MESSAGE,
+        });
+        return;
+      }
 
       // Probe send-registration-confirmation deployment cleanly
       try {
@@ -309,49 +272,28 @@ export default function AdminCrmEmails() {
           });
         } else if (getResp && getResp.ok) {
           const healthJson = await getResp.json().catch(() => ({}));
+          const isUnavailable = Boolean(healthJson?.unavailable || !healthJson?.configured);
           setRegConfirmHealth({
             checked: true,
-            ok: Boolean(healthJson?.configured),
-            detail: healthJson?.configured
-              ? `Edge Function send-registration-confirmation is deployed (${healthJson.provider} configured).`
-              : `Edge Function deployed (provider: ${healthJson?.provider || "gmail"}), but required email provider secrets are missing.`,
+            ok: Boolean(healthJson?.configured) && !isUnavailable,
+            unavailable: isUnavailable,
+            detail: isUnavailable
+              ? healthJson?.message || EMAIL_UNAVAILABLE_MESSAGE
+              : `Edge Function send-registration-confirmation is deployed (${healthJson.provider || "configured"}).`,
           });
         } else {
-          const { data, error } = await supabase.functions.invoke("send-registration-confirmation", {
-            body: { registrationType: "visitor" },
+          setRegConfirmHealth({
+            checked: true,
+            ok: false,
+            unavailable: true,
+            detail: EMAIL_UNAVAILABLE_MESSAGE,
           });
-          const errStatus = (error as any)?.context?.status;
-          if (errStatus === 404 || String(error?.message || "").includes("404")) {
-            setRegConfirmHealth({
-              checked: true,
-              ok: false,
-              detail: "Edge Function send-registration-confirmation is not deployed (HTTP 404).",
-            });
-          } else if (errStatus === 503) {
-            setRegConfirmHealth({
-              checked: true,
-              ok: false,
-              detail: "Edge Function deployed, but email provider secrets (GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN or RESEND_API_KEY) are not configured.",
-            });
-          } else if (errStatus === 400 || data?.error) {
-            setRegConfirmHealth({
-              checked: true,
-              ok: true,
-              detail: "Edge Function send-registration-confirmation is deployed and enforcing validation.",
-            });
-          } else {
-            setRegConfirmHealth({
-              checked: true,
-              ok: !error,
-              detail: error?.message || "Endpoint responded normally.",
-            });
-          }
         }
       } catch (probeErr: any) {
         setRegConfirmHealth({
           checked: true,
           ok: false,
-          detail: probeErr?.message || "Unable to reach send-registration-confirmation.",
+          detail: probeErr?.message || EMAIL_UNAVAILABLE_MESSAGE,
         });
       }
     } finally {
@@ -368,37 +310,6 @@ export default function AdminCrmEmails() {
     if (activeTab === "history") loadHistory();
     if (activeTab === "diagnostics") runDiagnostics();
   }, [activeTab, loadHistory, runDiagnostics]);
-
-  const handleConnectGoogleOauth = async () => {
-    setConnectingOauth(true);
-    setStatusMsg(null);
-    try {
-      const res = await signInWithGoogle();
-      if (!res?.accessToken) throw new Error("No OAuth access token returned.");
-      setOauthToken(res.accessToken);
-      const prof = await fetchGmailProfile(res.accessToken);
-      setOauthProfile(prof);
-      setTransport("google_oauth");
-      setStatusMsg({
-        type: "success",
-        text: `Connected Google Workspace OAuth as ${prof.emailAddress}.`,
-      });
-    } catch (err: any) {
-      setStatusMsg({
-        type: "error",
-        text: `Google OAuth connection failed: ${err?.message || "Popup closed or unauthorized"}`,
-      });
-    } finally {
-      setConnectingOauth(false);
-    }
-  };
-
-  const handleDisconnectGoogleOauth = async () => {
-    await logoutGoogle();
-    setOauthToken(null);
-    setOauthProfile(null);
-    setTransport("server_edge");
-  };
 
   const handleFileAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -479,11 +390,17 @@ export default function AdminCrmEmails() {
           text: `Official ticket pass emailed to ${item.recipient} (${item.ref}).`,
         });
         await fetchEmailLogs();
+      } else if (res.unavailable || !EMAIL_DELIVERY_ENABLED) {
+        setStatusMsg({
+          type: "error",
+          text: `${EMAIL_UNAVAILABLE_MESSAGE} — download or share the PDF pass directly.`,
+        });
+        await fetchEmailLogs();
       } else {
         const statusSuffix = res.httpStatusCode
           ? ` [HTTP ${res.httpStatusCode}${res.errorType ? ` · ${res.errorType}` : ""}]`
           : "";
-        throw new Error(`${res.error || "Email provider did not confirm delivery."}${statusSuffix}`);
+        throw new Error(`${res.error || EMAIL_UNAVAILABLE_MESSAGE}${statusSuffix}`);
       }
     } catch (err: any) {
       setStatusMsg({
@@ -505,9 +422,6 @@ export default function AdminCrmEmails() {
     if (!bccCheck.valid) return `Invalid BCC address: ${bccCheck.error}`;
     if (!subject.trim()) return "Email subject is required.";
     if (!bodyHtml.trim()) return "Email body is required.";
-    if (transport === "google_oauth" && !oauthToken) {
-      return "Connect your authorized Google Workspace account first or switch to Server Edge Function.";
-    }
     return null;
   };
 
@@ -529,87 +443,35 @@ export default function AdminCrmEmails() {
     setSendingEmail(true);
     setStatusMsg(null);
     try {
-      if (transport === "google_oauth") {
-        const token = (await getGoogleAccessToken()) || oauthToken;
-        if (!token) {
-          throw new GmailAuthExpiredError();
-        }
-        try {
-          const result = await sendGmailDirect(
-            {
-              to: recipient,
-              cc,
-              bcc,
-              subject,
-              bodyHtml,
-              attachments,
-            },
-            token
-          );
+      const res = await sendCrmEmail({
+        recipient,
+        cc,
+        bcc,
+        subject,
+        bodyHtml,
+        attachments,
+      });
 
-          await recordClientGmailDelivery({
-            recipient: recipient.trim().toLowerCase(),
-            cc: cc.trim() || undefined,
-            bcc: bcc.trim() || undefined,
-            subject: subject.trim(),
-            bodyHtml,
-            senderEmail: oauthProfile?.emailAddress || "animationthenationalcollege@gmail.com",
-            status: "sent",
-            messageId: result.id,
-            threadId: result.threadId,
-            attachmentNames: attachments.map((a) => a.filename),
-          });
-
-          setStatusMsg({
-            type: "success",
-            text: `Email delivered via Gmail OAuth (Message ID: ${result.id}).`,
-          });
-          setConfirmSendOpen(false);
-          setAttachments([]);
-        } catch (err: any) {
-          if (err instanceof GmailAuthExpiredError) {
-            setOauthToken(null);
-            setOauthProfile(null);
-          }
-          await recordClientGmailDelivery({
-            recipient: recipient.trim().toLowerCase(),
-            cc: cc.trim() || undefined,
-            bcc: bcc.trim() || undefined,
-            subject: subject.trim(),
-            bodyHtml,
-            senderEmail: oauthProfile?.emailAddress || "animationthenationalcollege@gmail.com",
-            status: "failed",
-            errorMessage: err?.message || "Gmail OAuth send failed",
-            attachmentNames: attachments.map((a) => a.filename),
-          });
-          throw err;
-        }
-      } else {
-        const res = await sendCrmEmail({
-          recipient,
-          cc,
-          bcc,
-          subject,
-          bodyHtml,
-          attachments,
-        });
-
-        if (!res.ok) {
-          throw new Error(res.error || "Server email dispatch failed.");
-        }
-
-        setStatusMsg({
-          type: "success",
-          text: `Email delivered via Server Gmail API (Message ID: ${res.messageId}).`,
-        });
+      if (!res.ok) {
         setConfirmSendOpen(false);
-        setAttachments([]);
+        setStatusMsg({
+          type: "error",
+          text: res.error || EMAIL_UNAVAILABLE_MESSAGE,
+        });
+        return;
       }
+
+      setStatusMsg({
+        type: "success",
+        text: `Email delivered (Message ID: ${res.messageId}).`,
+      });
+      setConfirmSendOpen(false);
+      setAttachments([]);
     } catch (err: any) {
       setConfirmSendOpen(false);
       setStatusMsg({
         type: "error",
-        text: `Delivery failed: ${err?.message || "Unknown error"}`,
+        text: err?.message || EMAIL_UNAVAILABLE_MESSAGE,
       });
     } finally {
       setSendingEmail(false);
@@ -618,7 +480,7 @@ export default function AdminCrmEmails() {
 
   const handlePrefillTestEmail = () => {
     setRecipient(user?.email || "animationthenationalcollege@gmail.com");
-    setSubject("Supernova 3.0 — CRM Gmail Delivery Diagnostic Test");
+    setSubject("Supernova 3.0 — CRM Email Delivery Diagnostic Test");
     setBodyHtml(
       `<div style="font-family: Arial, sans-serif; padding: 20px; border: 2px solid #191936; border-radius: 12px;">
         <h2 style="margin-top:0; color:#191936;">Supernova 3.0 Delivery Verification</h2>
@@ -668,17 +530,20 @@ export default function AdminCrmEmails() {
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
             <span>Refresh</span>
           </button>
-          <a
-            href="https://mail.google.com"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 shadow-2xs transition-colors cursor-pointer no-underline"
-          >
-            <span>Open Gmail</span>
-            <ExternalLink size={13} />
-          </a>
         </div>
       </div>
+
+      {!EMAIL_DELIVERY_ENABLED && (
+        <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+          <AlertCircle size={16} className="text-amber-700 shrink-0 mt-0.5" />
+          <div>
+            <strong className="font-semibold block">{EMAIL_UNAVAILABLE_MESSAGE}</strong>
+            <span className="text-amber-800">
+              Automatic and CRM email sending is currently disabled. Registration approvals, QR/PDF pass downloads, and NAS archival continue to work normally.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Navigation Tabs */}
       <div className="inline-flex flex-wrap gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200">
@@ -702,7 +567,7 @@ export default function AdminCrmEmails() {
             }`}
           >
             <Send size={13} />
-            <span>Compose & Send (Gmail)</span>
+            <span>Compose Email</span>
           </button>
         )}
 
@@ -844,10 +709,10 @@ export default function AdminCrmEmails() {
             </div>
             <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
               <span className="text-[11px] font-mono uppercase text-rose-700 font-semibold block">
-                Failed / Not Sent
+                Unavailable / Not Sent
               </span>
               <span className="text-2xl font-display font-extrabold text-rose-700 block mt-1">
-                {logs.filter((l) => l.status === "failed" || l.status === "not_sent").length}
+                {logs.filter((l) => l.status === "failed" || l.status === "not_sent" || l.status === "unavailable").length}
               </span>
             </div>
             <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
@@ -956,7 +821,13 @@ export default function AdminCrmEmails() {
                               }`}
                             >
                               {item.status === "sent" ? <CheckCircle2 size={11} /> : <Clock size={11} />}
-                              <span className="uppercase">{item.status.replace("_", " ")}</span>
+                              <span className="uppercase">
+                                {item.status === "sent"
+                                  ? "sent"
+                                  : item.status === "failed"
+                                  ? "failed"
+                                  : EMAIL_UNAVAILABLE_MESSAGE}
+                              </span>
                             </span>
                           </div>
                           {item.errorMessage && (
@@ -993,74 +864,29 @@ export default function AdminCrmEmails() {
         </div>
       )}
 
-      {/* TAB 2: COMPOSE & SEND (GMAIL) */}
+      {/* TAB 2: COMPOSE EMAIL */}
       {activeTab === "compose" && canCompose && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 bg-white border border-slate-200/90 rounded-2xl p-6 shadow-2xs space-y-4">
-            {/* Delivery Transport Selector */}
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3">
               <div>
-                <div className="text-xs font-bold text-slate-900">Gmail Delivery Transport</div>
+                <div className="text-xs font-bold text-slate-900">CRM Email Dispatch</div>
                 <div className="text-[11px] text-slate-500">
-                  Use Server Edge Function (recommended) or authorized Google Workspace OAuth session.
+                  {EMAIL_DELIVERY_ENABLED
+                    ? "Dispatches through the configured Supabase Edge Function."
+                    : EMAIL_UNAVAILABLE_MESSAGE}
                 </div>
               </div>
-              <div className="inline-flex rounded-xl p-1 bg-white border border-slate-200">
-                <button
-                  type="button"
-                  onClick={() => setTransport("server_edge")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
-                    transport === "server_edge" ? "bg-[#0B1120] text-white" : "text-slate-600"
-                  }`}
-                >
-                  Server Edge Function
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTransport("google_oauth")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
-                    transport === "google_oauth" ? "bg-blue-600 text-white" : "text-slate-600"
-                  }`}
-                >
-                  Google OAuth ({oauthProfile ? "Connected" : "Connect"})
-                </button>
-              </div>
+              <span
+                className={`px-2.5 py-1 rounded-lg font-mono text-[10px] font-bold uppercase ${
+                  EMAIL_DELIVERY_ENABLED
+                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    : "bg-amber-50 text-amber-800 border border-amber-200"
+                }`}
+              >
+                {EMAIL_DELIVERY_ENABLED ? "Active" : "Unavailable"}
+              </span>
             </div>
-
-            {transport === "google_oauth" && (
-              <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="text-xs text-blue-950">
-                  {oauthProfile ? (
-                    <span>
-                      Authorized as <strong>{oauthProfile.emailAddress}</strong> (Gmail messages:{" "}
-                      {oauthProfile.messagesTotal})
-                    </span>
-                  ) : (
-                    <span>Connect the official Google account (animationthenationalcollege@gmail.com) to authorize sending.</span>
-                  )}
-                </div>
-                {oauthProfile ? (
-                  <button
-                    type="button"
-                    onClick={handleDisconnectGoogleOauth}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-blue-200 text-xs font-semibold text-blue-900 cursor-pointer"
-                  >
-                    <LogOut size={12} />
-                    <span>Disconnect</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleConnectGoogleOauth}
-                    disabled={connectingOauth}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
-                  >
-                    <ShieldCheck size={13} />
-                    <span>{connectingOauth ? "Authorizing..." : "Connect Gmail OAuth"}</span>
-                  </button>
-                )}
-              </div>
-            )}
 
             {/* Template + Test Email Row */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1324,25 +1150,6 @@ export default function AdminCrmEmails() {
               </table>
             </div>
           </div>
-
-          {gmailSent.length > 0 && (
-            <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs space-y-3">
-              <h3 className="text-sm font-display font-bold text-slate-900 m-0">
-                Recent Sent Messages from Connected Gmail Account
-              </h3>
-              <div className="space-y-2">
-                {gmailSent.map((m) => (
-                  <div key={m.id} className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <strong className="text-slate-900">{m.subject}</strong>
-                      <span className="font-mono text-[10px] text-slate-500">{m.date}</span>
-                    </div>
-                    <div className="font-mono text-[11px] text-blue-700 mt-0.5">To: {m.to}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -1369,24 +1176,19 @@ export default function AdminCrmEmails() {
                 </span>
                 <span
                   className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold uppercase ${
-                    serverGmailStatus?.ok
+                    deliveryStatus?.ok
                       ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                      : "bg-rose-50 text-rose-700 border border-rose-200"
+                      : "bg-amber-50 text-amber-800 border border-amber-200"
                   }`}
                 >
-                  {serverGmailStatus?.ok ? "HEALTHY" : "NEEDS SETUP"}
+                  {deliveryStatus?.ok ? "ACTIVE" : "UNAVAILABLE"}
                 </span>
               </div>
               <p className="text-xs text-slate-700 leading-relaxed">
-                {serverGmailStatus?.ok
-                  ? `Connected to ${serverGmailStatus.gmailAccount || serverGmailStatus.senderEmail}`
-                  : serverGmailStatus?.error || "Click Re-run Delivery Diagnostics to test endpoint."}
+                {deliveryStatus?.ok
+                  ? `Active sender: ${deliveryStatus.senderEmail}`
+                  : deliveryStatus?.message || deliveryStatus?.error || EMAIL_UNAVAILABLE_MESSAGE}
               </p>
-              {serverGmailStatus?.missingSecrets && serverGmailStatus.missingSecrets.length > 0 && (
-                <div className="text-[11px] font-mono text-rose-700 bg-rose-50 p-2 rounded-lg border border-rose-200">
-                  Missing Supabase Secrets: {serverGmailStatus.missingSecrets.join(", ")}
-                </div>
-              )}
             </div>
 
             <div className="p-5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-2">
@@ -1398,14 +1200,14 @@ export default function AdminCrmEmails() {
                   className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold uppercase ${
                     regConfirmHealth?.ok
                       ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                      : "bg-amber-50 text-amber-700 border border-amber-200"
+                      : "bg-amber-50 text-amber-800 border border-amber-200"
                   }`}
                 >
-                  {regConfirmHealth?.ok ? "DEPLOYED" : "CHECK REQUIRED"}
+                  {regConfirmHealth?.ok ? "ACTIVE" : "UNAVAILABLE"}
                 </span>
               </div>
               <p className="text-xs text-slate-700 leading-relaxed">
-                {regConfirmHealth?.detail || "Checking endpoint availability..."}
+                {regConfirmHealth?.detail || EMAIL_UNAVAILABLE_MESSAGE}
               </p>
             </div>
           </div>
@@ -1431,7 +1233,7 @@ export default function AdminCrmEmails() {
               <div>
                 <span className="text-slate-500">From:</span>{" "}
                 <strong className="font-mono text-slate-900">
-                  {oauthProfile?.emailAddress || "animationthenationalcollege@gmail.com"}
+                  animationthenationalcollege@gmail.com
                 </strong>
               </div>
               <div>
@@ -1447,9 +1249,9 @@ export default function AdminCrmEmails() {
                 <span className="text-slate-500">Subject:</span> <strong>{subject}</strong>
               </div>
               <div>
-                <span className="text-slate-500">Transport:</span>{" "}
+                <span className="text-slate-500">Status:</span>{" "}
                 <span className="font-mono">
-                  {transport === "google_oauth" ? "Authorized Google Workspace OAuth" : "Supabase Server Gmail API"}
+                  {EMAIL_DELIVERY_ENABLED ? "Supabase Edge Function" : EMAIL_UNAVAILABLE_MESSAGE}
                 </span>
               </div>
               {attachments.length > 0 && (

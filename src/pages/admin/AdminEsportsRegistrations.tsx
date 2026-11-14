@@ -20,6 +20,7 @@ import {
   validateRegistrationStatusUpdate,
   validateSelectionUpdate,
 } from "@/lib/tournamentEngine";
+import { EMAIL_DELIVERY_ENABLED } from "@/lib/emailPayload";
 import type { Registration, RegistrationStatus, TeamStatusHistoryEntry, TicketRecord, TournamentSelectionStatus } from "@/types/database";
 import {
   Search,
@@ -394,12 +395,21 @@ export default function AdminEsportsRegistrations() {
             attachments: pdfAttachments,
           });
           const emailOk = Boolean(emailRes.ok && !emailRes.simulated);
-          nextEmailStatus = emailOk ? "sent" : "failed";
+          const isUnavailable = Boolean(emailRes.unavailable || !EMAIL_DELIVERY_ENABLED);
+          nextEmailStatus = emailOk
+            ? "sent"
+            : isUnavailable
+            ? item.email_status === "sent"
+              ? "sent"
+              : "unavailable"
+            : "failed";
           if (emailOk) {
             ticketNotice += " & emailed to captain.";
+          } else if (isUnavailable) {
+            ticketNotice += " (Email delivery unavailable)";
           }
         } catch {
-          nextEmailStatus = "failed";
+          nextEmailStatus = EMAIL_DELIVERY_ENABLED ? "failed" : "unavailable";
         }
       }
 
@@ -565,6 +575,18 @@ export default function AdminEsportsRegistrations() {
         if (selectedReg && selectedReg.id === item.id) {
           setSelectedReg({ ...selectedReg, email_status: "sent" });
         }
+      } else if (emailRes.unavailable || !EMAIL_DELIVERY_ENABLED) {
+        const nextStatus = item.email_status === "sent" ? "sent" : "unavailable";
+        setRegistrations((prev) =>
+          prev.map((r) => (r.id === item.id ? { ...r, email_status: nextStatus } : r))
+        );
+        if (selectedReg && selectedReg.id === item.id) {
+          setSelectedReg({ ...selectedReg, email_status: nextStatus });
+        }
+        setStatusMessage({
+          type: "error",
+          text: "Email delivery unavailable — use Download Team Pass PDF instead.",
+        });
       } else {
         const nextStatus = item.email_status === "sent" ? "sent" : "failed";
         setRegistrations((prev) =>
@@ -1174,7 +1196,13 @@ export default function AdminEsportsRegistrations() {
                               }`}
                             >
                               <Mail size={10} />
-                              <span>{(item as any).email_status || "not_sent"}</span>
+                              <span>
+                                {(item as any).email_status === "sent"
+                                  ? "sent"
+                                  : (item as any).email_status === "failed"
+                                  ? "failed"
+                                  : "Email delivery unavailable"}
+                              </span>
                             </span>
                           </div>
                         )}
@@ -1466,8 +1494,14 @@ export default function AdminEsportsRegistrations() {
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600">Email Status:</span>
-                  <span className="font-semibold text-slate-800 capitalize">
-                    {(selectedReg as any).email_status || (selectedReg.status === "confirmed" ? "not sent" : "pending approval")}
+                  <span className="font-semibold text-slate-800">
+                    {(selectedReg as any).email_status === "sent"
+                      ? "Sent"
+                      : (selectedReg as any).email_status === "failed"
+                      ? "Failed"
+                      : selectedReg.status === "confirmed"
+                      ? "Email delivery unavailable"
+                      : "Pending approval"}
                   </span>
                 </div>
 

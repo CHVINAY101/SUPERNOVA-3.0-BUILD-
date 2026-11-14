@@ -13,6 +13,7 @@ import {
   isTournamentStructureLocked,
   resolveMatchDispute,
 } from "@/lib/tournamentEngine";
+import { toUuidOrNull } from "@/lib/entryOperations";
 import type {
   Game,
   Match,
@@ -553,7 +554,7 @@ export default function AdminEsportsControl() {
       .update({
         check_in_status: nextStatus,
         checked_in_at: nextStatus === "checked_in" ? nowIso : null,
-        checked_in_by: user?.email || "esports-staff@supernova.edu",
+        checked_in_by: nextStatus === "checked_in" ? toUuidOrNull(user?.id) : null,
       })
       .eq("id", team.id);
     await fetchData();
@@ -596,7 +597,7 @@ export default function AdminEsportsControl() {
         body: broadcastBody.trim(),
         is_pinned: true,
         is_published: true,
-        author_id: user?.email || "esports-control@supernova.edu",
+        author_id: toUuidOrNull(user?.id),
         published_at: new Date().toISOString(),
       });
       setBroadcastTitle("");

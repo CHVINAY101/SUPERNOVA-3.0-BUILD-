@@ -14,6 +14,7 @@ import { useAuth } from "@/lib/auth";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { downloadTicketPdfFile, generateTicketPdf } from "@/lib/ticketPdfService";
 import { getLocalNasArchives } from "@/lib/nasArchivalService";
+import { EMAIL_DELIVERY_ENABLED } from "@/lib/emailPayload";
 import { 
   Gamepad2, 
   Search, 
@@ -181,7 +182,14 @@ export default function AdminVisitorRegistrations() {
             days: item?.days_attending,
           },
         });
-        nextEmailStatus = emailRes.ok ? "sent" : "failed";
+        const isUnavailable = Boolean(emailRes.unavailable || !EMAIL_DELIVERY_ENABLED);
+        nextEmailStatus = emailRes.ok
+          ? "sent"
+          : isUnavailable
+          ? item?.email_status === "sent"
+            ? "sent"
+            : "unavailable"
+          : "failed";
         setRegistrations((prev) =>
           prev ? prev.map((r) => (r.id === id ? { ...r, email_status: nextEmailStatus } : r)) : null
         );
@@ -189,9 +197,11 @@ export default function AdminVisitorRegistrations() {
           setInspectedRecord((prev) => (prev ? { ...prev, email_status: nextEmailStatus } : null));
         }
         setStatusMsg({
-          type: emailRes.ok ? "success" : "error",
+          type: emailRes.ok || isUnavailable ? "success" : "error",
           text: emailRes.ok
             ? `Reference ${ref} confirmed and confirmation email sent.`
+            : isUnavailable
+            ? `Reference ${ref} confirmed. Ticket pass active (Email delivery unavailable).`
             : `Reference ${ref} confirmed, but email notice failed: ${emailRes.error}`,
         });
       } else {
@@ -405,6 +415,18 @@ export default function AdminVisitorRegistrations() {
         if (inspectedRecord && inspectedRecord.id === record.id) {
           setInspectedRecord({ ...inspectedRecord, email_status: "sent" });
         }
+      } else if (res.unavailable || !EMAIL_DELIVERY_ENABLED) {
+        const nextStatus = record.email_status === "sent" ? "sent" : "unavailable";
+        setRegistrations((prev) =>
+          prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: nextStatus } : item)) : null
+        );
+        if (inspectedRecord && inspectedRecord.id === record.id) {
+          setInspectedRecord({ ...inspectedRecord, email_status: nextStatus });
+        }
+        setStatusMsg({
+          type: "error",
+          text: "Email delivery unavailable — download the PDF ticket directly.",
+        });
       } else {
         const nextStatus = record.email_status === "sent" ? "sent" : "failed";
         setRegistrations((prev) =>
@@ -898,7 +920,13 @@ export default function AdminVisitorRegistrations() {
                                 }`}
                               >
                                 <Mail size={10} />
-                                <span>{row.email_status || "not_sent"}</span>
+                                <span>
+                                  {row.email_status === "sent"
+                                    ? "sent"
+                                    : row.email_status === "failed"
+                                    ? "failed"
+                                    : "Email delivery unavailable"}
+                                </span>
                               </span>
                             </div>
                           )}
@@ -1094,8 +1122,14 @@ export default function AdminVisitorRegistrations() {
                 )}
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600">Email Status:</span>
-                  <span className="font-semibold text-slate-800 capitalize">
-                    {inspectedRecord.email_status || (inspectedRecord.status === "confirmed" ? "not sent" : "pending confirmation")}
+                  <span className="font-semibold text-slate-800">
+                    {inspectedRecord.email_status === "sent"
+                      ? "Sent"
+                      : inspectedRecord.email_status === "failed"
+                      ? "Failed"
+                      : inspectedRecord.status === "confirmed"
+                      ? "Email delivery unavailable"
+                      : "Pending confirmation"}
                   </span>
                 </div>
                 {/* NAS Archive Status */}

@@ -886,7 +886,7 @@ BEGIN
 
   SELECT coalesce(email, full_name, 'staff@supernova') INTO v_actor_email FROM public.profiles WHERE id = v_uid;
 
-  SELECT id, checked_in_at, coalesce(checked_in_by_email, checked_in_by) AS prior_staff
+  SELECT id, checked_in_at, coalesce(checked_in_by_email, checked_in_by::text) AS prior_staff
   INTO v_existing
   FROM public.check_ins
   WHERE ticket_ref = p_ticket_ref
@@ -926,8 +926,8 @@ BEGIN
     p_ticket_ref,
     p_subject_type,
     p_event_day,
-    CASE WHEN p_subject_type = 'esports_player' THEN 'individual' ELSE 'individual' END,
-    coalesce(v_actor_email, v_uid::text),
+    'individual',
+    v_uid,
     v_actor_email,
     v_now,
     p_wristband_category,

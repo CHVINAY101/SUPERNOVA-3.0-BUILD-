@@ -205,7 +205,7 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
   {
     id: "email_centre",
     label: "Email Centre",
-    description: "Gmail dispatch, custom CRM emails, and pass resends",
+    description: "CRM emails, templates, and pass resends",
     permissions: [
       { key: "email_centre:view", label: "View" },
       { key: "email_centre:compose", label: "Compose" },

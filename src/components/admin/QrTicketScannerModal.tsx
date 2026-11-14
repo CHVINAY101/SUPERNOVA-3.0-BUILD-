@@ -1,6 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { Html5Qrcode } from "html5-qrcode";
 import { parseSecureQrPayload } from "@/lib/ticketing";
+import {
+  QrScanDeduplicator,
+  checkCameraEnvironmentSupport,
+  classifyCameraError,
+  selectPreferredCamera,
+  stopAllMediaTracks,
+  type CameraDeviceInfo,
+} from "@/lib/qrScannerEngine";
 import { Camera, CameraOff, QrCode, X, Keyboard } from "lucide-react";
 
 interface QrTicketScannerModalProps {
@@ -16,26 +25,47 @@ export function QrTicketScannerModal({
   onScanSuccess,
   title = "Scan Event Pass QR",
 }: QrTicketScannerModalProps) {
+  const location = useLocation();
+  const initialPathRef = useRef(location.pathname);
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const regionIdRef = useRef(`sn3-qr-reader-${Math.random().toString(36).slice(2, 8)}`);
+  const dedupRef = useRef(new QrScanDeduplicator(2500));
+
   const [cameraState, setCameraState] = useState<"starting" | "active" | "error">("starting");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
   const handledRef = useRef(false);
 
-  const stopCamera = async () => {
+  const stopCamera = useCallback(async () => {
     const instance = scannerRef.current;
     scannerRef.current = null;
-    if (!instance) return;
-    try {
-      if (instance.isScanning) {
-        await instance.stop();
+    if (instance) {
+      try {
+        if (instance.isScanning) {
+          await instance.stop();
+        }
+      } catch {
+        // ignore cleanup errors if camera already stopped
       }
-      instance.clear();
-    } catch {
-      // ignore cleanup errors if camera already stopped
+      try {
+        instance.clear();
+      } catch {
+        // ignore
+      }
     }
-  };
+    stopAllMediaTracks(containerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (location.pathname !== initialPathRef.current) {
+      initialPathRef.current = location.pathname;
+      if (isOpen) {
+        void stopCamera().then(onClose);
+      }
+    }
+  }, [location.pathname, isOpen, onClose, stopCamera]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -44,6 +74,7 @@ export function QrTicketScannerModal({
     }
 
     handledRef.current = false;
+    dedupRef.current.reset();
     setCameraState("starting");
     setCameraError(null);
     setManualCode("");
@@ -51,64 +82,85 @@ export function QrTicketScannerModal({
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       if (cancelled) return;
+      const support = checkCameraEnvironmentSupport();
+      if (!support.supported) {
+        if (!cancelled) {
+          setCameraState("error");
+          setCameraError(support.message || "Camera access unsupported in this browser.");
+        }
+        return;
+      }
+
       try {
         const cameras = await Html5Qrcode.getCameras();
         if (cancelled) return;
 
-        if (!cameras || cameras.length === 0) {
+        const camList: CameraDeviceInfo[] = (cameras || []).map((c) => ({
+          id: c.id,
+          label: c.label,
+        }));
+        const selection = selectPreferredCamera(camList);
+        if (!selection.ok) {
           setCameraState("error");
-          setCameraError("No camera device detected on this device. Enter the ticket reference manually below.");
+          setCameraError(selection.error);
           return;
         }
 
-        const preferred =
-          cameras.find((c) => /back|rear|environment/i.test(c.label)) || cameras[0];
-
-        const qr = new Html5Qrcode(regionIdRef.current);
+        const qr = new Html5Qrcode(regionIdRef.current, { verbose: false });
         scannerRef.current = qr;
 
-        await qr.start(
-          preferred.id,
-          { fps: 10, qrbox: { width: 220, height: 220 } },
-          (decodedText) => {
-            if (handledRef.current) return;
-            const parsed = parseSecureQrPayload(decodedText);
-            if (!parsed.ok) {
-              setCameraError("QR code does not contain a valid Supernova ticket reference or token.");
-              return;
+        const onDecoded = (decodedText: string) => {
+          if (handledRef.current || cancelled) return;
+          const decision = dedupRef.current.evaluateScan(decodedText);
+          if (!decision.accept) {
+            if (decision.reason === "invalid_qr") {
+              setCameraError(
+                decision.errorMessage ||
+                  "QR code does not contain a valid Supernova ticket reference or token."
+              );
             }
-            handledRef.current = true;
-            void stopCamera().then(() => {
-              onScanSuccess(decodedText.trim());
-              onClose();
-            });
-          },
-          () => {
-            // frame scan miss is normal; ignore
+            return;
           }
-        );
+          handledRef.current = true;
+          dedupRef.current.beginVerification(decodedText);
+          void stopCamera().then(() => {
+            onScanSuccess(decodedText.trim());
+            onClose();
+          });
+        };
 
-        if (!cancelled) {
-          setCameraState("active");
+        try {
+          await qr.start(selection.config, { fps: 10, qrbox: { width: 220, height: 220 } }, onDecoded, () => {});
+        } catch (startErr) {
+          if (typeof selection.config !== "string" && camList.length > 0) {
+            await qr.start(camList[0].id, { fps: 10, qrbox: { width: 220, height: 220 } }, onDecoded, () => {});
+          } else {
+            throw startErr;
+          }
         }
-      } catch (err: any) {
+
+        if (cancelled) {
+          await stopCamera();
+          return;
+        }
+
+        setCameraState("active");
+      } catch (err) {
         if (!cancelled) {
+          const info = classifyCameraError(err);
           setCameraState("error");
-          setCameraError(
-            err?.message?.includes("Permission") || err?.name === "NotAllowedError"
-              ? "Camera permission denied. Allow browser camera access or type the pass reference manually."
-              : "Unable to start camera scanner in this browser context. Use manual Ticket ID lookup below."
-          );
+          setCameraError(info.message);
+          void stopCamera();
         }
       }
-    }, 150);
+    }, 100);
 
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
       void stopCamera();
     };
-  }, [isOpen, onClose, onScanSuccess]);
+  }, [isOpen, onClose, onScanSuccess, stopCamera]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -119,7 +171,7 @@ export function QrTicketScannerModal({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, stopCamera]);
 
   if (!isOpen) return null;
 
@@ -173,9 +225,22 @@ export function QrTicketScannerModal({
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div ref={containerRef} className="p-5 space-y-4">
           <div className="rounded-xl border border-slate-200 bg-slate-950 overflow-hidden relative min-h-[240px] flex items-center justify-center">
             <div id={regionIdRef.current} className="w-full" />
+            {cameraState === "active" && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 flex items-center justify-center"
+              >
+                <div className="relative w-48 h-48">
+                  <span className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-[#D5F542] rounded-tl-lg" />
+                  <span className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-[#D5F542] rounded-tr-lg" />
+                  <span className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-[#38BDF8] rounded-bl-lg" />
+                  <span className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-[#38BDF8] rounded-br-lg" />
+                </div>
+              </div>
+            )}
             {cameraState === "starting" && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/90 text-slate-300 text-xs font-mono p-4 text-center">
                 <Camera size={24} className="text-cyan-400" />

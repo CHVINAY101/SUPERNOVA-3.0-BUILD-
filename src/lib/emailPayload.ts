@@ -1,5 +1,8 @@
 const STRICT_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/;
 
+export const EMAIL_DELIVERY_ENABLED = false;
+export const EMAIL_UNAVAILABLE_MESSAGE = "Email delivery unavailable";
+
 export interface EmailAttachmentInput {
   filename: string;
   contentType: string;
@@ -171,6 +174,7 @@ export interface RawProviderResponse {
   statusCode: number;
   okFlag?: boolean;
   simulated?: boolean;
+  unavailable?: boolean;
   messageId?: string | null;
   error?: string | null;
 }
@@ -181,9 +185,16 @@ export interface RawProviderResponse {
  */
 export function evaluateProviderDelivery(res: RawProviderResponse): {
   delivered: boolean;
-  status: "sent" | "failed";
+  status: "sent" | "failed" | "unavailable";
   error?: string;
 } {
+  if (res.unavailable) {
+    return {
+      delivered: false,
+      status: "unavailable",
+      error: res.error || EMAIL_UNAVAILABLE_MESSAGE,
+    };
+  }
   if (!res.httpOk || res.statusCode < 200 || res.statusCode >= 300) {
     return {
       delivered: false,
@@ -302,15 +313,15 @@ export function classifyEdgeFunctionError(params: {
 }
 
 export function resolveConfiguredEmailProvider(env: {
+  enabled?: boolean;
   explicitProvider?: string;
-  hasGmailCreds: boolean;
   hasResendKey: boolean;
-}): "gmail" | "resend" {
+}): "unavailable" | "resend" {
+  const isEnabled = env.enabled ?? EMAIL_DELIVERY_ENABLED;
+  if (!isEnabled) return "unavailable";
   const explicit = (env.explicitProvider || "").trim().toLowerCase();
-  if (explicit === "gmail") return "gmail";
-  if (explicit === "resend") return "resend";
-  if (env.hasGmailCreds) return "gmail";
-  if (env.hasResendKey) return "resend";
-  return "gmail";
+  if (explicit === "resend" && env.hasResendKey) return "resend";
+  if (!explicit && env.hasResendKey) return "resend";
+  return "unavailable";
 }
 
