@@ -19,10 +19,19 @@ import {
   ChevronUp,
   Copy,
   Check,
+  UserCheck,
 } from "lucide-react";
 
 export interface AuthDiagnostic {
-  category: "invalid_credentials" | "network_error" | "rate_limited" | "email_not_confirmed" | "unauthorized_role" | "config_error" | "general_error";
+  category:
+    | "invalid_credentials"
+    | "network_error"
+    | "rate_limited"
+    | "email_not_confirmed"
+    | "unauthorized_role"
+    | "account_deactivated"
+    | "config_error"
+    | "general_error";
   title: string;
   message: string;
   actionHint: string;
@@ -49,7 +58,7 @@ function classifyAuthError(
   const endpoint = connectionInfo.url || "https://cirreovughlncadrbvcn.supabase.co";
   const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-  // 1. Network Failure / Unreachable
+  // 1. Network Failure
   const isNetwork =
     explicitCategory === "network_error" ||
     !isOnline ||
@@ -70,8 +79,8 @@ function classifyAuthError(
       title: "Network Connection Failure",
       message: !isOnline
         ? "Your browser is currently offline. An active internet connection is required to authenticate with the Supernova 3.0 server."
-        : "Could not establish a connection to the Supabase authentication server. The server may be temporarily unreachable or blocked by your network.",
-      actionHint: "Verify your internet connectivity, disable any ad-blockers or corporate VPNs that might restrict traffic to *.supabase.co, and try testing the connection below.",
+        : "Could not establish a connection to the Supabase authentication server.",
+      actionHint: "Verify your internet connectivity and retry or test the connection below.",
       statusCode: status || (isOnline ? 0 : -1),
       errorCode: errCode || (isOnline ? "NETWORK_UNREACHABLE" : "BROWSER_OFFLINE"),
       timestamp: now,
@@ -81,7 +90,28 @@ function classifyAuthError(
     };
   }
 
-  // 2. Invalid Credentials
+  // 2. Deactivated / Revoked Account
+  if (
+    explicitCategory === "account_deactivated" ||
+    rawMsg.toLowerCase().includes("deactivated") ||
+    rawMsg.toLowerCase().includes("revoked") ||
+    rawMsg.toLowerCase().includes("banned")
+  ) {
+    return {
+      category: "account_deactivated",
+      title: "Account Deactivated or Revoked",
+      message: "Your CRM staff account has been suspended or revoked by a Super Admin.",
+      actionHint: "Contact the Super Admin team if your operational access needs to be restored.",
+      statusCode: 403,
+      errorCode: "ACCOUNT_SUSPENDED",
+      timestamp: now,
+      isOnline,
+      endpoint,
+      rawDetails: rawMsg,
+    };
+  }
+
+  // 3. Invalid Credentials
   const isInvalidCreds =
     explicitCategory === "invalid_credentials" ||
     rawMsg.includes("Invalid login credentials") ||
@@ -93,8 +123,8 @@ function classifyAuthError(
     return {
       category: "invalid_credentials",
       title: "Invalid Credentials",
-      message: "The email address or password entered does not match any registered administrative user.",
-      actionHint: "Check your email address spelling and ensure Caps Lock is disabled. If you have forgotten your password, use the 'Forgot password?' link above.",
+      message: "The email address or password entered does not match an invited CRM user.",
+      actionHint: "Verify your email spelling and password, or use Forgot password? to reset your password.",
       statusCode: 400,
       errorCode: "INVALID_CREDENTIALS",
       timestamp: now,
@@ -104,18 +134,18 @@ function classifyAuthError(
     };
   }
 
-  // 3. Unauthorized Administrator Role
+  // 4. Unauthorized Role
   const isUnauthorizedRole =
     explicitCategory === "unauthorized_role" ||
-    rawMsg.includes("active administrator role") ||
+    rawMsg.includes("active CRM role") ||
     rawMsg.includes("user_roles");
 
   if (isUnauthorizedRole) {
     return {
       category: "unauthorized_role",
-      title: "Administrator Role Missing",
-      message: "Your login credentials were confirmed by Supabase Auth, but your account does not have an active administrative role in public.user_roles.",
-      actionHint: "Contact a Super Administrator to grant your account access in public.user_roles with one of: super_admin, event_admin, checkin_staff, or score_operator.",
+      title: "CRM Access Not Assigned",
+      message: "Your credentials were recognized, but this account does not have an active CRM role or invitation.",
+      actionHint: "CRM access is strictly invitation-based. Ask a Super Admin to invite your account from User Management.",
       statusCode: 403,
       errorCode: "ROLE_NOT_ASSIGNED",
       timestamp: now,
@@ -125,18 +155,17 @@ function classifyAuthError(
     };
   }
 
-  // 4. Rate Limited
-  const isRateLimited =
+  // 5. Rate Limited
+  if (
     explicitCategory === "rate_limited" ||
     rawMsg.includes("rate limit") ||
     rawMsg.includes("Too many requests") ||
-    status === 429;
-
-  if (isRateLimited) {
+    status === 429
+  ) {
     return {
       category: "rate_limited",
       title: "Too Many Login Attempts",
-      message: "Authentication requests have been temporarily throttled to protect your account against brute-force attempts.",
+      message: "Authentication requests have been temporarily throttled.",
       actionHint: "Please wait 60 seconds before submitting another login attempt.",
       statusCode: 429,
       errorCode: "RATE_LIMIT_EXCEEDED",
@@ -147,18 +176,17 @@ function classifyAuthError(
     };
   }
 
-  // 5. Email Unconfirmed
-  const isEmailUnconfirmed =
+  // 6. Email Unconfirmed
+  if (
     explicitCategory === "email_not_confirmed" ||
     rawMsg.includes("Email not confirmed") ||
-    errCode === "email_not_confirmed";
-
-  if (isEmailUnconfirmed) {
+    errCode === "email_not_confirmed"
+  ) {
     return {
       category: "email_not_confirmed",
-      title: "Email Confirmation Required",
-      message: "Your account exists in Supabase Auth, but your email address has not been confirmed yet.",
-      actionHint: "Check your email inbox (and spam folder) for the verification link sent by Supabase, or request a Super Administrator to confirm your identity.",
+      title: "Invitation Acceptance Pending",
+      message: "Please open the invitation link sent to your email address to verify your identity first.",
+      actionHint: "Check your email inbox (and spam folder) for your Supernova 3.0 CRM invitation link.",
       statusCode: 400,
       errorCode: "EMAIL_NOT_CONFIRMED",
       timestamp: now,
@@ -168,12 +196,11 @@ function classifyAuthError(
     };
   }
 
-  // 6. Generic / Fallback
   return {
     category: "general_error",
     title: "Authentication Error",
     message: rawMsg,
-    actionHint: "Review your input or check the technical diagnostics below to troubleshoot.",
+    actionHint: "Review your credentials or check the technical diagnostics below.",
     statusCode: status || 500,
     errorCode: errCode || "AUTH_FAILURE",
     timestamp: now,
@@ -184,41 +211,20 @@ function classifyAuthError(
 }
 
 function logAuthDiagnosticToConsole(diag: AuthDiagnostic) {
-  const icon =
-    diag.category === "network_error"
-      ? "📡"
-      : diag.category === "invalid_credentials"
-      ? "🔑"
-      : diag.category === "unauthorized_role"
-      ? "🛡️"
-      : "⚠️";
-
-  console.groupCollapsed(
-    `[AdminAuth Diagnostic] ${icon} ${diag.title} [${diag.category.toUpperCase()}]`
-  );
+  console.groupCollapsed(`[AdminAuth Diagnostic] ${diag.title} [${diag.category.toUpperCase()}]`);
   console.warn("Classification:", diag.category);
   console.info("User Message:", diag.message);
-  console.info("Actionable Guidance:", diag.actionHint);
-  console.table({
-    Category: diag.category,
-    ErrorCode: diag.errorCode || "N/A",
-    StatusCode: diag.statusCode ?? "N/A",
-    BrowserOnline: diag.isOnline ? "YES" : "NO",
-    TargetEndpoint: diag.endpoint,
-    Timestamp: diag.timestamp,
-  });
   if (diag.rawDetails) {
-    console.info("Raw Error Details:", diag.rawDetails);
+    console.info("Details:", diag.rawDetails);
   }
   console.groupEnd();
 }
 
 export default function AdminLogin() {
-  const { session, isAdmin, loading: authLoading, signIn } = useAuth();
+  const { session, isAdmin, accountStatus, loading: authLoading, signIn, refreshRole } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Fallback check that triggers a console warning if client configuration is incomplete before login form renders
   const [configStatus] = useState(() => {
     const status = checkSupabaseClientConfig();
     if (!status.isValid && status.warning) {
@@ -227,23 +233,32 @@ export default function AdminLogin() {
     return status;
   });
 
-  useEffect(() => {
-    if (!configStatus.isValid && configStatus.warning) {
-      console.warn(configStatus.warning);
-    }
-  }, [configStatus]);
-
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  // Diagnostic Error State
+  // Detect invitation / password recovery flow from URL or invited session
+  const [isInviteFlow, setIsInviteFlow] = useState(false);
+
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const search = window.location.search || "";
+    const isInviteParam =
+      hash.includes("type=invite") ||
+      search.includes("type=invite") ||
+      hash.includes("type=recovery") ||
+      search.includes("type=recovery");
+
+    if (isInviteParam || (session && accountStatus === "invited")) {
+      setIsInviteFlow(true);
+    }
+  }, [session, accountStatus]);
+
   const [diagnostic, setDiagnostic] = useState<AuthDiagnostic | null>(null);
   const [showTechDetails, setShowTechDetails] = useState(false);
   const [copiedReport, setCopiedReport] = useState(false);
 
-  // Network Ping State
   const [testingConnection, setTestingConnection] = useState(false);
   const [pingResult, setPingResult] = useState<{
     ok: boolean;
@@ -255,8 +270,8 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
 
-  // If already authenticated and verified as admin, redirect to target or /admin
-  if (!authLoading && session && isAdmin) {
+  // Already active authenticated admin -> redirect to workspace
+  if (!authLoading && session && isAdmin && accountStatus === "active" && !isInviteFlow) {
     const dest = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "/admin";
     return <Navigate to={dest} replace />;
   }
@@ -268,21 +283,14 @@ export default function AdminLogin() {
     try {
       const { error: pingErr } = await supabase.auth.getSession();
       const latency = Math.round(performance.now() - start);
-
       if (pingErr) {
-        setPingResult({
-          ok: false,
-          message: `Endpoint returned error: ${pingErr.message}`,
-          latencyMs: latency,
-        });
-        console.warn("[AdminAuth Ping] Endpoint error:", pingErr);
+        setPingResult({ ok: false, message: `Endpoint returned error: ${pingErr.message}`, latencyMs: latency });
       } else {
         setPingResult({
           ok: true,
-          message: `Endpoint reachable (${latency}ms round-trip latency). Connection to Supabase is active.`,
+          message: `Endpoint reachable (${latency}ms). Connection to Supabase is active.`,
           latencyMs: latency,
         });
-        console.info(`[AdminAuth Ping] Supabase Auth reached in ${latency}ms`);
       }
     } catch (testErr: any) {
       const latency = Math.round(performance.now() - start);
@@ -291,7 +299,6 @@ export default function AdminLogin() {
         message: `Network ping failed: ${testErr?.message || "Server unreachable"}`,
         latencyMs: latency,
       });
-      console.error("[AdminAuth Ping] Exception:", testErr);
     } finally {
       setTestingConnection(false);
     }
@@ -305,19 +312,58 @@ export default function AdminLogin() {
       `Category: ${diagnostic.category}`,
       `Title: ${diagnostic.title}`,
       `Message: ${diagnostic.message}`,
-      `Action Hint: ${diagnostic.actionHint}`,
       `Error Code: ${diagnostic.errorCode || "N/A"}`,
-      `Status Code: ${diagnostic.statusCode ?? "N/A"}`,
-      `Browser Online: ${diagnostic.isOnline ? "Yes" : "No"}`,
+      `HTTP Status: ${diagnostic.statusCode ?? "N/A"}`,
       `Endpoint: ${diagnostic.endpoint}`,
-      `Raw Details: ${diagnostic.rawDetails || "None"}`,
-      `===========================================`,
     ].join("\n");
 
     if (navigator?.clipboard?.writeText) {
       navigator.clipboard.writeText(report);
       setCopiedReport(true);
       setTimeout(() => setCopiedReport(false), 2500);
+    }
+  };
+
+  const handleAcceptInvitePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDiagnostic(null);
+    setResetMessage(null);
+
+    if (password.length < 8) {
+      setDiagnostic(classifyAuthError("Password must be at least 8 characters long."));
+      return;
+    }
+    if (password !== confirmPassword) {
+      setDiagnostic(classifyAuthError("Passwords do not match. Please re-enter carefully."));
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error: updErr } = await supabase.auth.updateUser({ password });
+      if (updErr) {
+        const diag = classifyAuthError(updErr);
+        setDiagnostic(diag);
+        logAuthDiagnosticToConsole(diag);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        await supabase.rpc("accept_crm_invite");
+      } catch {
+        // Fallback if RPC not yet deployed
+      }
+
+      await refreshRole();
+      setIsInviteFlow(false);
+      setLoading(false);
+      navigate("/admin", { replace: true });
+    } catch (err: any) {
+      setLoading(false);
+      const diag = classifyAuthError(err);
+      setDiagnostic(diag);
+      logAuthDiagnosticToConsole(diag);
     }
   };
 
@@ -328,55 +374,13 @@ export default function AdminLogin() {
     setPingResult(null);
 
     if (!email.trim() || !password) {
-      const diag: AuthDiagnostic = {
-        category: "general_error",
-        title: "Missing Fields",
-        message: "Please enter both an email address and a password.",
-        actionHint: "Complete both fields before submitting.",
-        timestamp: new Date().toLocaleTimeString(),
-        isOnline: navigator.onLine,
-        endpoint: getSupabaseConnectionInfo().url || "Supabase",
-      };
-      setDiagnostic(diag);
+      setDiagnostic(
+        classifyAuthError("Please enter both your invited email address and password.")
+      );
       return;
     }
 
     setLoading(true);
-
-    if (mode === "signup") {
-      try {
-        const { data, error: signUpErr } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-        });
-        setLoading(false);
-
-        if (signUpErr) {
-          const diag = classifyAuthError(signUpErr);
-          setDiagnostic(diag);
-          logAuthDiagnosticToConsole(diag);
-          return;
-        }
-
-        if (data.session) {
-          const dest = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "/admin";
-          navigate(dest, { replace: true });
-        } else {
-          setResetMessage(
-            "Account created successfully in Supabase Auth! Please check your email inbox if confirmation is required, then have a Super Admin assign your operational role in public.user_roles."
-          );
-          setMode("signin");
-        }
-      } catch (err: any) {
-        setLoading(false);
-        const diag = classifyAuthError(err);
-        setDiagnostic(diag);
-        logAuthDiagnosticToConsole(diag);
-      }
-      return;
-    }
-
-    // Sign in flow
     const result = await signIn(email.trim(), password);
     setLoading(false);
 
@@ -396,30 +400,21 @@ export default function AdminLogin() {
 
     const targetEmail = email.trim();
     if (!targetEmail) {
-      const diag: AuthDiagnostic = {
-        category: "general_error",
-        title: "Email Required",
-        message: "Please enter your registered admin email address above first.",
-        actionHint: "Type your admin email address into the Email field, then click Forgot password again.",
-        timestamp: new Date().toLocaleTimeString(),
-        isOnline: navigator.onLine,
-        endpoint: getSupabaseConnectionInfo().url || "Supabase",
-      };
-      setDiagnostic(diag);
+      setDiagnostic(classifyAuthError("Please enter your registered CRM email address first."));
       return;
     }
 
     setResetLoading(true);
     try {
       const { error: resetErr } = await supabase.auth.resetPasswordForEmail(targetEmail, {
-        redirectTo: `${window.location.origin}/admin/login`,
+        redirectTo: `${window.location.origin}/admin/login?type=recovery`,
       });
       if (resetErr) {
         const diag = classifyAuthError(resetErr);
         setDiagnostic(diag);
         logAuthDiagnosticToConsole(diag);
       } else {
-        setResetMessage(`Password reset link dispatched to ${targetEmail}. Please check your inbox.`);
+        setResetMessage(`Password reset instructions sent to ${targetEmail}.`);
       }
     } catch (err: any) {
       const diag = classifyAuthError(err);
@@ -430,7 +425,6 @@ export default function AdminLogin() {
     }
   };
 
-  // Helper for error badge and container styling
   const getCategoryStyles = (category: AuthDiagnostic["category"]) => {
     switch (category) {
       case "network_error":
@@ -453,15 +447,16 @@ export default function AdminLogin() {
           textColor: "text-amber-900",
           hintBg: "bg-amber-100/80 border-amber-300 text-amber-950",
         };
+      case "account_deactivated":
       case "unauthorized_role":
         return {
-          containerBg: "bg-purple-50/95 border-purple-500",
-          tagBg: "bg-purple-600 text-white",
-          tagLabel: "ROLE REQUIRED",
-          icon: <ShieldAlert size={20} className="shrink-0 text-purple-600 mt-0.5" />,
-          titleColor: "text-purple-950",
-          textColor: "text-purple-900",
-          hintBg: "bg-purple-100/80 border-purple-300 text-purple-950",
+          containerBg: "bg-rose-50/95 border-rose-500",
+          tagBg: "bg-rose-600 text-white",
+          tagLabel: category === "account_deactivated" ? "ACCOUNT SUSPENDED" : "ACCESS RESTRICTED",
+          icon: <ShieldAlert size={20} className="shrink-0 text-rose-600 mt-0.5" />,
+          titleColor: "text-rose-950",
+          textColor: "text-rose-900",
+          hintBg: "bg-rose-100/80 border-rose-300 text-rose-950",
         };
       case "rate_limited":
         return {
@@ -477,7 +472,7 @@ export default function AdminLogin() {
         return {
           containerBg: "bg-blue-50/95 border-blue-500",
           tagBg: "bg-blue-600 text-white",
-          tagLabel: "CONFIRMATION NEEDED",
+          tagLabel: "INVITATION PENDING",
           icon: <Mail size={20} className="shrink-0 text-blue-600 mt-0.5" />,
           titleColor: "text-blue-950",
           textColor: "text-blue-900",
@@ -500,7 +495,6 @@ export default function AdminLogin() {
 
   return (
     <div className="min-h-screen w-full bg-[#FAF9F4] text-[#191936] flex flex-col justify-between p-4 sm:p-6 md:p-8 relative selection:bg-[#D5F542] selection:text-[#191936]">
-      {/* Background Subtle Dot Grid */}
       <div
         className="absolute inset-0 pointer-events-none opacity-20"
         style={{
@@ -510,7 +504,6 @@ export default function AdminLogin() {
         aria-hidden="true"
       />
 
-      {/* Top Navigation Bar */}
       <header className="relative z-10 w-full max-w-5xl mx-auto flex items-center justify-between py-2">
         <Link
           to="/"
@@ -523,86 +516,44 @@ export default function AdminLogin() {
         <div className="flex items-center gap-2">
           <span className="w-2.5 h-2.5 rounded-full bg-[#D5F542] border border-[#191936]" />
           <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#191936]/70">
-            SECURE PORTAL
+            INVITATION-ONLY CRM PORTAL
           </span>
         </div>
       </header>
 
-      {/* Main Centered Login Card */}
       <main className="relative z-10 w-full max-w-[480px] mx-auto my-auto py-8">
         <div className="bg-[#FFFFFF] border-3 sm:border-4 border-[#191936] rounded-[24px] sm:rounded-[32px] p-6 sm:p-8 md:p-10 shadow-[6px_6px_0px_#191936] sm:shadow-[8px_8px_0px_#191936] flex flex-col">
-          {/* Card Header & Brand Lockup */}
           <div className="flex flex-col items-center text-center mb-6">
             <div className="w-14 h-14 rounded-2xl bg-[#191936] text-[#D5F542] border-2 border-[#191936] flex items-center justify-center shadow-[3px_3px_0px_#4549D8] mb-4">
-              <Lock size={26} />
+              {isInviteFlow ? <UserCheck size={26} /> : <Lock size={26} />}
             </div>
 
             <span className="font-heading text-xs font-bold text-[#4549D8] tracking-[0.16em] uppercase mb-1">
               THE NATIONAL COLLEGE · BASAVANAGUDI
             </span>
             <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-[#191936] leading-tight">
-              {mode === "signin" ? "Admin Login" : "Staff Registration"}
+              {isInviteFlow ? "Complete CRM Invitation" : "Admin & Staff Login"}
             </h1>
-            <p className="font-body text-xs sm:text-sm text-[#191936]/75 mt-1.5 leading-relaxed max-w-[340px]">
-              {mode === "signin"
-                ? "Sign in to manage Supernova 3.0 content, registration approvals, and live event operations."
-                : "Create a Supabase Auth identity for operational and administrative access."}
+            <p className="font-body text-xs sm:text-sm text-[#191936]/75 mt-1.5 leading-relaxed max-w-[350px]">
+              {isInviteFlow
+                ? "Set a secure password for your invited Supernova 3.0 CRM account to activate your assigned role."
+                : "Sign in with your authorized Supernova 3.0 CRM credentials. Access is restricted to invited personnel."}
             </p>
-
-            {/* Mode Switcher Tabs */}
-            <div className="mt-4 inline-flex p-1 bg-[#FAF9F4] border-2 border-[#191936] rounded-xl">
-              <button
-                type="button"
-                onClick={() => {
-                  setMode("signin");
-                  setDiagnostic(null);
-                  setPingResult(null);
-                }}
-                className={`px-4 py-1.5 rounded-lg text-xs font-heading font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                  mode === "signin"
-                    ? "bg-[#191936] text-white shadow-[2px_2px_0px_#4549D8]"
-                    : "text-[#191936]/70 hover:text-[#191936]"
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMode("signup");
-                  setDiagnostic(null);
-                  setPingResult(null);
-                }}
-                className={`px-4 py-1.5 rounded-lg text-xs font-heading font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                  mode === "signup"
-                    ? "bg-[#191936] text-white shadow-[2px_2px_0px_#4549D8]"
-                    : "text-[#191936]/70 hover:text-[#191936]"
-                }`}
-              >
-                Create Account
-              </button>
-            </div>
           </div>
 
-          {/* Descriptive, UI-Friendly Error Diagnostic Panel */}
           {diagnostic && categoryStyle && (
             <div
               role="alert"
-              className={`mb-5 p-4 rounded-2xl border-2 ${categoryStyle.containerBg} transition-all shadow-sm flex flex-col gap-3 animate-shake`}
+              className={`mb-5 p-4 rounded-2xl border-2 ${categoryStyle.containerBg} transition-all shadow-sm flex flex-col gap-3`}
             >
-              {/* Header with Category Badge & Title */}
               <div className="flex items-start gap-3">
                 {categoryStyle.icon}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span
-                      className={`text-[10px] font-mono font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${categoryStyle.tagBg}`}
-                    >
+                    <span className={`text-[10px] font-mono font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${categoryStyle.tagBg}`}>
                       {categoryStyle.tagLabel}
                     </span>
-                    <span className="text-[11px] font-mono text-slate-500">
-                      {diagnostic.timestamp}
-                    </span>
+                    <span className="text-[11px] font-mono text-slate-500">{diagnostic.timestamp}</span>
                   </div>
                   <h3 className={`text-sm sm:text-base font-bold ${categoryStyle.titleColor} m-0 leading-snug`}>
                     {diagnostic.title}
@@ -610,18 +561,15 @@ export default function AdminLogin() {
                 </div>
               </div>
 
-              {/* User-friendly message */}
               <p className={`text-xs sm:text-[13px] ${categoryStyle.textColor} m-0 leading-relaxed`}>
                 {diagnostic.message}
               </p>
 
-              {/* Action Hint / Guidance */}
               <div className={`p-2.5 rounded-xl border text-xs font-medium leading-relaxed ${categoryStyle.hintBg}`}>
                 <span className="font-bold block mb-0.5">Recommended Next Step:</span>
                 <span>{diagnostic.actionHint}</span>
               </div>
 
-              {/* Network Error Interactive Ping Tool */}
               {diagnostic.category === "network_error" && (
                 <div className="pt-1 flex flex-col gap-2">
                   <button
@@ -651,21 +599,12 @@ export default function AdminLogin() {
                           : "bg-red-100 text-red-950 border-red-300"
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 font-bold mb-0.5">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            pingResult.ok ? "bg-emerald-500" : "bg-red-500"
-                          }`}
-                        />
-                        <span>{pingResult.ok ? "Ping Succeeded" : "Ping Failed"}</span>
-                      </div>
                       <p className="m-0 leading-snug">{pingResult.message}</p>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Collapsible Technical Diagnostics Toggle */}
               <div className="pt-1 border-t border-slate-200/60 flex flex-col gap-2">
                 <button
                   type="button"
@@ -673,7 +612,7 @@ export default function AdminLogin() {
                   className="inline-flex items-center justify-between text-[11px] font-mono text-slate-600 hover:text-slate-900 cursor-pointer py-1"
                 >
                   <span className="font-bold">
-                    {showTechDetails ? "Hide Technical Details" : "Show Technical Details (for IT / Admins)"}
+                    {showTechDetails ? "Hide Technical Details" : "Show Technical Details"}
                   </span>
                   {showTechDetails ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
@@ -700,22 +639,11 @@ export default function AdminLogin() {
                       <span>{diagnostic.errorCode || "N/A"}</span>
                     </div>
                     <div>
-                      <span className="text-slate-400">HTTP Status:</span>{" "}
-                      <span>{diagnostic.statusCode ?? "N/A"}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400">Browser Online:</span>{" "}
-                      <span className={diagnostic.isOnline ? "text-emerald-400" : "text-rose-400"}>
-                        {diagnostic.isOnline ? "Yes (online)" : "No (offline)"}
-                      </span>
-                    </div>
-                    <div>
                       <span className="text-slate-400">Endpoint:</span>{" "}
                       <span className="text-slate-300 break-all">{diagnostic.endpoint}</span>
                     </div>
                     {diagnostic.rawDetails && (
                       <div className="pt-1 text-slate-300 border-t border-slate-800 break-words">
-                        <span className="text-slate-400 block mb-0.5">Raw Message:</span>
                         <code>{diagnostic.rawDetails}</code>
                       </div>
                     )}
@@ -735,7 +663,6 @@ export default function AdminLogin() {
             </div>
           )}
 
-          {/* Configuration Incomplete Fallback Warning */}
           {!configStatus.isValid && (
             <div
               role="alert"
@@ -745,48 +672,121 @@ export default function AdminLogin() {
               <div>
                 <p className="font-bold m-0 text-amber-950">Supabase Configuration Incomplete</p>
                 <p className="m-0 mt-0.5 text-xs text-amber-800 leading-relaxed">
-                  {configStatus.warning || "VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY is not correctly set. Database connection may fail."}
+                  {configStatus.warning}
                 </p>
               </div>
             </div>
           )}
 
-          {/* Login Form */}
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            {/* Email Field */}
-            <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="admin-email"
-                className="font-heading text-xs sm:text-[13px] font-bold text-[#191936] tracking-wide uppercase flex items-center justify-between"
-              >
-                <span>Email Address</span>
-                <span className="text-[#191936]/40 font-normal lowercase">required</span>
-              </label>
-              <div className="relative flex items-center">
-                <input
-                  id="admin-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@nationalcollege.edu"
-                  required
-                  autoComplete="email"
-                  className="w-full h-[50px] sm:h-[52px] pl-11 pr-4 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
-                />
-                <Mail size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
+          {isInviteFlow && session ? (
+            <form onSubmit={handleAcceptInvitePassword} className="flex flex-col gap-4">
+              <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-900">
+                Activating invitation for <strong>{session.user.email}</strong>
               </div>
-            </div>
 
-            {/* Password Field with Visibility Toggle */}
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-1.5">
                 <label
-                  htmlFor="admin-password"
+                  htmlFor="invite-password"
                   className="font-heading text-xs sm:text-[13px] font-bold text-[#191936] tracking-wide uppercase"
                 >
-                  Password
+                  Create Password (Min 8 chars)
                 </label>
-                {mode === "signin" && (
+                <div className="relative flex items-center">
+                  <input
+                    id="invite-password"
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    required
+                    minLength={8}
+                    autoComplete="new-password"
+                    className="w-full h-[50px] pl-11 pr-11 bg-[#FAF9F4] text-[#191936] text-sm font-body border-2 border-[#191936] rounded-xl outline-none focus:bg-white focus:border-[#4549D8]"
+                  />
+                  <Lock size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-3 p-1.5 text-[#191936]/60 hover:text-[#191936] cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="invite-confirm-password"
+                  className="font-heading text-xs sm:text-[13px] font-bold text-[#191936] tracking-wide uppercase"
+                >
+                  Confirm Password
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    id="invite-confirm-password"
+                    type={showPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    required
+                    minLength={8}
+                    autoComplete="new-password"
+                    className="w-full h-[50px] pl-11 pr-4 bg-[#FAF9F4] text-[#191936] text-sm font-body border-2 border-[#191936] rounded-xl outline-none focus:bg-white focus:border-[#4549D8]"
+                  />
+                  <Lock size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="mt-2 w-full h-[52px] rounded-full bg-[#D5F542] text-[#191936] font-heading font-bold text-sm uppercase tracking-wider border-2 border-[#191936] shadow-[3px_3px_0px_#191936] hover:bg-[#E2FF4A] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {loading ? <Loader2 size={18} className="animate-spin" /> : <UserCheck size={18} />}
+                <span>{loading ? "Activating Account..." : "Activate CRM Account"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsInviteFlow(false)}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-900 cursor-pointer"
+              >
+                Back to standard login
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="admin-email"
+                  className="font-heading text-xs sm:text-[13px] font-bold text-[#191936] tracking-wide uppercase flex items-center justify-between"
+                >
+                  <span>Email Address</span>
+                  <span className="text-[#191936]/40 font-normal lowercase">invited staff only</span>
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    id="admin-email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="staff@nationalcollege.edu"
+                    required
+                    autoComplete="email"
+                    className="w-full h-[50px] sm:h-[52px] pl-11 pr-4 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
+                  />
+                  <Mail size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <label
+                    htmlFor="admin-password"
+                    className="font-heading text-xs sm:text-[13px] font-bold text-[#191936] tracking-wide uppercase"
+                  >
+                    Password
+                  </label>
                   <button
                     type="button"
                     onClick={handleResetPassword}
@@ -795,62 +795,59 @@ export default function AdminLogin() {
                   >
                     {resetLoading ? "Dispatching link..." : "Forgot password?"}
                   </button>
+                </div>
+
+                <div className="relative flex items-center">
+                  <input
+                    id="admin-password"
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    required
+                    autoComplete="current-password"
+                    className="w-full h-[50px] sm:h-[52px] pl-11 pr-11 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
+                  />
+                  <Lock size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-3 p-1.5 text-[#191936]/60 hover:text-[#191936] transition-colors cursor-pointer"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="mt-3 w-full h-[52px] rounded-full bg-[#D5F542] text-[#191936] font-heading font-bold text-sm sm:text-base uppercase tracking-wider border-2 border-[#191936] shadow-[3px_3px_0px_#191936] hover:bg-[#E2FF4A] hover:shadow-[4px_4px_0px_#191936] hover:-translate-y-0.5 active:translate-y-0 active:shadow-[1px_1px_0px_#191936] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60 disabled:pointer-events-none"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin text-[#191936]" />
+                    <span>Authenticating...</span>
+                  </>
+                ) : (
+                  <span>Sign In to Operations</span>
                 )}
-              </div>
+              </button>
+            </form>
+          )}
 
-              <div className="relative flex items-center">
-                <input
-                  id="admin-password"
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  required
-                  autoComplete={mode === "signin" ? "current-password" : "new-password"}
-                  className="w-full h-[50px] sm:h-[52px] pl-11 pr-11 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
-                />
-                <Lock size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  className="absolute right-3 p-1.5 text-[#191936]/60 hover:text-[#191936] transition-colors cursor-pointer"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="mt-3 w-full h-[52px] rounded-full bg-[#D5F542] text-[#191936] font-heading font-bold text-sm sm:text-base uppercase tracking-wider border-2 border-[#191936] shadow-[3px_3px_0px_#191936] hover:bg-[#E2FF4A] hover:shadow-[4px_4px_0px_#191936] hover:-translate-y-0.5 active:translate-y-0 active:shadow-[1px_1px_0px_#191936] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60 disabled:pointer-events-none"
-            >
-              {loading ? (
-                <>
-                  <Loader2 size={18} className="animate-spin text-[#191936]" />
-                  <span>{mode === "signin" ? "Authenticating..." : "Creating Account..."}</span>
-                </>
-              ) : (
-                <span>{mode === "signin" ? "Sign In to Operations" : "Register Staff Account"}</span>
-              )}
-            </button>
-          </form>
-
-          {/* Role Enforcement Notice */}
           <div className="mt-6 pt-5 border-t-2 border-[#191936]/10 flex flex-col gap-1.5">
             <span className="font-heading text-[11px] font-bold text-[#191936]/70 uppercase tracking-wider">
-              Role-Based Access Control
+              Invitation-Only Role-Based Access Control
             </span>
             <p className="font-body text-xs text-[#191936]/60 leading-relaxed">
-              Login requires an authenticated Supabase identity with an active assignment in <code>user_roles</code> (Super Admin, Event Admin, Check-in Staff, or Score Operator).
+              Public self-signup is disabled. CRM access is provisioned strictly via Super Admin invitations with assigned operational permissions.
             </p>
           </div>
         </div>
       </main>
 
-      {/* Footer Meta */}
       <footer className="relative z-10 w-full max-w-5xl mx-auto text-center py-2 text-xs font-body text-[#191936]/60">
         Supernova 3.0 · 20–21 November 2026 · The National Education Society of Karnataka
       </footer>

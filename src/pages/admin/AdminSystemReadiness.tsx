@@ -50,7 +50,8 @@ const STATUS_BADGES: Record<AuditStatus, { bg: string; text: string; icon: any }
 };
 
 export default function AdminSystemReadiness() {
-  const { user } = useAuth();
+  const { user, isSuperAdmin, hasPermission } = useAuth();
+  const canManage = hasPermission("system_settings:manage");
   const [items, setItems] = useState<ChecklistItem[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<AuditCategory | "all">("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -115,7 +116,7 @@ export default function AdminSystemReadiness() {
 
   // Handle saving item edits
   const handleSaveItemEdit = () => {
-    if (!activeItem) return;
+    if (!activeItem || !canManage) return;
 
     // Security Constraint: Critical security check cannot be marked PASSED without evidence
     if (
@@ -169,6 +170,7 @@ export default function AdminSystemReadiness() {
 
   // Reset checklist to baseline
   const handleResetChecklist = () => {
+    if (!canManage) return;
     if (window.confirm("Reset all verification checks to baseline factory defaults?")) {
       localStorage.removeItem("supernova_system_readiness_audit");
       const defaults = loadPersistedChecklist();
@@ -178,6 +180,7 @@ export default function AdminSystemReadiness() {
 
   // Handle Super Admin Publishing Sign-Off
   const handleApprovePublishing = () => {
+    if (!isSuperAdmin) return;
     if (summary.hasCriticalFailures) {
       alert("PUBLISHING BLOCKED: There are critical security or database failures that must be resolved first.");
       return;
@@ -242,7 +245,9 @@ export default function AdminSystemReadiness() {
           </button>
           
           <button
-            onClick={() => setShowPublishApprovalModal(true)}
+            onClick={() => isSuperAdmin && setShowPublishApprovalModal(true)}
+            disabled={!isSuperAdmin}
+            title={isSuperAdmin ? "Open Publishing Sign-Off" : "Super Admin sign-off required"}
             className="btn"
             style={{
               display: "flex",
@@ -250,6 +255,8 @@ export default function AdminSystemReadiness() {
               gap: 8,
               padding: "10px 18px",
               fontWeight: 700,
+              opacity: isSuperAdmin ? 1 : 0.45,
+              cursor: isSuperAdmin ? "pointer" : "not-allowed",
               background: summary.publishingStatus === "READY TO PUBLISH" ? "rgba(16, 185, 129, 0.2)" : "rgba(34, 211, 238, 0.15)",
               border: `1px solid ${summary.publishingStatus === "READY TO PUBLISH" ? "#10b981" : "var(--cyan-400)"}`,
               color: summary.publishingStatus === "READY TO PUBLISH" ? "#10b981" : "var(--cyan-400)",
@@ -261,9 +268,10 @@ export default function AdminSystemReadiness() {
 
           <button
             onClick={handleResetChecklist}
+            disabled={!canManage}
             className="btn btn-ghost"
-            title="Reset Checklist"
-            style={{ padding: "10px 12px" }}
+            title={canManage ? "Reset Checklist" : "Requires system_settings:manage permission"}
+            style={{ padding: "10px 12px", opacity: canManage ? 1 : 0.45, cursor: canManage ? "pointer" : "not-allowed" }}
           >
             <RotateCcw size={15} />
           </button>
@@ -836,11 +844,13 @@ export default function AdminSystemReadiness() {
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 24 }}>
               <button onClick={() => setActiveItem(null)} className="btn btn-ghost">
-                Cancel
+                {canManage ? "Cancel" : "Close"}
               </button>
-              <button onClick={handleSaveItemEdit} className="btn btn-primary" style={{ padding: "10px 20px", fontWeight: 700 }}>
-                Save Audit Review
-              </button>
+              {canManage && (
+                <button onClick={handleSaveItemEdit} className="btn btn-primary" style={{ padding: "10px 20px", fontWeight: 700 }}>
+                  Save Audit Review
+                </button>
+              )}
             </div>
           </div>
         </div>

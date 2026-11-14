@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import { Users, Gamepad2, Clock, CheckCircle2, Archive, Lightbulb } from "lucide-react";
 import { isRegistrationArchived } from "@/lib/registrationOperations";
 
@@ -13,6 +14,11 @@ interface LiveCounts {
 }
 
 export function LiveRegistrationCounters() {
+  const { hasPermission } = useAuth();
+  const canViewVisitors = hasPermission("visitor:view");
+  const canViewEsports = hasPermission("esports:view");
+  const canViewParticipation = hasPermission("participation:view");
+
   const [counts, setCounts] = useState<LiveCounts>({
     uniqueVisitors: 0,
     activeEsportsTeams: 0,
@@ -26,9 +32,15 @@ export function LiveRegistrationCounters() {
   const fetchCounts = useCallback(async () => {
     try {
       const [visRes, espRes, partRes] = await Promise.all([
-        supabase.from("visitor_registrations").select("id, email, status, admin_notes"),
-        supabase.from("registrations").select("id, email, status, admin_notes"),
-        supabase.from("participation_registrations").select("id, email, status, admin_notes"),
+        canViewVisitors
+          ? supabase.from("visitor_registrations").select("id, email, status, admin_notes")
+          : Promise.resolve({ data: [] as any[] }),
+        canViewEsports
+          ? supabase.from("registrations").select("id, email, status, admin_notes")
+          : Promise.resolve({ data: [] as any[] }),
+        canViewParticipation
+          ? supabase.from("participation_registrations").select("id, email, status, admin_notes")
+          : Promise.resolve({ data: [] as any[] }),
       ]);
 
       const visitors = (visRes.data || []) as any[];
@@ -82,7 +94,7 @@ export function LiveRegistrationCounters() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canViewVisitors, canViewEsports, canViewParticipation]);
 
   useEffect(() => {
     fetchCounts();

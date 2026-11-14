@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { ScheduleItem } from "@/types/database";
 import { Calendar, ExternalLink, CheckCircle, AlertCircle, Plus } from "lucide-react";
 
@@ -28,6 +29,11 @@ const components = [
 ];
 
 export default function AdminSchedule() {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission("event_info:create");
+  const canEdit = hasPermission("event_info:edit");
+  const canPublish = hasPermission("event_info:publish");
+
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<ScheduleItem | null>(null);
@@ -53,6 +59,10 @@ export default function AdminSchedule() {
 
   const handleSave = async () => {
     if (!editing || !editing.title.trim()) return;
+    if (editing.id ? !canEdit : !canCreate) {
+      setStatusMsg({ type: "error", text: "You do not have permission to save schedule slots." });
+      return;
+    }
     setSaving(true);
     setStatusMsg(null);
     const payload = {
@@ -63,7 +73,7 @@ export default function AdminSchedule() {
       description: editing.description || null,
       venue: editing.venue || null,
       component: editing.component || "general",
-      is_published: editing.is_published,
+      is_published: canPublish ? editing.is_published : false,
       sort_order: editing.sort_order,
     };
     let result;
@@ -83,6 +93,7 @@ export default function AdminSchedule() {
   };
 
   const togglePublish = async (item: ScheduleItem) => {
+    if (!canPublish) return;
     const nextPublished = !item.is_published;
     await supabase.from("schedule_items").update({ is_published: nextPublished }).eq("id", item.id);
     setStatusMsg({
@@ -93,6 +104,7 @@ export default function AdminSchedule() {
   };
 
   const deleteItem = async (id: string) => {
+    if (!canEdit) return;
     if (!confirm("Are you sure you want to delete this schedule item?")) return;
     await supabase.from("schedule_items").delete().eq("id", id);
     setStatusMsg({ type: "success", text: "Schedule item deleted." });
@@ -128,11 +140,11 @@ export default function AdminSchedule() {
             <span>View on website</span> <ExternalLink size={13} />
           </Link>
 
-          {!editing && (
+          {!editing && canCreate && (
             <button
               className="btn btn-primary"
               onClick={() => {
-                setEditing({ ...emptyItem, sort_order: items.length + 1 });
+                setEditing({ ...emptyItem, sort_order: items.length + 1, is_published: canPublish });
                 setStatusMsg(null);
               }}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.88rem", fontWeight: 700 }}
@@ -253,10 +265,11 @@ export default function AdminSchedule() {
                 style={{ width: 90 }}
               />
             </div>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 18 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: canPublish ? "pointer" : "not-allowed", opacity: canPublish ? 1 : 0.6, marginTop: 18 }}>
               <input
                 type="checkbox"
-                checked={editing.is_published}
+                checked={canPublish ? editing.is_published : false}
+                disabled={!canPublish}
                 onChange={(e) => setEditing({ ...editing, is_published: e.target.checked })}
               />
               <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>Publish live immediately</span>
@@ -283,12 +296,14 @@ export default function AdminSchedule() {
           <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", margin: "0 0 12px" }}>
             No schedule slots added yet. Click 'Add Schedule Slot' to begin creating the timetable.
           </p>
-          <button
-            className="btn btn-primary"
-            onClick={() => setEditing({ ...emptyItem })}
-          >
-            Create First Schedule Slot
-          </button>
+          {canCreate && (
+            <button
+              className="btn btn-primary"
+              onClick={() => setEditing({ ...emptyItem, is_published: canPublish })}
+            >
+              Create First Schedule Slot
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: "grid", gap: 14 }}>
@@ -336,17 +351,25 @@ export default function AdminSchedule() {
                 {item.is_published ? "Published" : "Draft"}
               </span>
 
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem" }} onClick={() => setEditing(item)}>
-                  Edit
-                </button>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "var(--cyan-400)" }} onClick={() => togglePublish(item)}>
-                  {item.is_published ? "Unpublish" : "Publish"}
-                </button>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "#ef4444" }} onClick={() => deleteItem(item.id)}>
-                  Delete
-                </button>
-              </div>
+              {(canEdit || canPublish) && (
+                <div style={{ display: "flex", gap: 8 }}>
+                  {canEdit && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem" }} onClick={() => setEditing(item)}>
+                      Edit
+                    </button>
+                  )}
+                  {canPublish && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "var(--cyan-400)" }} onClick={() => togglePublish(item)}>
+                      {item.is_published ? "Unpublish" : "Publish"}
+                    </button>
+                  )}
+                  {canEdit && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "#ef4444" }} onClick={() => deleteItem(item.id)}>
+                      Delete
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

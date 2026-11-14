@@ -1,4 +1,10 @@
 import { supabase } from "@/lib/supabase";
+import {
+  evaluateProviderDelivery,
+  redactSensitiveText,
+  validateRecipientEmail,
+  type EmailAttachmentInput,
+} from "@/lib/emailPayload";
 
 export type RegistrationTargetType = "visitor" | "esports" | "participation";
 
@@ -343,8 +349,7 @@ export function saveLocalEmailDispatchLog(entry: EmailDeliveryResult): void {
 
 /**
  * Dispatch confirmation email with support for visitor, esports, and participation.
- * Handles Edge Function invocation and official sender logging: animationthenationalcollege@gmail.com
- * Never logs secrets, access tokens, or refresh tokens.
+ * Strictly checks real provider delivery via Supabase Edge Function — never fabricates a "sent" status.
  */
 export async function sendRegistrationConfirmationEmail(
   registrationIdOrRef: string,
@@ -356,6 +361,7 @@ export async function sendRegistrationConfirmationEmail(
     registrationRef?: string;
     institution?: string;
     extraDetails?: Record<string, any>;
+    attachments?: EmailAttachmentInput[];
   }
 ): Promise<{ ok: boolean; error?: string; simulated?: boolean; log?: EmailDeliveryResult }> {
   const table =
@@ -371,6 +377,28 @@ export async function sendRegistrationConfirmationEmail(
 
   const recipientEmail = metadataFallback?.recipientEmail || "";
   const regRef = metadataFallback?.registrationRef || (isUuid ? undefined : registrationIdOrRef);
+
+  if (recipientEmail) {
+    const emailCheck = validateRecipientEmail(recipientEmail);
+    if (!emailCheck.valid) {
+      const invalidLog: EmailDeliveryResult = {
+        ok: false,
+        registrationId: isUuid ? registrationIdOrRef : undefined,
+        recipientEmail,
+        registrationRef: regRef,
+        registrationType,
+        channel: "supabase_edge_function",
+        sender: officialSender,
+        status: "failed",
+        httpStatusCode: 400,
+        errorMessage: emailCheck.error || "Invalid recipient email address.",
+        timestamp: nowIso,
+        isResend,
+      };
+      saveLocalEmailDispatchLog(invalidLog);
+      return { ok: false, error: invalidLog.errorMessage, log: invalidLog };
+    }
+  }
 
   // Prevent double sending unless explicit resend
   if (!isResend && isUuid) {
@@ -388,7 +416,7 @@ export async function sendRegistrationConfirmationEmail(
           recipientEmail,
           registrationRef: regRef,
           registrationType,
-          channel: "verified_delivery_pipeline",
+          channel: "supabase_edge_function",
           sender: officialSender,
           status: "skipped",
           apiResponse: "Already dispatched (idempotency preserved)",
@@ -403,158 +431,124 @@ export async function sendRegistrationConfirmationEmail(
     }
   }
 
-  // Check if already sent in local dispatch registry for this ref
-  if (!isResend && regRef) {
-    const pastLogs = getLocalEmailDispatchLogs();
-    const existingSuccess = pastLogs.find((l) => l.registrationRef === regRef && l.status === "sent");
-    if (existingSuccess) {
-      const skippedLog: EmailDeliveryResult = {
-        ok: true,
-        registrationId: existingSuccess.registrationId || registrationIdOrRef,
-        recipientEmail: existingSuccess.recipientEmail || recipientEmail,
+  let httpCode = 500;
+  let failureMessage = "Email Edge Function returned an error.";
+
+  try {
+    const { data, error } = await supabase.functions.invoke("send-registration-confirmation", {
+      body: {
+        registrationId: isUuid ? registrationIdOrRef : undefined,
         registrationRef: regRef,
         registrationType,
-        channel: "verified_delivery_pipeline",
+        isResend,
+        recipientEmail: recipientEmail || undefined,
+        attachments: metadataFallback?.attachments,
+      },
+    });
+
+    if (!error && data?.skipped) {
+      const skippedLog: EmailDeliveryResult = {
+        ok: true,
+        registrationId: isUuid ? registrationIdOrRef : undefined,
+        recipientEmail: data?.recipient || recipientEmail,
+        registrationRef: regRef,
+        registrationType,
+        channel: "supabase_edge_function",
         sender: officialSender,
         status: "skipped",
-        apiResponse: "Already dispatched in session registry (duplicate prevented)",
+        httpStatusCode: 200,
+        apiResponse: data?.reason || "Already sent previously",
         timestamp: nowIso,
         isResend,
       };
       saveLocalEmailDispatchLog(skippedLog);
       return { ok: true, simulated: false, log: skippedLog };
     }
-  }
 
-  let edgeFunctionAttempted = false;
-  let edgeFunctionHttpCode: number | undefined;
-  let edgeFunctionResult = "";
+    if (!error) {
+      const evalRes = evaluateProviderDelivery({
+        httpOk: true,
+        statusCode: 200,
+        okFlag: data?.ok,
+        simulated: data?.simulated,
+        messageId: data?.messageId,
+        error: data?.error,
+      });
 
-  // Attempt to invoke remote Edge Function
-  try {
-    edgeFunctionAttempted = true;
-    const { data, error } = await supabase.functions.invoke("send-registration-confirmation", {
-      body: { 
-        registrationId: isUuid ? registrationIdOrRef : undefined, 
-        registrationRef: regRef,
-        registrationType, 
-        isResend, 
-        ...metadataFallback 
-      },
-    });
+      if (evalRes.delivered) {
+        const successLog: EmailDeliveryResult = {
+          ok: true,
+          registrationId: isUuid ? registrationIdOrRef : undefined,
+          recipientEmail: data?.recipient || recipientEmail,
+          registrationRef: regRef,
+          registrationType,
+          channel: data?.provider === "gmail" ? "gmail_api" : "resend_api",
+          sender: officialSender,
+          status: "sent",
+          httpStatusCode: 200,
+          apiResponse: `Confirmed messageId=${data.messageId} (${data.provider || "provider"})`,
+          timestamp: data?.sent_at || nowIso,
+          isResend,
+        };
+        saveLocalEmailDispatchLog(successLog);
+        return { ok: true, simulated: false, log: successLog };
+      }
 
-    if (!error && data?.ok) {
-      const successLog: EmailDeliveryResult = {
-        ok: true,
-        registrationId: isUuid ? registrationIdOrRef : undefined,
-        recipientEmail,
-        registrationRef: regRef,
-        registrationType,
-        channel: "supabase_edge_function",
-        sender: officialSender,
-        status: "sent",
-        httpStatusCode: 200,
-        apiResponse: JSON.stringify(data),
-        timestamp: nowIso,
-        isResend,
-      };
-      saveLocalEmailDispatchLog(successLog);
-      return { ok: true, simulated: Boolean(data.simulated), log: successLog };
-    }
-    
-    if (error) {
-      edgeFunctionHttpCode = (error as any).status || 500;
-      edgeFunctionResult = error.message || "Edge Function execution returned error";
-      console.warn("Edge function invoke issue, proceeding with direct database pipeline fallback:", error);
+      failureMessage = evalRes.error || "Email provider did not confirm delivery.";
+    } else {
+      httpCode = typeof (error as any)?.context?.status === "number" ? (error as any).context.status : 500;
+      failureMessage = error.message || failureMessage;
+      if ((error as any)?.context && typeof (error as any).context.json === "function") {
+        try {
+          const cloned = typeof (error as any).context.clone === "function" ? (error as any).context.clone() : (error as any).context;
+          const errBody = await cloned.json();
+          if (errBody?.error) failureMessage = errBody.error;
+        } catch {
+          // ignore
+        }
+      } else if (httpCode === 404 || failureMessage.includes("404")) {
+        httpCode = 404;
+        failureMessage = "Email delivery Edge Function (send-registration-confirmation) is not deployed on Supabase.";
+      }
     }
   } catch (fnErr: any) {
-    edgeFunctionResult = fnErr?.message || "Edge function invocation unavailable";
-    console.warn("Edge function invocation unavailable, proceeding with database status update:", fnErr);
+    failureMessage = fnErr?.message || "Email Edge Function invocation failed.";
   }
 
-  // Graceful fallback: Update email_status in table directly and record audit log
+  const safeError = redactSensitiveText(failureMessage);
+
+  // Record honest failure status on DB record when admin-authenticated
   try {
     if (isUuid) {
-      const { error: updateError } = await supabase
+      await supabase
         .from(table)
         .update({
-          email_status: "sent",
-          email_sent_at: nowIso,
-          email_error: null,
+          email_status: "failed",
+          email_error: safeError.slice(0, 500),
         })
         .eq("id", registrationIdOrRef);
-
-      if (updateError && (updateError.code === "42703" || updateError.message?.includes("email_status"))) {
-        // Column does not exist in schema cache: annotate admin_notes
-        const { data: cur } = await supabase.from(table).select("admin_notes").eq("id", registrationIdOrRef).maybeSingle();
-        const currentNotes = (cur as any)?.admin_notes || "";
-        const updatedNotes = currentNotes
-          ? `${currentNotes}\n[EMAIL_CONFIRMATION_SENT ${nowIso}]`
-          : `[EMAIL_CONFIRMATION_SENT ${nowIso}]`;
-
-        await supabase.from(table).update({ admin_notes: updatedNotes }).eq("id", registrationIdOrRef);
-      }
     }
-
-    // Record verified email dispatch log
-    const deliveryLog: EmailDeliveryResult = {
-      ok: true,
-      registrationId: isUuid ? registrationIdOrRef : undefined,
-      recipientEmail,
-      registrationRef: regRef,
-      registrationType,
-      channel: "verified_delivery_pipeline",
-      sender: officialSender,
-      status: "sent",
-      httpStatusCode: edgeFunctionHttpCode || 200,
-      apiResponse: edgeFunctionAttempted && edgeFunctionResult ? `Edge fn fallback: ${edgeFunctionResult}` : "Dispatched via verified delivery pipeline",
-      timestamp: nowIso,
-      isResend,
-    };
-    saveLocalEmailDispatchLog(deliveryLog);
-
-    // Non-blocking Supabase audit log
-    try {
-      const { data: userData } = await supabase.auth.getUser();
-      if (userData?.user?.id && isUuid) {
-        await supabase.from("audit_logs").insert({
-          actor_id: userData.user.id,
-          action: isResend ? "resend_confirmation_email" : "send_confirmation_email",
-          entity_type: table,
-          entity_id: registrationIdOrRef,
-          metadata: {
-            registration_type: registrationType,
-            sent_at: nowIso,
-            channel: "verified_official_sender",
-            from: officialSender,
-            recipient: recipientEmail,
-            reference: regRef,
-          },
-        });
-      }
-    } catch {
-      // Ignore
-    }
-
-    return { ok: true, simulated: true, log: deliveryLog };
-  } catch (err: any) {
-    const failedLog: EmailDeliveryResult = {
-      ok: false,
-      registrationId: isUuid ? registrationIdOrRef : undefined,
-      recipientEmail,
-      registrationRef: regRef,
-      registrationType,
-      channel: "verified_delivery_pipeline",
-      sender: officialSender,
-      status: "failed",
-      httpStatusCode: 500,
-      errorMessage: err.message || "Failed to update email dispatch status",
-      timestamp: nowIso,
-      isResend,
-    };
-    saveLocalEmailDispatchLog(failedLog);
-    return { ok: false, error: err.message || "Failed to update email dispatch status", log: failedLog };
+  } catch {
+    // Non-blocking for anon callers under strict RLS
   }
+
+  const failedLog: EmailDeliveryResult = {
+    ok: false,
+    registrationId: isUuid ? registrationIdOrRef : undefined,
+    recipientEmail,
+    registrationRef: regRef,
+    registrationType,
+    channel: "supabase_edge_function",
+    sender: officialSender,
+    status: "failed",
+    httpStatusCode: httpCode,
+    errorMessage: safeError,
+    timestamp: nowIso,
+    isResend,
+  };
+  saveLocalEmailDispatchLog(failedLog);
+
+  return { ok: false, error: safeError, simulated: false, log: failedLog };
 }
 
 const LOCAL_ARCHIVED_KEY = "supernova_archived_registrations";
@@ -617,8 +611,7 @@ export async function archiveRegistrationRecord(
 
     let dbSucceeded = false;
 
-    // Try RPC first if visitor or esports
-    if (registrationType === "visitor" || registrationType === "esports") {
+    if (registrationType === "visitor" || registrationType === "esports" || registrationType === "participation") {
       try {
         const { data, error } = await supabase.rpc("archive_registration", {
           p_type: registrationType,
@@ -633,7 +626,6 @@ export async function archiveRegistrationRecord(
     }
 
     if (!dbSucceeded) {
-      // Attempt direct update with archived_at
       const { error: directError } = await supabase
         .from(table)
         .update({ archived_at: new Date().toISOString() })
@@ -642,7 +634,6 @@ export async function archiveRegistrationRecord(
       if (!directError) {
         dbSucceeded = true;
       } else if (directError.code === "42703" || directError.message?.includes("archived_at")) {
-        // Column archived_at does not exist: update admin_notes to mark archived
         const { data: currentRecord } = await supabase
           .from(table)
           .select("admin_notes")
@@ -665,18 +656,16 @@ export async function archiveRegistrationRecord(
       }
     }
 
-    // Always update local registry
     markRegistrationArchivedLocal(registrationId, true);
 
-    // Audit log
     try {
       const { data: userData } = await supabase.auth.getUser();
       if (userData?.user?.id) {
         await supabase.from("audit_logs").insert({
           actor_id: userData.user.id,
           action: "archive_registration",
-          table_name: table,
-          record_id: registrationId,
+          entity_type: table,
+          entity_id: registrationId,
           metadata: { registration_type: registrationType, archived_at: new Date().toISOString() },
         });
       }
@@ -705,7 +694,6 @@ export async function restoreRegistrationRecord(
         ? "registrations"
         : "participation_registrations";
 
-    // Attempt direct clear of archived_at
     const { error } = await supabase
       .from(table)
       .update({
@@ -715,7 +703,6 @@ export async function restoreRegistrationRecord(
       .eq("id", registrationId);
 
     if (error && (error.code === "42703" || error.message?.includes("archived_at"))) {
-      // Clean archived tag from admin_notes
       const { data: currentRecord } = await supabase
         .from(table)
         .select("admin_notes")
@@ -735,18 +722,16 @@ export async function restoreRegistrationRecord(
       return { ok: false, error: error.message || `Failed to restore ${registrationType} record` };
     }
 
-    // Always clear from local registry
     markRegistrationArchivedLocal(registrationId, false);
 
-    // Record in audit log
     try {
       const { data: userData } = await supabase.auth.getUser();
       if (userData?.user?.id) {
         await supabase.from("audit_logs").insert({
           actor_id: userData.user.id,
           action: "restore_registration",
-          table_name: table,
-          record_id: registrationId,
+          entity_type: table,
+          entity_id: registrationId,
           metadata: { registration_type: registrationType, restored_at: new Date().toISOString() },
         });
       }

@@ -1,7 +1,16 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import type { AdminRole } from "@/types/database";
+import type { AdminRole, AccountStatus } from "@/types/database";
+import {
+  ALL_PERMISSIONS,
+  canAccessAdminRoute,
+  hasCrmPermission,
+  normalizeRole,
+  resolveEffectivePermissions,
+  type PermissionKey,
+  type PermissionOverride,
+} from "@/lib/rbac";
 
 export type AuthErrorCategory =
   | "invalid_credentials"
@@ -9,6 +18,7 @@ export type AuthErrorCategory =
   | "email_not_confirmed"
   | "rate_limited"
   | "unauthorized_role"
+  | "account_deactivated"
   | "config_error"
   | "unknown_error";
 
@@ -25,7 +35,12 @@ interface AuthContextValue {
   user: User | null;
   loading: boolean;
   isAdmin: boolean;
+  isSuperAdmin: boolean;
   role: AdminRole | null;
+  accountStatus: AccountStatus | null;
+  permissions: Set<PermissionKey>;
+  hasPermission: (required: PermissionKey | PermissionKey[]) => boolean;
+  canAccessRoute: (pathname: string) => boolean;
   signIn: (email: string, password: string) => Promise<SignInResult>;
   signOut: () => Promise<void>;
   refreshRole: () => Promise<void>;
@@ -33,111 +48,201 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+const VALID_ROLES: AdminRole[] = [
+  "super_admin",
+  "crm_admin",
+  "registration_staff",
+  "participation_manager",
+  "esports_manager",
+  "content_manager",
+  "viewer",
+  "event_admin",
+  "checkin_staff",
+  "score_operator",
+];
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false); // Security first: default closed
+  const [isAdmin, setIsAdmin] = useState(false);
   const [role, setRole] = useState<AdminRole | null>(null);
+  const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
+  const [permissions, setPermissions] = useState<Set<PermissionKey>>(new Set());
+
+  const applyUnauthenticatedState = () => {
+    setIsAdmin(false);
+    setRole(null);
+    setAccountStatus(null);
+    setPermissions(new Set());
+  };
 
   /**
-   * Multi-tier administrator role verification.
-   * Checks database is_admin() SECURITY DEFINER RPC first, falls back to
-   * direct user_roles lookup, and verifies auth metadata claims.
+   * Authoritative database RBAC verification.
+   * Prefers `get_my_crm_access()` SECURITY DEFINER RPC, with safe fallback when
+   * earlier database schemas are active. Immediately blocks deactivated/revoked/invited users.
    */
   const verifyAdminStatus = async (
     userSession: Session | null
-  ): Promise<{ isAdmin: boolean; role: AdminRole | null }> => {
+  ): Promise<{
+    isAdmin: boolean;
+    role: AdminRole | null;
+    accountStatus: AccountStatus | null;
+    permissions: Set<PermissionKey>;
+  }> => {
     if (!userSession || !userSession.user) {
-      setIsAdmin(false);
-      setRole(null);
-      return { isAdmin: false, role: null };
+      applyUnauthenticatedState();
+      return { isAdmin: false, role: null, accountStatus: null, permissions: new Set() };
     }
 
     const userId = userSession.user.id;
-    let hasAdminStatus = false;
     let resolvedRole: AdminRole | null = null;
+    let resolvedStatus: AccountStatus = "active";
+    let overrides: PermissionOverride[] = [];
+    let rpcEffectivePermissions: PermissionKey[] | null = null;
+    let rpcHandled = false;
 
-    // Tier 1: Check RPC is_admin (SECURITY DEFINER in DB)
+    // Tier 1: Authoritative RBAC RPC (`get_my_crm_access`)
     try {
-      const { data: rpcAdmin, error: rpcError } = await supabase.rpc("is_admin");
-      if (!rpcError && Boolean(rpcAdmin)) {
-        hasAdminStatus = true;
-      } else if (rpcError) {
-        console.info("is_admin RPC diagnostic note:", rpcError.message);
+      const { data: rpcAccess, error: rpcErr } = await supabase.rpc("get_my_crm_access");
+      if (!rpcErr && rpcAccess && typeof rpcAccess === "object") {
+        rpcHandled = true;
+        const access = rpcAccess as {
+          authenticated?: boolean;
+          role?: string | null;
+          account_status?: AccountStatus | null;
+          effective_permissions?: string[] | null;
+          overrides?: PermissionOverride[] | null;
+        };
+
+        resolvedRole = access.role ? (access.role as AdminRole) : null;
+        resolvedStatus = (access.account_status || (resolvedRole ? "active" : "revoked")) as AccountStatus;
+        overrides = Array.isArray(access.overrides) ? access.overrides : [];
+
+        if (Array.isArray(access.effective_permissions)) {
+          rpcEffectivePermissions = access.effective_permissions.filter((p): p is PermissionKey =>
+            ALL_PERMISSIONS.includes(p as PermissionKey)
+          );
+        }
       }
-    } catch (err) {
-      console.warn("RPC is_admin call exception:", err);
+    } catch {
+      // RPC may not exist yet prior to migration
     }
 
-    // Tier 2: Fetch explicit role assignment from user_roles
-    try {
-      const { data: roles, error: rolesError } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", userId)
-        .limit(1);
-
-      if (!rolesError && roles && roles.length > 0 && roles[0].role) {
-        hasAdminStatus = true;
-        resolvedRole = roles[0].role as AdminRole;
+    // Tier 2: Fallback direct lookups if get_my_crm_access RPC is unavailable
+    if (!rpcHandled) {
+      let hasLegacyAdmin = false;
+      try {
+        const { data: rpcAdmin, error: rpcError } = await supabase.rpc("is_admin");
+        if (!rpcError && Boolean(rpcAdmin)) {
+          hasLegacyAdmin = true;
+        }
+      } catch {
+        // ignore
       }
-    } catch (err) {
-      console.warn("user_roles query exception:", err);
-    }
 
-    // Tier 3: Check app_metadata or user_metadata for administrator claims
-    if (!hasAdminStatus) {
-      const appMetadata = userSession.user.app_metadata || {};
-      const userMetadata = userSession.user.user_metadata || {};
-      const assignedRole = (appMetadata.role || userMetadata.role || "") as string;
-      const isExplicitAdmin = Boolean(appMetadata.is_admin || userMetadata.is_admin);
+      try {
+        const { data: roles, error: rolesError } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", userId)
+          .limit(1);
 
-      const validRoles: AdminRole[] = ["super_admin", "event_admin", "checkin_staff", "score_operator"];
-      if (validRoles.includes(assignedRole as AdminRole)) {
-        hasAdminStatus = true;
-        resolvedRole = assignedRole as AdminRole;
-      } else if (assignedRole === "admin" || isExplicitAdmin) {
-        hasAdminStatus = true;
+        if (!rolesError && roles && roles.length > 0 && roles[0].role) {
+          resolvedRole = roles[0].role as AdminRole;
+          hasLegacyAdmin = true;
+        }
+      } catch {
+        // ignore
+      }
+
+      // Check profiles.account_status if column exists
+      try {
+        const { data: profData, error: profErr } = await supabase
+          .from("profiles")
+          .select("account_status")
+          .eq("id", userId)
+          .maybeSingle();
+
+        if (!profErr && profData && (profData as any).account_status) {
+          resolvedStatus = (profData as any).account_status as AccountStatus;
+        }
+      } catch {
+        // Older schema without account_status defaults to active when role exists
+      }
+
+      // Load overrides if table exists
+      try {
+        const { data: ovData, error: ovErr } = await supabase
+          .from("crm_user_permissions")
+          .select("permission_key, allowed")
+          .eq("user_id", userId);
+
+        if (!ovErr && Array.isArray(ovData)) {
+          overrides = ovData;
+        }
+      } catch {
+        // ignore
+      }
+
+      // Only inspect metadata if no role was found AND account is not blocked
+      if (!hasLegacyAdmin && resolvedStatus === "active") {
+        const appMetadata = userSession.user.app_metadata || {};
+        const userMetadata = userSession.user.user_metadata || {};
+        const assignedRole = String(appMetadata.role || userMetadata.role || "");
+        const isExplicitAdmin = Boolean(appMetadata.is_admin || userMetadata.is_admin);
+
+        if (VALID_ROLES.includes(assignedRole as AdminRole)) {
+          resolvedRole = assignedRole as AdminRole;
+        } else if (assignedRole === "admin" || isExplicitAdmin) {
+          resolvedRole = "super_admin";
+        }
+      }
+
+      if (hasLegacyAdmin && !resolvedRole) {
         resolvedRole = "super_admin";
       }
     }
 
-    // Default role for verified admins with unassigned sub-role
-    if (hasAdminStatus && !resolvedRole) {
-      resolvedRole = "super_admin";
-    }
+    const isAccountActive = resolvedStatus === "active";
+    const hasRole = Boolean(resolvedRole && normalizeRole(resolvedRole));
+    const finalIsAdmin = isAccountActive && hasRole;
 
-    setIsAdmin(hasAdminStatus);
+    const effectiveSet = finalIsAdmin
+      ? rpcEffectivePermissions
+        ? new Set<PermissionKey>(rpcEffectivePermissions)
+        : resolveEffectivePermissions(resolvedRole, resolvedStatus, overrides)
+      : new Set<PermissionKey>();
+
+    setIsAdmin(finalIsAdmin);
     setRole(resolvedRole);
-    return { isAdmin: hasAdminStatus, role: resolvedRole };
+    setAccountStatus(hasRole || resolvedStatus !== "active" ? resolvedStatus : null);
+    setPermissions(effectiveSet);
+
+    return {
+      isAdmin: finalIsAdmin,
+      role: resolvedRole,
+      accountStatus: hasRole || resolvedStatus !== "active" ? resolvedStatus : null,
+      permissions: effectiveSet,
+    };
   };
 
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
 
-    // Initial session recovery from Supabase client storage
     supabase.auth
       .getSession()
       .then(async ({ data: { session: initialSession }, error }) => {
         if (!isMounted) return;
-        if (error) {
-          console.warn("Error restoring Supabase session:", error);
+        if (error || !initialSession) {
           setSession(null);
-          setIsAdmin(false);
-          setRole(null);
+          applyUnauthenticatedState();
           setLoading(false);
           return;
         }
 
-        if (initialSession) {
-          setSession(initialSession);
-          await verifyAdminStatus(initialSession);
-        } else {
-          setSession(null);
-          setIsAdmin(false);
-          setRole(null);
-        }
+        setSession(initialSession);
+        await verifyAdminStatus(initialSession);
         if (isMounted) setLoading(false);
       })
       .catch((err) => {
@@ -145,14 +250,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (isMounted) setLoading(false);
       });
 
-    // Realtime auth state change listener
     const { data: listener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!isMounted) return;
 
       if (event === "SIGNED_OUT" || !newSession) {
         setSession(null);
-        setIsAdmin(false);
-        setRole(null);
+        applyUnauthenticatedState();
         setLoading(false);
         return;
       }
@@ -168,10 +271,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const signIn = async (
-    email: string,
-    password: string
-  ): Promise<SignInResult> => {
+  const signIn = async (email: string, password: string): Promise<SignInResult> => {
     setLoading(true);
 
     try {
@@ -219,10 +319,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           userMessage = "Invalid email or password. Please verify your credentials and try again.";
         } else if (errMsg.includes("Email not confirmed") || errCode === "email_not_confirmed") {
           category = "email_not_confirmed";
-          userMessage = "Your email address has not been confirmed yet. Please check your inbox for the confirmation email.";
+          userMessage = "Your email address has not been confirmed yet. Please check your inbox for the verification link.";
         } else if (errMsg.includes("rate limit") || errMsg.includes("Too many requests") || status === 429) {
           category = "rate_limited";
           userMessage = "Too many login attempts. Please wait a few moments before trying again.";
+        } else if (errMsg.toLowerCase().includes("banned") || errMsg.toLowerCase().includes("user is banned")) {
+          category = "account_deactivated";
+          userMessage = "This CRM account has been deactivated or revoked by a Super Admin.";
         }
 
         return {
@@ -241,21 +344,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
       }
 
-      // Immediately set the session in state so context is in sync
       setSession(data.session);
 
-      // Verify administrator permissions before resolving
-      const adminResult = await verifyAdminStatus(data.session);
-      setLoading(false);
+      // Verify status & role from database
+      let adminResult = await verifyAdminStatus(data.session);
+
+      // If invited user signs in via password/invite link, accept invite atomically if allowed
+      if (!adminResult.isAdmin && adminResult.accountStatus === "invited") {
+        try {
+          await supabase.rpc("accept_crm_invite");
+          adminResult = await verifyAdminStatus(data.session);
+        } catch {
+          // ignore
+        }
+      }
 
       if (!adminResult.isAdmin) {
+        if (adminResult.accountStatus === "deactivated" || adminResult.accountStatus === "revoked") {
+          await supabase.auth.signOut().catch(() => {});
+          setSession(null);
+          applyUnauthenticatedState();
+          setLoading(false);
+          return {
+            error: `Access denied: This CRM account (${data.session.user.email}) has been ${adminResult.accountStatus}. Contact a Super Admin.`,
+            errorCategory: "account_deactivated",
+            isAdmin: false,
+          };
+        }
+
+        setLoading(false);
         return {
-          error: `Authenticated successfully as ${data.session.user.email}, but this account does not have an active administrator role assigned in public.user_roles. Please contact a Super Administrator.`,
+          error: `Authenticated as ${data.session.user.email}, but this account does not have an active CRM role assigned. Contact a Super Admin.`,
           errorCategory: "unauthorized_role",
           isAdmin: false,
         };
       }
 
+      // Record login timestamp (non-blocking)
+      void supabase.rpc("record_crm_login").then(
+        () => {},
+        () => {}
+      );
+
+      setLoading(false);
       return { error: null, isAdmin: true };
     } catch (err: any) {
       setLoading(false);
@@ -284,8 +415,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn("SignOut error:", err);
     } finally {
       setSession(null);
-      setIsAdmin(false);
-      setRole(null);
+      applyUnauthenticatedState();
       setLoading(false);
       if (typeof window !== "undefined") {
         localStorage.removeItem("supernova_preview_admin_session");
@@ -301,6 +431,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const hasPermission = useCallback(
+    (required: PermissionKey | PermissionKey[]) => {
+      return hasCrmPermission(permissions, required, accountStatus || "active");
+    },
+    [permissions, accountStatus]
+  );
+
+  const canAccessRoute = useCallback(
+    (pathname: string) => {
+      return canAccessAdminRoute(pathname, permissions, accountStatus || "active");
+    },
+    [permissions, accountStatus]
+  );
+
+  const isSuperAdmin =
+    isAdmin && accountStatus === "active" && normalizeRole(role) === "super_admin";
+
   return (
     <AuthContext.Provider
       value={{
@@ -308,7 +455,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: session?.user ?? null,
         loading,
         isAdmin,
+        isSuperAdmin,
         role,
+        accountStatus,
+        permissions,
+        hasPermission,
+        canAccessRoute,
         signIn,
         signOut,
         refreshRole,

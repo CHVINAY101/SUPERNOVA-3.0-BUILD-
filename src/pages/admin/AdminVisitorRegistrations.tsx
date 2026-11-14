@@ -10,8 +10,9 @@ import {
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
+import { useAuth } from "@/lib/auth";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
-import { downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import { downloadTicketPdfFile, generateTicketPdf } from "@/lib/ticketPdfService";
 import { getLocalNasArchives } from "@/lib/nasArchivalService";
 import { 
   Gamepad2, 
@@ -62,6 +63,12 @@ const REGISTRATION_STATUSES = [
 ];
 
 export default function AdminVisitorRegistrations() {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission("visitor:edit");
+  const canDelete = hasPermission("visitor:delete");
+  const canExport = hasPermission("visitor:export");
+  const canResend = hasPermission("email_centre:resend");
+
   const [registrations, setRegistrations] = useState<VisitorRegistrationRecord[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -135,18 +142,52 @@ export default function AdminVisitorRegistrations() {
         setInspectedRecord({ ...inspectedRecord, status: newStatus });
       }
 
+      let nextEmailStatus: string | undefined;
       if (newStatus === "confirmed") {
         const item = registrations?.find((r) => r.id === id) || inspectedRecord;
+        let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
+        if (item) {
+          try {
+            const ticketPdf = await generateTicketPdf({
+              ticketRef: ref,
+              recipientName: item.full_name,
+              category: item.visitor_category || "General Visitor",
+              email: item.email,
+              phone: item.phone,
+              institution: item.institution || undefined,
+              registrationType: "visitor",
+              daysAttending: item.days_attending || undefined,
+            });
+            pdfAttachments = [
+              {
+                filename: ticketPdf.fileName,
+                base64Content: ticketPdf.pdfBase64,
+                contentType: "application/pdf",
+              },
+            ];
+          } catch {
+            // proceed cleanly if PDF generation throws
+          }
+        }
+
         const emailRes = await sendRegistrationConfirmationEmail(id, "visitor", false, {
           recipientEmail: item?.email,
           recipientName: item?.full_name,
           registrationRef: ref,
           institution: item?.institution || undefined,
+          attachments: pdfAttachments,
           extraDetails: {
             category: item?.visitor_category,
             days: item?.days_attending,
           },
         });
+        nextEmailStatus = emailRes.ok ? "sent" : "failed";
+        setRegistrations((prev) =>
+          prev ? prev.map((r) => (r.id === id ? { ...r, email_status: nextEmailStatus } : r)) : null
+        );
+        if (inspectedRecord && inspectedRecord.id === id) {
+          setInspectedRecord((prev) => (prev ? { ...prev, email_status: nextEmailStatus } : null));
+        }
         setStatusMsg({
           type: emailRes.ok ? "success" : "error",
           text: emailRes.ok
@@ -314,20 +355,45 @@ export default function AdminVisitorRegistrations() {
   };
 
   const handleResendEmail = async (record: VisitorRegistrationRecord) => {
+    if (!canResend) return;
     setSavingId(record.id);
     setStatusMsg(null);
     try {
+      let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
+      try {
+        const ticketPdf = await generateTicketPdf({
+          ticketRef: record.registration_ref,
+          recipientName: record.full_name,
+          category: record.visitor_category || "General Visitor",
+          email: record.email,
+          phone: record.phone,
+          institution: record.institution || undefined,
+          registrationType: "visitor",
+          daysAttending: record.days_attending || undefined,
+        });
+        pdfAttachments = [
+          {
+            filename: ticketPdf.fileName,
+            base64Content: ticketPdf.pdfBase64,
+            contentType: "application/pdf",
+          },
+        ];
+      } catch {
+        // continue
+      }
+
       const res = await sendRegistrationConfirmationEmail(record.id, "visitor", true, {
         recipientEmail: record.email,
         recipientName: record.full_name,
         registrationRef: record.registration_ref,
         institution: record.institution || undefined,
+        attachments: pdfAttachments,
         extraDetails: {
           category: record.visitor_category,
           days: record.days_attending,
         },
       });
-      if (res.ok) {
+      if (res.ok && !res.simulated) {
         setStatusMsg({
           type: "success",
           text: `Visitor ticket pass resent successfully to ${record.email}.`,
@@ -339,6 +405,12 @@ export default function AdminVisitorRegistrations() {
           setInspectedRecord({ ...inspectedRecord, email_status: "sent" });
         }
       } else {
+        setRegistrations((prev) =>
+          prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: "failed" } : item)) : null
+        );
+        if (inspectedRecord && inspectedRecord.id === record.id) {
+          setInspectedRecord({ ...inspectedRecord, email_status: "failed" });
+        }
         throw new Error(res.error || "Email delivery failed");
       }
       setTimeout(() => setStatusMsg(null), 5000);
@@ -525,15 +597,17 @@ export default function AdminVisitorRegistrations() {
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
             <span>Sync</span>
           </button>
-          <button
-            type="button"
-            onClick={exportCsv}
-            disabled={!filteredRegistrations.length}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <Download size={13} />
-            <span>Export CSV</span>
-          </button>
+          {canExport && (
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={!filteredRegistrations.length}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <Download size={13} />
+              <span>Export CSV</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -813,13 +887,15 @@ export default function AdminVisitorRegistrations() {
                             <div>
                               <span
                                 className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded ${
-                                  row.email_status === "failed"
+                                  row.email_status === "sent"
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                    : row.email_status === "failed"
                                     ? "bg-rose-50 text-rose-700 border border-rose-200"
-                                    : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                    : "bg-amber-50 text-amber-700 border border-amber-200"
                                 }`}
                               >
                                 <Mail size={10} />
-                                <span>{row.email_status || "sent"}</span>
+                                <span>{row.email_status || "not_sent"}</span>
                               </span>
                             </div>
                           )}
@@ -846,7 +922,7 @@ export default function AdminVisitorRegistrations() {
                             <span>View</span>
                           </button>
 
-                          {row.status === "confirmed" && (
+                          {row.status === "confirmed" && canResend && (
                             <button
                               type="button"
                               onClick={() => handleResendEmail(row)}
@@ -858,26 +934,28 @@ export default function AdminVisitorRegistrations() {
                             </button>
                           )}
 
-                          {isArchived ? (
-                            <button
-                              type="button"
-                              onClick={() => handleRestore(row)}
-                              disabled={savingId === row.id}
-                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
-                              title="Restore to active passes"
-                            >
-                              <RotateCcw size={12} />
-                              <span>Restore</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setArchiveTarget(row)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                              title="Archive visitor pass"
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                          {canDelete && (
+                            isArchived ? (
+                              <button
+                                type="button"
+                                onClick={() => handleRestore(row)}
+                                disabled={savingId === row.id}
+                                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
+                                title="Restore to active passes"
+                              >
+                                <RotateCcw size={12} />
+                                <span>Restore</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setArchiveTarget(row)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Archive visitor pass"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
@@ -929,55 +1007,63 @@ export default function AdminVisitorRegistrations() {
               </div>
 
               {/* Status Verification Actions */}
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2.5">
-                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
-                  Update Approval Status
-                </span>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <button
-                    type="button"
-                    disabled={savingId === inspectedRecord.id || inspectedRecord.status === "confirmed"}
-                    onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "confirmed")}
-                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Confirm
-                  </button>
-                  <button
-                    type="button"
-                    disabled={savingId === inspectedRecord.id || inspectedRecord.status === "correction_requested"}
-                    onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "correction_requested")}
-                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Correction
-                  </button>
-                  <button
-                    type="button"
-                    disabled={savingId === inspectedRecord.id || inspectedRecord.status === "declined"}
-                    onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "declined")}
-                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Decline
-                  </button>
-                  {isRegistrationArchived(inspectedRecord) ? (
-                    <button
-                      type="button"
-                      disabled={savingId === inspectedRecord.id}
-                      onClick={() => handleRestore(inspectedRecord)}
-                      className="py-2 px-3 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
-                    >
-                      Restore
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setArchiveTarget(inspectedRecord)}
-                      className="py-2 px-3 rounded-lg text-xs font-semibold bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
-                    >
-                      Archive
-                    </button>
-                  )}
+              {(canEdit || canDelete) && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2.5">
+                  <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                    Update Approval Status
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {canEdit && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={savingId === inspectedRecord.id || inspectedRecord.status === "confirmed"}
+                          onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "confirmed")}
+                          className="py-2 px-3 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingId === inspectedRecord.id || inspectedRecord.status === "correction_requested"}
+                          onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "correction_requested")}
+                          className="py-2 px-3 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                        >
+                          Correction
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingId === inspectedRecord.id || inspectedRecord.status === "declined"}
+                          onClick={() => handleStatusChange(inspectedRecord.id, inspectedRecord.registration_ref, "declined")}
+                          className="py-2 px-3 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                        >
+                          Decline
+                        </button>
+                      </>
+                    )}
+                    {canDelete && (
+                      isRegistrationArchived(inspectedRecord) ? (
+                        <button
+                          type="button"
+                          disabled={savingId === inspectedRecord.id}
+                          onClick={() => handleRestore(inspectedRecord)}
+                          className="py-2 px-3 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
+                        >
+                          Restore
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setArchiveTarget(inspectedRecord)}
+                          className="py-2 px-3 rounded-lg text-xs font-semibold bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                        >
+                          Archive
+                        </button>
+                      )
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Ticketing & Email Dispatch Card */}
               <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-2 text-xs">
@@ -1006,7 +1092,7 @@ export default function AdminVisitorRegistrations() {
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600">Email Status:</span>
                   <span className="font-semibold text-slate-800 capitalize">
-                    {inspectedRecord.email_status || (inspectedRecord.status === "confirmed" ? "sent" : "pending confirmation")}
+                    {inspectedRecord.email_status || (inspectedRecord.status === "confirmed" ? "not sent" : "pending confirmation")}
                   </span>
                 </div>
                 {/* NAS Archive Status */}
@@ -1056,15 +1142,17 @@ export default function AdminVisitorRegistrations() {
                     <span>Download Ticket</span>
                   </button>
 
-                  <button
-                    type="button"
-                    disabled={savingId === inspectedRecord.id}
-                    onClick={() => handleResendEmail(inspectedRecord)}
-                    className="py-2 px-3 rounded-lg bg-white hover:bg-blue-50 border border-blue-300 text-blue-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Mail size={13} />
-                    <span>Resend Email</span>
-                  </button>
+                  {canResend && (
+                    <button
+                      type="button"
+                      disabled={savingId === inspectedRecord.id}
+                      onClick={() => handleResendEmail(inspectedRecord)}
+                      className="py-2 px-3 rounded-lg bg-white hover:bg-blue-50 border border-blue-300 text-blue-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Mail size={13} />
+                      <span>Resend Email</span>
+                    </button>
+                  )}
                 </div>
               </div>
 

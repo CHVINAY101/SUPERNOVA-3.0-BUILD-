@@ -45,6 +45,7 @@ import AdminAuditLogs from "./pages/admin/AdminAuditLogs";
 import AdminSystemReadiness from "./pages/admin/AdminSystemReadiness";
 import AdminDataExports from "./pages/admin/AdminDataExports";
 import AdminCrmEmails from "./pages/admin/AdminCrmEmails";
+import AdminUsers from "./pages/admin/AdminUsers";
 
 export default function App() {
   return (
@@ -96,6 +97,7 @@ export default function App() {
         <Route path="esports-registrations" element={<AdminEsportsRegistrations />} />
         <Route path="visitor-registrations" element={<AdminVisitorRegistrations />} />
         <Route path="crm-emails" element={<AdminCrmEmails />} />
+        <Route path="users" element={<AdminUsers />} />
         <Route path="schedule" element={<AdminSchedule />} />
         <Route path="announcements" element={<AdminAnnouncements />} />
         <Route path="content" element={<AdminContent />} />

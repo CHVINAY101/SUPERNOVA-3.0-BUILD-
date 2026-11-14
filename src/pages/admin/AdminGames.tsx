@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { Game } from "@/types/database";
 import { Gamepad2, ExternalLink, Plus, CheckCircle, AlertCircle, X } from "lucide-react";
 
@@ -9,6 +10,11 @@ type GameRecord = Pick<Game, "id" | "title" | "team_size" | "rules" | "is_active
 const COLUMNS = "id, title, team_size, rules, is_active, is_published, sort_order";
 
 export default function AdminGames() {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission(["event_info:create", "esports:create"]);
+  const canEdit = hasPermission(["event_info:edit", "esports:edit"]);
+  const canPublish = hasPermission(["event_info:publish", "esports:edit"]);
+
   const [games, setGames] = useState<GameRecord[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -40,6 +46,10 @@ export default function AdminGames() {
 
   const addGame = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canCreate) {
+      setStatusMsg({ type: "error", text: "You do not have permission to add tournament games." });
+      return;
+    }
     const size = Number(teamSize);
     if (title.trim().length < 2 || !Number.isInteger(size) || size < 1 || size > 20) {
       setStatusMsg({ type: "error", text: "Enter a game title and a team size from 1 to 20." });
@@ -53,7 +63,7 @@ export default function AdminGames() {
       team_size: size,
       rules: rules.trim() || null,
       is_active: true,
-      is_published: true,
+      is_published: canPublish,
       sort_order: nextOrder,
     });
     setSaving(false);
@@ -71,6 +81,8 @@ export default function AdminGames() {
   };
 
   const toggle = async (game: GameRecord, field: "is_active" | "is_published") => {
+    if (field === "is_active" && !canEdit) return;
+    if (field === "is_published" && !canPublish) return;
     const nextVal = !game[field];
     const { error: updateError } = await supabase.from("games").update({ [field]: nextVal }).eq("id", game.id);
     if (updateError) {
@@ -114,7 +126,7 @@ export default function AdminGames() {
             <span>View on website</span> <ExternalLink size={13} />
           </Link>
 
-          {!isAdding && (
+          {!isAdding && canCreate && (
             <button
               onClick={() => { setIsAdding(true); setStatusMsg(null); }}
               className="btn btn-primary"
@@ -213,12 +225,14 @@ export default function AdminGames() {
           <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", margin: "0 0 12px" }}>
             No tournament games registered yet.
           </p>
-          <button
-            className="btn btn-primary"
-            onClick={() => setIsAdding(true)}
-          >
-            Add First Tournament Game
-          </button>
+          {canCreate && (
+            <button
+              className="btn btn-primary"
+              onClick={() => setIsAdding(true)}
+            >
+              Add First Tournament Game
+            </button>
+          )}
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -248,6 +262,7 @@ export default function AdminGames() {
                     <td style={{ padding: "14px 18px" }}>
                       <button
                         type="button"
+                        disabled={!canEdit}
                         onClick={() => toggle(game, "is_active")}
                         style={{
                           padding: "4px 10px",
@@ -255,7 +270,8 @@ export default function AdminGames() {
                           fontSize: "0.78rem",
                           fontWeight: 700,
                           border: "none",
-                          cursor: "pointer",
+                          cursor: canEdit ? "pointer" : "not-allowed",
+                          opacity: canEdit ? 1 : 0.65,
                           background: game.is_active ? "rgba(16, 185, 129, 0.15)" : "rgba(255,255,255,0.08)",
                           color: game.is_active ? "#10b981" : "var(--text-muted)",
                         }}
@@ -266,6 +282,7 @@ export default function AdminGames() {
                     <td style={{ padding: "14px 18px" }}>
                       <button
                         type="button"
+                        disabled={!canPublish}
                         onClick={() => toggle(game, "is_published")}
                         style={{
                           padding: "4px 10px",
@@ -273,7 +290,8 @@ export default function AdminGames() {
                           fontSize: "0.78rem",
                           fontWeight: 700,
                           border: "none",
-                          cursor: "pointer",
+                          cursor: canPublish ? "pointer" : "not-allowed",
+                          opacity: canPublish ? 1 : 0.65,
                           background: game.is_published ? "rgba(34, 211, 238, 0.15)" : "rgba(255,255,255,0.08)",
                           color: game.is_published ? "var(--cyan-400)" : "var(--text-muted)",
                         }}

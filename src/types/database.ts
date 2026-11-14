@@ -1,7 +1,43 @@
 export type RegistrationStatus = "pending" | "confirmed" | "declined" | "correction_requested";
 export type MatchStatus = "upcoming" | "live" | "completed" | "postponed" | "cancelled";
-export type AdminRole = "super_admin" | "event_admin" | "checkin_staff" | "score_operator";
+export type AdminRole =
+  | "super_admin"
+  | "crm_admin"
+  | "registration_staff"
+  | "participation_manager"
+  | "esports_manager"
+  | "content_manager"
+  | "viewer"
+  | "event_admin"
+  | "checkin_staff"
+  | "score_operator";
+export type AccountStatus = "invited" | "active" | "deactivated" | "revoked";
 export type CheckInStatus = "not_checked_in" | "checked_in";
+
+export interface CrmUserSummary {
+  user_id: string;
+  email: string;
+  full_name: string | null;
+  role: AdminRole;
+  account_status: AccountStatus;
+  created_at: string;
+  last_login_at?: string | null;
+  invited_at?: string | null;
+  activated_at?: string | null;
+  deactivated_at?: string | null;
+  overrides: { permission_key: string; allowed: boolean }[];
+}
+
+export interface CrmInvitation {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: AdminRole;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  invited_at: string;
+  accepted_at?: string | null;
+  custom_permissions?: Record<string, boolean> | null;
+}
 
 export interface EventSetting {
   id: string;

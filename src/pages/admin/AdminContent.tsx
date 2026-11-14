@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { SiteContent } from "@/types/database";
 import { FileText, ExternalLink, CheckCircle, AlertCircle, Plus } from "lucide-react";
 
@@ -16,6 +17,11 @@ const sections = [
 ];
 
 export default function AdminContent() {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission("event_info:create");
+  const canEdit = hasPermission("event_info:edit");
+  const canPublish = hasPermission("event_info:publish");
+
   const [activeSection, setActiveSection] = useState("home");
   const [items, setItems] = useState<SiteContent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,13 +50,17 @@ export default function AdminContent() {
 
   const handleSave = async () => {
     if (!editing) return;
+    if (editing.id ? !canEdit : !canCreate) {
+      setStatusMsg({ type: "error", text: "You do not have permission to save content." });
+      return;
+    }
     setSaving(true);
     setStatusMsg(null);
     const payload = {
       section: editing.section,
       title: editing.title,
       body: editing.body,
-      is_published: editing.is_published,
+      is_published: canPublish ? editing.is_published : false,
       sort_order: editing.sort_order,
     };
     let result;
@@ -70,6 +80,7 @@ export default function AdminContent() {
   };
 
   const togglePublish = async (item: SiteContent) => {
+    if (!canPublish) return;
     const nextVal = !item.is_published;
     await supabase.from("site_content").update({ is_published: nextVal }).eq("id", item.id);
     setStatusMsg({
@@ -80,6 +91,7 @@ export default function AdminContent() {
   };
 
   const deleteItem = async (id: string) => {
+    if (!canEdit) return;
     if (!confirm("Delete this content block? This cannot be undone.")) return;
     await supabase.from("site_content").delete().eq("id", id);
     setStatusMsg({ type: "success", text: "Content block removed." });
@@ -197,10 +209,11 @@ export default function AdminContent() {
                 style={{ width: 90 }}
               />
             </div>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 18 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: canPublish ? "pointer" : "not-allowed", opacity: canPublish ? 1 : 0.6, marginTop: 18 }}>
               <input
                 type="checkbox"
-                checked={editing.is_published}
+                checked={canPublish ? editing.is_published : false}
+                disabled={!canPublish}
                 onChange={(e) => setEditing({ ...editing, is_published: e.target.checked })}
               />
               <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>Publish immediately to website</span>
@@ -215,7 +228,7 @@ export default function AdminContent() {
             </button>
           </div>
         </div>
-      ) : (
+      ) : canCreate ? (
         <button
           className="btn btn-primary"
           onClick={() =>
@@ -224,7 +237,7 @@ export default function AdminContent() {
               section: activeSection,
               title: "",
               body: "",
-              is_published: true,
+              is_published: canPublish,
               sort_order: items.length + 1,
               updated_by: null,
               updated_at: "",
@@ -235,7 +248,7 @@ export default function AdminContent() {
         >
           <Plus size={16} /> Add Content Block
         </button>
-      )}
+      ) : null}
 
       {/* List */}
       {loading ? (
@@ -247,24 +260,26 @@ export default function AdminContent() {
           <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", margin: "0 0 12px" }}>
             No content blocks found for the <strong>{currentSection.label}</strong> page yet.
           </p>
-          <button
-            className="btn btn-secondary"
-            onClick={() =>
-              setEditing({
-                id: "",
-                section: activeSection,
-                title: "",
-                body: "",
-                is_published: true,
-                sort_order: 1,
-                updated_by: null,
-                updated_at: "",
-                created_at: "",
-              })
-            }
-          >
-            Create First Block
-          </button>
+          {canCreate && (
+            <button
+              className="btn btn-secondary"
+              onClick={() =>
+                setEditing({
+                  id: "",
+                  section: activeSection,
+                  title: "",
+                  body: "",
+                  is_published: canPublish,
+                  sort_order: 1,
+                  updated_by: null,
+                  updated_at: "",
+                  created_at: "",
+                })
+              }
+            >
+              Create First Block
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: "grid", gap: 16 }}>
@@ -281,17 +296,25 @@ export default function AdminContent() {
               <p style={{ fontSize: "0.88rem", color: "var(--text-muted)", lineHeight: 1.5, margin: "0 0 16px" }}>
                 {item.body ? (item.body.length > 200 ? item.body.slice(0, 200) + "..." : item.body) : "No body text entered."}
               </p>
-              <div style={{ display: "flex", gap: 10, borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12 }}>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem" }} onClick={() => setEditing(item)}>
-                  Edit
-                </button>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "var(--cyan-400)" }} onClick={() => togglePublish(item)}>
-                  {item.is_published ? "Unpublish" : "Publish Live"}
-                </button>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "#ef4444" }} onClick={() => deleteItem(item.id)}>
-                  Delete
-                </button>
-              </div>
+              {(canEdit || canPublish) && (
+                <div style={{ display: "flex", gap: 10, borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12 }}>
+                  {canEdit && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem" }} onClick={() => setEditing(item)}>
+                      Edit
+                    </button>
+                  )}
+                  {canPublish && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "var(--cyan-400)" }} onClick={() => togglePublish(item)}>
+                      {item.is_published ? "Unpublish" : "Publish Live"}
+                    </button>
+                  )}
+                  {canEdit && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "#ef4444" }} onClick={() => deleteItem(item.id)}>
+                      Delete
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

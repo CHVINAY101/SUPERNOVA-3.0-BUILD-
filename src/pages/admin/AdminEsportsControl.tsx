@@ -20,7 +20,12 @@ import {
 import type { Game, Registration, Player, Match } from "@/types/database";
 
 export default function AdminEsportsControl() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  const canCreateMatch = hasPermission("esports:create");
+  const canEditEsports = hasPermission("esports:edit");
+  const canRejectEsports = hasPermission("esports:reject");
+  const canBroadcast = hasPermission("announcements:create") && hasPermission("announcements:publish");
+
   const [games, setGames] = useState<Game[]>([]);
   const [selectedGameId, setSelectedGameId] = useState<string>("2757504c-2466-4515-8a7d-997e5e170139");
   const [teams, setTeams] = useState<Registration[]>([]);
@@ -113,6 +118,7 @@ export default function AdminEsportsControl() {
 
   // Toggle Team Arrived check-in
   const toggleTeamCheckIn = async (team: Registration) => {
+    if (!canEditEsports) return;
     setStatusMsg(null);
     const isCurrentlyCheckedIn = (team as any).check_in_status === "checked_in";
     const nextStatus = isCurrentlyCheckedIn ? "not_checked_in" : "checked_in";
@@ -161,6 +167,7 @@ export default function AdminEsportsControl() {
 
   // Toggle individual player present
   const togglePlayerCheckIn = async (player: Player) => {
+    if (!canEditEsports) return;
     const nextStatus = player.check_in_status === "checked_in" ? "not_checked_in" : "checked_in";
     try {
       await supabase.from("players").update({
@@ -182,7 +189,7 @@ export default function AdminEsportsControl() {
 
   // Disqualify / No-Show
   const confirmDisqualify = async () => {
-    if (!disqualifyTarget) return;
+    if (!disqualifyTarget || !canRejectEsports) return;
     setStatusMsg(null);
 
     try {
@@ -216,6 +223,7 @@ export default function AdminEsportsControl() {
   // Create match
   const handleCreateMatch = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canCreateMatch) return;
     if (!teamAId || !teamBId || teamAId === teamBId) {
       setStatusMsg({ type: "error", text: "Please select two distinct teams." });
       return;
@@ -260,6 +268,7 @@ export default function AdminEsportsControl() {
 
   // Update Match Status & Score
   const updateMatchStatus = async (matchId: string, newStatus: Match["status"], scoreA?: number, scoreB?: number, winnerId?: string | null) => {
+    if (!canEditEsports) return;
     setStatusMsg(null);
     try {
       const updatePayload: any = { status: newStatus };
@@ -288,6 +297,7 @@ export default function AdminEsportsControl() {
   // Post announcement to teams
   const handleBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canBroadcast) return;
     if (!broadcastTitle.trim() || !broadcastBody.trim()) return;
 
     setBroadcasting(true);
@@ -421,13 +431,15 @@ export default function AdminEsportsControl() {
                 Pair confirmed teams, publish live match scores, and declare stage winners.
               </p>
             </div>
-            <button
-              onClick={() => setMatchModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
-            >
-              <Plus size={14} />
-              <span>Create Match</span>
-            </button>
+            {canCreateMatch && (
+              <button
+                onClick={() => setMatchModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs cursor-pointer"
+              >
+                <Plus size={14} />
+                <span>Create Match</span>
+              </button>
+            )}
           </div>
 
           {currentGameMatches.length === 0 ? (
@@ -490,6 +502,7 @@ export default function AdminEsportsControl() {
                         <input
                           type="number"
                           min={0}
+                          disabled={!canEditEsports}
                           value={m.score_a}
                           onChange={(e) =>
                             updateMatchStatus(
@@ -500,12 +513,13 @@ export default function AdminEsportsControl() {
                               m.winner_id
                             )
                           }
-                          className="w-10 p-1 text-base font-black text-center bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-hidden focus:border-blue-500 font-mono"
+                          className="w-10 p-1 text-base font-black text-center bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-hidden focus:border-blue-500 font-mono disabled:opacity-60"
                         />
                         <span className="font-bold text-slate-400">:</span>
                         <input
                           type="number"
                           min={0}
+                          disabled={!canEditEsports}
                           value={m.score_b}
                           onChange={(e) =>
                             updateMatchStatus(
@@ -516,7 +530,7 @@ export default function AdminEsportsControl() {
                               m.winner_id
                             )
                           }
-                          className="w-10 p-1 text-base font-black text-center bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-hidden focus:border-blue-500 font-mono"
+                          className="w-10 p-1 text-base font-black text-center bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-hidden focus:border-blue-500 font-mono disabled:opacity-60"
                         />
                       </div>
 
@@ -539,8 +553,9 @@ export default function AdminEsportsControl() {
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <button
                           type="button"
+                          disabled={!canEditEsports}
                           onClick={() => updateMatchStatus(m.id, "upcoming")}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50 ${
                             m.status === "upcoming"
                               ? "bg-slate-900 text-white"
                               : "bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -550,8 +565,9 @@ export default function AdminEsportsControl() {
                         </button>
                         <button
                           type="button"
+                          disabled={!canEditEsports}
                           onClick={() => updateMatchStatus(m.id, "live")}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50 ${
                             m.status === "live"
                               ? "bg-orange-600 text-white"
                               : "bg-orange-50 text-orange-700 hover:bg-orange-100"
@@ -561,8 +577,9 @@ export default function AdminEsportsControl() {
                         </button>
                         <button
                           type="button"
+                          disabled={!canEditEsports}
                           onClick={() => updateMatchStatus(m.id, "completed")}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-50 ${
                             m.status === "completed"
                               ? "bg-emerald-600 text-white"
                               : "bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
@@ -576,6 +593,7 @@ export default function AdminEsportsControl() {
                       <div className="flex items-center gap-1.5 text-xs text-slate-600">
                         <span className="font-medium text-slate-500">Winner:</span>
                         <select
+                          disabled={!canEditEsports}
                           value={m.winner_id || ""}
                           onChange={(e) =>
                             updateMatchStatus(
@@ -586,7 +604,7 @@ export default function AdminEsportsControl() {
                               e.target.value || null
                             )
                           }
-                          className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-800 focus:outline-hidden"
+                          className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-800 focus:outline-hidden disabled:opacity-60"
                         >
                           <option value="">Deciding...</option>
                           <option value={m.team_a_id || ""}>{teamA?.team_name || "Team A"}</option>
@@ -601,46 +619,48 @@ export default function AdminEsportsControl() {
           )}
 
           {/* Rapid Broadcast Box */}
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs">
-            <div className="flex items-center gap-2 mb-1">
-              <Send size={16} className="text-blue-600" />
-              <h3 className="text-sm font-bold text-slate-900 m-0">
-                Broadcast Stage Announcement
-              </h3>
-            </div>
-            <p className="text-xs text-slate-500 mb-3.5 m-0">
-              Posts immediately to the public ticker and festival announcements page.
-            </p>
-
-            <form onSubmit={handleBroadcast} className="space-y-3">
-              <input
-                type="text"
-                required
-                value={broadcastTitle}
-                onChange={(e) => setBroadcastTitle(e.target.value)}
-                placeholder="Notice title (e.g. BGMI Round 2 starts in 10 minutes at Arena Lab 3)"
-                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-              <textarea
-                required
-                rows={2}
-                value={broadcastBody}
-                onChange={(e) => setBroadcastBody(e.target.value)}
-                placeholder="Details or station instructions for team captains..."
-                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
-              />
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={broadcasting}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-semibold shadow-xs cursor-pointer"
-                >
-                  <Send size={13} />
-                  <span>{broadcasting ? "Broadcasting..." : "Broadcast Notice"}</span>
-                </button>
+          {canBroadcast && (
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs">
+              <div className="flex items-center gap-2 mb-1">
+                <Send size={16} className="text-blue-600" />
+                <h3 className="text-sm font-bold text-slate-900 m-0">
+                  Broadcast Stage Announcement
+                </h3>
               </div>
-            </form>
-          </div>
+              <p className="text-xs text-slate-500 mb-3.5 m-0">
+                Posts immediately to the public ticker and festival announcements page.
+              </p>
+
+              <form onSubmit={handleBroadcast} className="space-y-3">
+                <input
+                  type="text"
+                  required
+                  value={broadcastTitle}
+                  onChange={(e) => setBroadcastTitle(e.target.value)}
+                  placeholder="Notice title (e.g. BGMI Round 2 starts in 10 minutes at Arena Lab 3)"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                />
+                <textarea
+                  required
+                  rows={2}
+                  value={broadcastBody}
+                  onChange={(e) => setBroadcastBody(e.target.value)}
+                  placeholder="Details or station instructions for team captains..."
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none"
+                />
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={broadcasting}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                  >
+                    <Send size={13} />
+                    <span>{broadcasting ? "Broadcasting..." : "Broadcast Notice"}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
         </div>
 
         {/* Right Column: Confirmed Teams & Check-in Roster */}
@@ -691,8 +711,9 @@ export default function AdminEsportsControl() {
                       {/* Team Arrival Toggle */}
                       <button
                         type="button"
+                        disabled={!canEditEsports}
                         onClick={() => toggleTeamCheckIn(team)}
-                        className={`shrink-0 text-xs font-bold px-3 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                        className={`shrink-0 text-xs font-bold px-3 py-1.5 rounded-xl transition-colors cursor-pointer disabled:opacity-50 ${
                           isArrived
                             ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                             : "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
@@ -717,13 +738,14 @@ export default function AdminEsportsControl() {
                               <button
                                 key={player.id}
                                 type="button"
+                                disabled={!canEditEsports}
                                 onClick={() => togglePlayerCheckIn(player)}
-                                className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${
+                                className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border transition-colors cursor-pointer disabled:opacity-60 ${
                                   isPresent
                                     ? "bg-emerald-50 text-emerald-800 border-emerald-300"
                                     : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                                 }`}
-                                title="Click to toggle player presence"
+                                title={canEditEsports ? "Click to toggle player presence" : "Read-only"}
                               >
                                 {player.player_name} {player.gamer_tag ? `(${player.gamer_tag})` : ""}
                               </button>
@@ -734,16 +756,18 @@ export default function AdminEsportsControl() {
                     </div>
 
                     {/* Disqualify action */}
-                    <div className="flex justify-end pt-1">
-                      <button
-                        type="button"
-                        onClick={() => setDisqualifyTarget(team)}
-                        className="text-[11px] text-rose-500 hover:text-rose-700 inline-flex items-center gap-1 font-semibold cursor-pointer"
-                      >
-                        <AlertOctagon size={12} />
-                        <span>Disqualify / No-Show</span>
-                      </button>
-                    </div>
+                    {canRejectEsports && (
+                      <div className="flex justify-end pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setDisqualifyTarget(team)}
+                          className="text-[11px] text-rose-500 hover:text-rose-700 inline-flex items-center gap-1 font-semibold cursor-pointer"
+                        >
+                          <AlertOctagon size={12} />
+                          <span>Disqualify / No-Show</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}

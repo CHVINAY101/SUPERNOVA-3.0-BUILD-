@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useAuth } from "@/lib/auth";
+import { getRoleLabel } from "@/lib/rbac";
 import { supabase } from "@/lib/supabase";
 import {
   exportToExcel,
@@ -36,12 +37,47 @@ interface GameRow {
 }
 
 export default function AdminDataExports() {
-  const { user, role } = useAuth();
-  const currentRole = role || "super_admin";
-  const isAuthorizedRole = currentRole === "super_admin" || currentRole === "event_admin";
+  const { user, role, hasPermission } = useAuth();
+  const currentRoleLabel = getRoleLabel(role);
+
+  const canViewVisitors = hasPermission("visitor:view");
+  const canViewParticipation = hasPermission("participation:view");
+  const canViewEsports = hasPermission("esports:view");
+  const canExportGlobal = hasPermission("reports:export");
+  const canExportVisitors = canExportGlobal || hasPermission("visitor:export");
+  const canExportParticipation = canExportGlobal || hasPermission("participation:export");
+  const canExportEsports = canExportGlobal || hasPermission("esports:export");
 
   // Active Export Module
   const [activeModule, setActiveModule] = useState<ExportCategory>("visitor");
+
+  const canExportActiveModule = useMemo(() => {
+    switch (activeModule) {
+      case "visitor":
+        return canExportVisitors;
+      case "participation":
+        return canExportParticipation;
+      case "esports_teams":
+      case "esports_players":
+      case "esports_complete":
+        return canExportEsports;
+      default:
+        return false;
+    }
+  }, [activeModule, canExportVisitors, canExportParticipation, canExportEsports]);
+
+  useEffect(() => {
+    if (activeModule === "visitor" && !canViewVisitors) {
+      if (canViewParticipation) setActiveModule("participation");
+      else if (canViewEsports) setActiveModule("esports_teams");
+    } else if (activeModule === "participation" && !canViewParticipation) {
+      if (canViewVisitors) setActiveModule("visitor");
+      else if (canViewEsports) setActiveModule("esports_teams");
+    } else if (activeModule.startsWith("esports") && !canViewEsports) {
+      if (canViewVisitors) setActiveModule("visitor");
+      else if (canViewParticipation) setActiveModule("participation");
+    }
+  }, [activeModule, canViewVisitors, canViewParticipation, canViewEsports]);
 
   // Raw Data States
   const [visitorData, setVisitorData] = useState<any[]>([]);
@@ -49,7 +85,7 @@ export default function AdminDataExports() {
   const [esportsData, setEsportsData] = useState<any[]>([]);
   const [gamesList, setGamesList] = useState<GameRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [, setFetchError] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Filters State
   const [searchQuery, setSearchQuery] = useState("");
@@ -80,36 +116,44 @@ export default function AdminDataExports() {
     setFetchError(null);
 
     try {
-      // 1. Fetch Games
-      const { data: games } = await supabase
-        .from("games")
-        .select("id, title, team_size")
-        .order("sort_order");
-      if (games) setGamesList(games as GameRow[]);
+      if (canViewEsports) {
+        const { data: games } = await supabase
+          .from("games")
+          .select("id, title, team_size")
+          .order("sort_order");
+        if (games) setGamesList(games as GameRow[]);
 
-      // 2. Fetch Visitors
-      const { data: visitors, error: vErr } = await supabase
-        .from("visitor_registrations")
-        .select("*")
-        .order("submitted_at", { ascending: false });
-      if (vErr) console.warn("Visitor fetch notice:", vErr.message);
-      setVisitorData(visitors || []);
+        const { data: esports, error: eErr } = await supabase
+          .from("registrations")
+          .select("*, games(title), players(*)")
+          .order("submitted_at", { ascending: false });
+        if (eErr) console.warn("Esports fetch notice:", eErr.message);
+        setEsportsData(esports || []);
+      } else {
+        setEsportsData([]);
+      }
 
-      // 3. Fetch Participation
-      const { data: participations, error: pErr } = await supabase
-        .from("participation_registrations")
-        .select("*")
-        .order("submitted_at", { ascending: false });
-      if (pErr) console.warn("Participation fetch notice:", pErr.message);
-      setParticipationData(participations || []);
+      if (canViewVisitors) {
+        const { data: visitors, error: vErr } = await supabase
+          .from("visitor_registrations")
+          .select("*")
+          .order("submitted_at", { ascending: false });
+        if (vErr) console.warn("Visitor fetch notice:", vErr.message);
+        setVisitorData(visitors || []);
+      } else {
+        setVisitorData([]);
+      }
 
-      // 4. Fetch Esports (with games & players join)
-      const { data: esports, error: eErr } = await supabase
-        .from("registrations")
-        .select("*, games(title), players(*)")
-        .order("submitted_at", { ascending: false });
-      if (eErr) console.warn("Esports fetch notice:", eErr.message);
-      setEsportsData(esports || []);
+      if (canViewParticipation) {
+        const { data: participations, error: pErr } = await supabase
+          .from("participation_registrations")
+          .select("*")
+          .order("submitted_at", { ascending: false });
+        if (pErr) console.warn("Participation fetch notice:", pErr.message);
+        setParticipationData(participations || []);
+      } else {
+        setParticipationData([]);
+      }
 
       // Load local export audit history
       const savedHistory = localStorage.getItem("supernova_export_audit_history");
@@ -121,7 +165,7 @@ export default function AdminDataExports() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canViewVisitors, canViewParticipation, canViewEsports]);
 
   useEffect(() => {
     fetchData();
@@ -239,17 +283,18 @@ export default function AdminDataExports() {
 
   // Open confirmation modal
   const handleInitiateExport = (format: "xlsx" | "csv", scope: "filtered" | "selected") => {
-    if (!isAuthorizedRole) {
-      alert("UNAUTHORIZED: Bulk data export is restricted to Super Administrators and Event Administrators.");
+    if (!canExportActiveModule) {
+      setFetchError("Unauthorized: Your CRM permissions do not allow exporting this dataset.");
       return;
     }
 
     const count = scope === "selected" ? selectedIds.size : filteredRecords.length;
     if (count === 0) {
-      alert("No records match the current selection. Please adjust your filters or selections.");
+      setFetchError("No records match the current selection. Adjust filters or select rows before exporting.");
       return;
     }
 
+    setFetchError(null);
     setExportFormat(format);
     setExportScope(scope);
     setPiiConsentGiven(false);
@@ -258,8 +303,12 @@ export default function AdminDataExports() {
 
   // Execute Actual File Generation
   const handleExecuteExport = async () => {
+    if (!canExportActiveModule) {
+      setFetchError("Unauthorized: Your CRM permissions do not allow exporting this dataset.");
+      return;
+    }
     if (!piiConsentGiven) {
-      alert("Please confirm the compliance checkbox before downloading participant PII.");
+      setFetchError("Please confirm the compliance checkbox before downloading participant PII.");
       return;
     }
 
@@ -466,7 +515,7 @@ export default function AdminDataExports() {
       const savedHistory = localStorage.getItem("supernova_export_audit_history");
       if (savedHistory) setRecentExports(JSON.parse(savedHistory).slice(0, 5));
     } catch (err: any) {
-      alert(`Export failed: ${err.message}`);
+      setFetchError(`Export failed: ${err.message}`);
     } finally {
       setIsExporting(false);
     }
@@ -497,8 +546,36 @@ export default function AdminDataExports() {
         </div>
       </div>
 
-      {/* RBAC Notice if unauthorized */}
-      {!isAuthorizedRole && (
+      {/* Inline Error Banner */}
+      {fetchError && (
+        <div
+          style={{
+            padding: "14px 18px",
+            borderRadius: "var(--radius-md)",
+            background: "rgba(239, 68, 68, 0.14)",
+            border: "1px solid rgba(239, 68, 68, 0.35)",
+            color: "#ef4444",
+            marginBottom: 20,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: "0.86rem",
+            fontWeight: 600,
+          }}
+        >
+          <span>{fetchError}</span>
+          <button
+            type="button"
+            onClick={() => setFetchError(null)}
+            style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer" }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* RBAC Notice if unauthorized to export active module */}
+      {!canExportActiveModule && (
         <div
           style={{
             padding: "16px 20px",
@@ -514,9 +591,8 @@ export default function AdminDataExports() {
         >
           <Lock size={22} />
           <div>
-            <strong>RBAC Access Control Warning:</strong> Bulk registration data export is strictly restricted to
-            Super Administrators and Event Administrators. Your current assigned role (
-            <strong>{currentRole}</strong>) does not permit exporting participant personal information.
+            <strong>RBAC Access Control:</strong> Exporting registration files for this module requires explicit export permission. Your current role (
+            <strong>{currentRoleLabel}</strong>) is restricted to read-only preview here.
           </div>
         </div>
       )}
@@ -559,108 +635,116 @@ export default function AdminDataExports() {
         }}
       >
         {/* Module 1: Visitors */}
-        <div
-          onClick={() => setActiveModule("visitor")}
-          className="card"
-          style={{
-            padding: "20px 22px",
-            cursor: "pointer",
-            border: activeModule === "visitor" ? "2px solid var(--cyan-400)" : "1px solid var(--border-subtle)",
-            background: activeModule === "visitor" ? "rgba(34, 211, 238, 0.08)" : "var(--navy-900)",
-            transition: "all var(--transition-fast)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <span style={{ fontSize: "1.5rem" }}>👥</span>
-            <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--text-primary)" }}>
-              {visitorData.length}
-            </span>
+        {canViewVisitors && (
+          <div
+            onClick={() => setActiveModule("visitor")}
+            className="card"
+            style={{
+              padding: "20px 22px",
+              cursor: "pointer",
+              border: activeModule === "visitor" ? "2px solid var(--cyan-400)" : "1px solid var(--border-subtle)",
+              background: activeModule === "visitor" ? "rgba(34, 211, 238, 0.08)" : "var(--navy-900)",
+              transition: "all var(--transition-fast)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <span style={{ fontSize: "1.5rem" }}>👥</span>
+              <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--text-primary)" }}>
+                {visitorData.length}
+              </span>
+            </div>
+            <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
+              Visitor Registrations
+            </h3>
+            <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
+              Students, faculty, and general public with class, school, roll number, and esports preference.
+            </p>
           </div>
-          <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
-            Visitor Registrations
-          </h3>
-          <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
-            Students, faculty, and general public with class, school, roll number, and esports preference.
-          </p>
-        </div>
+        )}
 
         {/* Module 2: Participation */}
-        <div
-          onClick={() => setActiveModule("participation")}
-          className="card"
-          style={{
-            padding: "20px 22px",
-            cursor: "pointer",
-            border: activeModule === "participation" ? "2px solid var(--cyan-400)" : "1px solid var(--border-subtle)",
-            background: activeModule === "participation" ? "rgba(34, 211, 238, 0.08)" : "var(--navy-900)",
-            transition: "all var(--transition-fast)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <span style={{ fontSize: "1.5rem" }}>🔬</span>
-            <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--text-primary)" }}>
-              {participationData.length}
-            </span>
+        {canViewParticipation && (
+          <div
+            onClick={() => setActiveModule("participation")}
+            className="card"
+            style={{
+              padding: "20px 22px",
+              cursor: "pointer",
+              border: activeModule === "participation" ? "2px solid var(--cyan-400)" : "1px solid var(--border-subtle)",
+              background: activeModule === "participation" ? "rgba(34, 211, 238, 0.08)" : "var(--navy-900)",
+              transition: "all var(--transition-fast)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <span style={{ fontSize: "1.5rem" }}>🔬</span>
+              <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--text-primary)" }}>
+                {participationData.length}
+              </span>
+            </div>
+            <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
+              Project Exhibits
+            </h3>
+            <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
+              Science Expo, robotics, and academic exhibition teams with abstract and team size.
+            </p>
           </div>
-          <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
-            Project Exhibits
-          </h3>
-          <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
-            Science Expo, robotics, and academic exhibition teams with abstract and team size.
-          </p>
-        </div>
+        )}
 
         {/* Module 3A: Esports Teams */}
-        <div
-          onClick={() => setActiveModule("esports_teams")}
-          className="card"
-          style={{
-            padding: "20px 22px",
-            cursor: "pointer",
-            border: activeModule === "esports_teams" ? "2px solid var(--cyan-400)" : "1px solid var(--border-subtle)",
-            background: activeModule === "esports_teams" ? "rgba(34, 211, 238, 0.08)" : "var(--navy-900)",
-            transition: "all var(--transition-fast)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <span style={{ fontSize: "1.5rem" }}>🎮</span>
-            <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--text-primary)" }}>
-              {esportsData.length}
-            </span>
+        {canViewEsports && (
+          <div
+            onClick={() => setActiveModule("esports_teams")}
+            className="card"
+            style={{
+              padding: "20px 22px",
+              cursor: "pointer",
+              border: activeModule === "esports_teams" ? "2px solid var(--cyan-400)" : "1px solid var(--border-subtle)",
+              background: activeModule === "esports_teams" ? "rgba(34, 211, 238, 0.08)" : "var(--navy-900)",
+              transition: "all var(--transition-fast)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <span style={{ fontSize: "1.5rem" }}>🎮</span>
+              <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--text-primary)" }}>
+                {esportsData.length}
+              </span>
+            </div>
+            <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
+              Esports Teams
+            </h3>
+            <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
+              Team names, game category, captain contact, institution, and tournament status.
+            </p>
           </div>
-          <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
-            Esports Teams
-          </h3>
-          <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
-            Team names, game category, captain contact, institution, and tournament status.
-          </p>
-        </div>
+        )}
 
         {/* Module 3B: Esports Complete Workbook */}
-        <div
-          onClick={() => setActiveModule("esports_complete")}
-          className="card"
-          style={{
-            padding: "20px 22px",
-            cursor: "pointer",
-            border: activeModule === "esports_complete" ? "2px solid #10b981" : "1px solid var(--border-subtle)",
-            background: activeModule === "esports_complete" ? "rgba(16, 185, 129, 0.08)" : "var(--navy-900)",
-            transition: "all var(--transition-fast)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <span style={{ fontSize: "1.5rem" }}>📑</span>
-            <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "#10b981" }}>
-              3 Sheets
-            </span>
+        {canViewEsports && (
+          <div
+            onClick={() => setActiveModule("esports_complete")}
+            className="card"
+            style={{
+              padding: "20px 22px",
+              cursor: "pointer",
+              border: activeModule === "esports_complete" ? "2px solid #10b981" : "1px solid var(--border-subtle)",
+              background: activeModule === "esports_complete" ? "rgba(16, 185, 129, 0.08)" : "var(--navy-900)",
+              transition: "all var(--transition-fast)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <span style={{ fontSize: "1.5rem" }}>📑</span>
+              <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "#10b981" }}>
+                3 Sheets
+              </span>
+            </div>
+            <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
+              Complete Esports Workbook
+            </h3>
+            <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
+              Multi-sheet Excel: Team Registrations, Player Rosters, and Game-wise Summary.
+            </p>
           </div>
-          <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
-            Complete Esports Workbook
-          </h3>
-          <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
-            Multi-sheet Excel: Team Registrations, Player Rosters, and Game-wise Summary.
-          </p>
-        </div>
+        )}
       </div>
 
       {/* Filter and Control Bar */}
@@ -859,7 +943,7 @@ export default function AdminDataExports() {
             {selectedIds.size > 0 && (
               <button
                 onClick={() => handleInitiateExport("xlsx", "selected")}
-                disabled={!isAuthorizedRole}
+                disabled={!canExportActiveModule}
                 className="btn"
                 style={{
                   display: "flex",
@@ -881,7 +965,7 @@ export default function AdminDataExports() {
             {/* Export CSV Button */}
             <button
               onClick={() => handleInitiateExport("csv", "filtered")}
-              disabled={!isAuthorizedRole || filteredRecords.length === 0}
+              disabled={!canExportActiveModule || filteredRecords.length === 0}
               className="btn btn-ghost"
               style={{
                 display: "flex",
@@ -899,7 +983,7 @@ export default function AdminDataExports() {
             {/* Export Excel (.xlsx) Primary Button */}
             <button
               onClick={() => handleInitiateExport("xlsx", "filtered")}
-              disabled={!isAuthorizedRole || filteredRecords.length === 0}
+              disabled={!canExportActiveModule || filteredRecords.length === 0}
               className="btn btn-primary"
               style={{
                 display: "flex",
@@ -1186,7 +1270,7 @@ export default function AdminDataExports() {
                 style={{ marginTop: 3 }}
               />
               <span>
-                I confirm that I am an authorized administrator (<strong>{currentRole}</strong>), that this download is for legitimate Supernova 3.0 operations, and that I will safeguard all personal data.
+                I confirm that I am an authorized CRM user (<strong>{currentRoleLabel}</strong>), that this download is for legitimate Supernova 3.0 operations, and that I will safeguard all personal data.
               </span>
             </label>
 

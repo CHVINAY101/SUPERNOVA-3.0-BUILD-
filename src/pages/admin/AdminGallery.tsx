@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef, ChangeEvent } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { GalleryItem } from "@/types/database";
 import { ImagePicker } from "@/components/admin/ImagePicker";
 import { 
@@ -29,6 +30,11 @@ interface DraftPhoto {
 }
 
 export default function AdminGallery() {
+  const { hasPermission } = useAuth();
+  const canUpload = hasPermission("gallery:upload");
+  const canEdit = hasPermission("gallery:edit");
+  const canDelete = hasPermission("gallery:delete");
+
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<GalleryItem | null>(null);
@@ -58,6 +64,7 @@ export default function AdminGallery() {
 
   // Handle multi-file selection
   const handleMultiFiles = (files: FileList | null) => {
+    if (!canUpload) return;
     if (!files || files.length === 0) return;
     setStatusMsg(null);
 
@@ -84,6 +91,7 @@ export default function AdminGallery() {
 
   // Publish all drafts to Supabase
   const handlePublishAll = async () => {
+    if (!canUpload) return;
     if (drafts.length === 0) return;
     setPublishingAll(true);
     setStatusMsg(null);
@@ -134,6 +142,10 @@ export default function AdminGallery() {
 
   const handleSaveSingle = async () => {
     if (!editing || !editing.image_url) return;
+    if (editing.id ? !canEdit : !canUpload) {
+      setStatusMsg({ type: "error", text: "You do not have permission to save gallery items." });
+      return;
+    }
     setSaving(true);
     setStatusMsg(null);
 
@@ -164,6 +176,7 @@ export default function AdminGallery() {
   };
 
   const togglePublish = async (item: GalleryItem) => {
+    if (!canEdit) return;
     const nextPublished = !item.is_published;
     await supabase.from("gallery_items").update({ is_published: nextPublished }).eq("id", item.id);
     setStatusMsg({
@@ -174,6 +187,7 @@ export default function AdminGallery() {
   };
 
   const deleteItem = async (id: string) => {
+    if (!canDelete) return;
     if (!confirm("Are you sure you want to remove this photo?")) return;
     await supabase.from("gallery_items").delete().eq("id", id);
     setStatusMsg({ type: "success", text: "Photo removed successfully." });
@@ -209,13 +223,15 @@ export default function AdminGallery() {
             <span>View on website</span> <ExternalLink size={13} />
           </Link>
 
-          <button
-            onClick={() => multiFileInputRef.current?.click()}
-            className="btn btn-primary"
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.85rem", fontWeight: 700 }}
-          >
-            <UploadCloud size={16} /> Select Photos
-          </button>
+          {canUpload && (
+            <button
+              onClick={() => multiFileInputRef.current?.click()}
+              className="btn btn-primary"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.85rem", fontWeight: 700 }}
+            >
+              <UploadCloud size={16} /> Select Photos
+            </button>
+          )}
         </div>
       </div>
 
@@ -463,25 +479,27 @@ export default function AdminGallery() {
           <h2 style={{ fontSize: "1.2rem", fontWeight: 800, color: "var(--text-primary)", margin: 0 }}>
             Published Photos ({items.length})
           </h2>
-          <button
-            onClick={() =>
-              setEditing({
-                id: "",
-                title: "",
-                description: "",
-                image_url: "",
-                category: "general",
-                is_published: true,
-                sort_order: items.length + 1,
-                created_at: "",
-                updated_at: "",
-              })
-            }
-            className="btn btn-secondary"
-            style={{ fontSize: "0.82rem", display: "inline-flex", alignItems: "center", gap: 6 }}
-          >
-            <Plus size={14} /> Add One Photo
-          </button>
+          {canUpload && (
+            <button
+              onClick={() =>
+                setEditing({
+                  id: "",
+                  title: "",
+                  description: "",
+                  image_url: "",
+                  category: "general",
+                  is_published: true,
+                  sort_order: items.length + 1,
+                  created_at: "",
+                  updated_at: "",
+                })
+              }
+              className="btn btn-secondary"
+              style={{ fontSize: "0.82rem", display: "inline-flex", alignItems: "center", gap: 6 }}
+            >
+              <Plus size={14} /> Add One Photo
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -505,13 +523,15 @@ export default function AdminGallery() {
             <p style={{ color: "var(--text-muted)", fontSize: "0.88rem", marginTop: 6 }}>
               You can choose multiple photos from your device or phone camera.
             </p>
-            <button
-              onClick={() => multiFileInputRef.current?.click()}
-              className="btn btn-primary"
-              style={{ marginTop: 16 }}
-            >
-              <UploadCloud size={16} /> Choose Photos to Upload
-            </button>
+            {canUpload && (
+              <button
+                onClick={() => multiFileInputRef.current?.click()}
+                className="btn btn-primary"
+                style={{ marginTop: 16 }}
+              >
+                <UploadCloud size={16} /> Choose Photos to Upload
+              </button>
+            )}
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20 }}>
@@ -560,32 +580,40 @@ export default function AdminGallery() {
                   </p>
                 </div>
 
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.2)" }}>
-                  <button
-                    onClick={() => togglePublish(item)}
-                    style={{ background: "transparent", border: 0, color: "var(--cyan-400)", cursor: "pointer", fontSize: "0.78rem", display: "inline-flex", alignItems: "center", gap: 5 }}
-                  >
-                    {item.is_published ? <EyeOff size={13} /> : <Eye size={13} />}
-                    {item.is_published ? "Unpublish" : "Publish"}
-                  </button>
+                {(canEdit || canDelete) && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.2)" }}>
+                    {canEdit ? (
+                      <button
+                        onClick={() => togglePublish(item)}
+                        style={{ background: "transparent", border: 0, color: "var(--cyan-400)", cursor: "pointer", fontSize: "0.78rem", display: "inline-flex", alignItems: "center", gap: 5 }}
+                      >
+                        {item.is_published ? <EyeOff size={13} /> : <Eye size={13} />}
+                        {item.is_published ? "Unpublish" : "Publish"}
+                      </button>
+                    ) : <span />}
 
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      onClick={() => setEditing(item)}
-                      style={{ background: "transparent", border: 0, color: "var(--text-muted)", cursor: "pointer" }}
-                      title="Edit photo info"
-                    >
-                      <Edit2 size={15} />
-                    </button>
-                    <button
-                      onClick={() => deleteItem(item.id)}
-                      style={{ background: "transparent", border: 0, color: "#f87171", cursor: "pointer" }}
-                      title="Delete photo"
-                    >
-                      <Trash2 size={15} />
-                    </button>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {canEdit && (
+                        <button
+                          onClick={() => setEditing(item)}
+                          style={{ background: "transparent", border: 0, color: "var(--text-muted)", cursor: "pointer" }}
+                          title="Edit photo info"
+                        >
+                          <Edit2 size={15} />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={() => deleteItem(item.id)}
+                          style={{ background: "transparent", border: 0, color: "#f87171", cursor: "pointer" }}
+                          title="Delete photo"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             ))}
           </div>

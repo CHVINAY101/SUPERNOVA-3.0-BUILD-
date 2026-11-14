@@ -1,22 +1,23 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import type { AdminRole } from "@/types/database";
-import { 
-  LayoutDashboard, 
-  FileText, 
-  Calendar, 
-  Bell, 
-  Award, 
-  Image, 
-  HelpCircle, 
-  Gamepad2, 
-  Users, 
-  UserCheck, 
-  GraduationCap, 
-  HardDrive, 
-  ShieldAlert, 
-  Settings, 
+import { getRoleLabel } from "@/lib/rbac";
+import {
+  LayoutDashboard,
+  FileText,
+  Calendar,
+  Bell,
+  Award,
+  Image,
+  HelpCircle,
+  Gamepad2,
+  Users,
+  UserCheck,
+  GraduationCap,
+  HardDrive,
+  ShieldAlert,
+  ShieldCheck,
+  Settings,
   LogOut,
   ExternalLink,
   SlidersHorizontal,
@@ -26,7 +27,7 @@ import {
   Mail,
   Menu,
   X,
-  Search
+  Search,
 } from "lucide-react";
 import { TicketVerificationModal } from "@/components/admin/TicketVerificationModal";
 
@@ -34,7 +35,6 @@ interface NavItem {
   to: string;
   label: string;
   icon: any;
-  allowedRoles?: AdminRole[];
 }
 
 interface NavSection {
@@ -46,49 +46,50 @@ const navSections: NavSection[] = [
   {
     title: "Today",
     items: [
-      { to: "/admin", label: "Dashboard", icon: LayoutDashboard, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/checkin", label: "Check-in Desk", icon: UserCheck, allowedRoles: ["super_admin", "event_admin", "checkin_staff", "score_operator"] },
-      { to: "/admin/esports-control", label: "Esports Control", icon: Gamepad2, allowedRoles: ["super_admin", "event_admin", "score_operator"] },
+      { to: "/admin", label: "Dashboard", icon: LayoutDashboard },
+      { to: "/admin/checkin", label: "Check-in Desk", icon: UserCheck },
+      { to: "/admin/esports-control", label: "Esports Control", icon: Gamepad2 },
     ],
   },
   {
     title: "Registrations & CRM",
     items: [
-      { to: "/admin/crm-emails", label: "Email Centre (Gmail)", icon: Mail, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/registration-controls", label: "Registration Controls", icon: SlidersHorizontal, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/participation-registrations", label: "Participation", icon: Users, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/esports-registrations", label: "Esports Teams", icon: Gamepad2, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/visitor-registrations", label: "Visitors", icon: UserCheck, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/data-exports", label: "Registration Data Exports", icon: Download, allowedRoles: ["super_admin", "event_admin"] },
+      { to: "/admin/crm-emails", label: "Email Centre (Gmail)", icon: Mail },
+      { to: "/admin/participation-registrations", label: "Participation", icon: Users },
+      { to: "/admin/esports-registrations", label: "Esports Teams", icon: Gamepad2 },
+      { to: "/admin/visitor-registrations", label: "Visitors", icon: UserCheck },
+      { to: "/admin/data-exports", label: "Registration Data Exports", icon: Download },
     ],
   },
   {
     title: "Website",
     items: [
-      { to: "/admin/schedule", label: "Schedule", icon: Calendar, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/announcements", label: "Announcements", icon: Bell, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/content", label: "Page Text", icon: FileText, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/media", label: "Photos", icon: HardDrive, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/gallery", label: "Gallery", icon: Image, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/sponsors", label: "Sponsors", icon: Award, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/faqs", label: "FAQs", icon: HelpCircle, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/games", label: "Games", icon: Gamepad2, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/institutions", label: "Schools", icon: GraduationCap, allowedRoles: ["super_admin", "event_admin"] },
+      { to: "/admin/schedule", label: "Schedule", icon: Calendar },
+      { to: "/admin/announcements", label: "Announcements", icon: Bell },
+      { to: "/admin/content", label: "Page Text", icon: FileText },
+      { to: "/admin/media", label: "Photos", icon: HardDrive },
+      { to: "/admin/gallery", label: "Gallery", icon: Image },
+      { to: "/admin/sponsors", label: "Sponsors", icon: Award },
+      { to: "/admin/faqs", label: "FAQs", icon: HelpCircle },
+      { to: "/admin/games", label: "Games", icon: Gamepad2 },
+      { to: "/admin/institutions", label: "Schools", icon: GraduationCap },
     ],
   },
   {
-    title: "Settings",
+    title: "Administration & Settings",
     items: [
-      { to: "/admin/settings", label: "Event Details", icon: Settings, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/form-options", label: "Form Options", icon: ListPlus, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/audit-logs", label: "Activity Log", icon: ShieldAlert, allowedRoles: ["super_admin", "event_admin"] },
-      { to: "/admin/system-readiness", label: "System Readiness", icon: ClipboardCheck, allowedRoles: ["super_admin", "event_admin"] },
+      { to: "/admin/users", label: "User Management", icon: ShieldCheck },
+      { to: "/admin/registration-controls", label: "Registration Controls", icon: SlidersHorizontal },
+      { to: "/admin/settings", label: "Event Details", icon: Settings },
+      { to: "/admin/form-options", label: "Form Options", icon: ListPlus },
+      { to: "/admin/audit-logs", label: "Activity Log", icon: ShieldAlert },
+      { to: "/admin/system-readiness", label: "System Readiness", icon: ClipboardCheck },
     ],
   },
 ];
 
 export default function AdminLayout() {
-  const { signOut, user, role } = useAuth();
+  const { signOut, user, role, canAccessRoute, hasPermission } = useAuth();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isLookupOpen, setIsLookupOpen] = useState(false);
@@ -98,12 +99,12 @@ export default function AdminLayout() {
     navigate("/admin/login");
   };
 
-  const currentRole: AdminRole = role || "super_admin";
+  const canVerifyTicket = hasPermission(["visitor:view", "participation:view", "esports:view"]);
 
   const visibleSections = navSections
     .map((sec) => ({
       ...sec,
-      items: sec.items.filter((item) => !item.allowedRoles || item.allowedRoles.includes(currentRole)),
+      items: sec.items.filter((item) => canAccessRoute(item.to)),
     }))
     .filter((sec) => sec.items.length > 0);
 
@@ -119,14 +120,16 @@ export default function AdminLayout() {
           </div>
         </Link>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setIsLookupOpen(true)}
-            className="p-1.5 rounded-lg bg-cyan-950 border border-cyan-800 text-cyan-300 hover:text-white"
-            title="Search & Verify Ticket"
-          >
-            <Search size={16} />
-          </button>
+          {canVerifyTicket && (
+            <button
+              type="button"
+              onClick={() => setIsLookupOpen(true)}
+              className="p-1.5 rounded-lg bg-cyan-950 border border-cyan-800 text-cyan-300 hover:text-white"
+              title="Search & Verify Ticket"
+            >
+              <Search size={16} />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -147,7 +150,7 @@ export default function AdminLayout() {
         />
       )}
 
-      {/* Sidebar: Deep Navy, Professional SaaS Structure */}
+      {/* Sidebar */}
       <aside
         className={`fixed md:sticky top-0 left-0 bottom-0 z-50 md:z-10 w-64 lg:w-72 flex-shrink-0 bg-[#0B1120] text-slate-300 border-r border-slate-800 flex flex-col transition-transform duration-200 ease-out md:translate-x-0 ${
           mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
@@ -187,14 +190,16 @@ export default function AdminLayout() {
               <ExternalLink size={11} />
             </Link>
 
-            <button
-              type="button"
-              onClick={() => setIsLookupOpen(true)}
-              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 text-xs font-semibold transition-all cursor-pointer shadow-xs"
-            >
-              <Search size={13} />
-              <span>Verify Ticket / Pass</span>
-            </button>
+            {canVerifyTicket && (
+              <button
+                type="button"
+                onClick={() => setIsLookupOpen(true)}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 text-xs font-semibold transition-all cursor-pointer shadow-xs"
+              >
+                <Search size={13} />
+                <span>Verify Ticket / Pass</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -244,7 +249,7 @@ export default function AdminLayout() {
               </span>
             </div>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-cyan-950 border border-cyan-800 text-cyan-400 shrink-0">
-              {role || "admin"}
+              {getRoleLabel(role)}
             </span>
           </div>
 
@@ -259,7 +264,7 @@ export default function AdminLayout() {
         </div>
       </aside>
 
-      {/* Main SaaS Canvas: White/Off-White Background with Deep Navy Typography */}
+      {/* Main SaaS Canvas */}
       <main className="flex-1 min-w-0 bg-[#F8FAFC] text-slate-900 overflow-y-auto">
         <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
           <Outlet />

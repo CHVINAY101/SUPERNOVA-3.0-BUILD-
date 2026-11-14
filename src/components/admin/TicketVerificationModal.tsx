@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { searchTicketOrReference, type UniversalLookupResult } from "@/lib/registrationOperations";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 
 interface TicketVerificationModalProps {
   isOpen: boolean;
@@ -20,6 +21,11 @@ interface TicketVerificationModalProps {
 }
 
 export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationModalProps) {
+  const { hasPermission } = useAuth();
+  const canViewVisitors = hasPermission("visitor:view");
+  const canViewParticipation = hasPermission("participation:view");
+  const canViewEsports = hasPermission("esports:view");
+
   const [query, setQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [results, setResults] = useState<UniversalLookupResult[]>([]);
@@ -31,6 +37,18 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
 
   if (!isOpen) return null;
 
+  const isStreamAllowed = (type: UniversalLookupResult["type"]) => {
+    if (type === "visitor") return canViewVisitors;
+    if (type === "participation") return canViewParticipation;
+    return canViewEsports;
+  };
+
+  const canCheckInRecord = (rec: UniversalLookupResult) => {
+    if (rec.type === "visitor") return hasPermission("visitor:edit");
+    if (rec.type === "participation") return hasPermission("participation:edit");
+    return hasPermission("esports:edit");
+  };
+
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!query.trim()) return;
@@ -38,7 +56,9 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
     setIsSearching(true);
     setCheckinMsg(null);
     try {
-      const found = await searchTicketOrReference(query.trim());
+      const found = (await searchTicketOrReference(query.trim())).filter((rec) =>
+        isStreamAllowed(rec.type)
+      );
       setResults(found);
       setHasSearched(true);
       if (found.length === 1) {
@@ -54,6 +74,13 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
   };
 
   const handleQuickCheckin = async (rec: UniversalLookupResult) => {
+    if (!canCheckInRecord(rec)) {
+      setCheckinMsg({
+        type: "error",
+        text: "Your role does not have permission to perform check-in updates for this category.",
+      });
+      return;
+    }
     setIsCheckingIn(true);
     setCheckinMsg(null);
     try {
@@ -157,7 +184,10 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
               type="button"
               onClick={() => {
                 setQuery("SN3-26");
-                searchTicketOrReference("SN3-26").then(setResults).then(() => setHasSearched(true));
+                searchTicketOrReference("SN3-26")
+                  .then((found) => found.filter((rec) => isStreamAllowed(rec.type)))
+                  .then(setResults)
+                  .then(() => setHasSearched(true));
               }}
               className="hover:text-blue-600 underline cursor-pointer"
             >
@@ -349,15 +379,21 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
                   Registration Ref: <strong>{selectedRecord.reference}</strong>
                 </span>
                 <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <button
-                    type="button"
-                    disabled={isCheckingIn || selectedRecord.isArchived}
-                    onClick={() => handleQuickCheckin(selectedRecord)}
-                    className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <CheckCircle2 size={14} />
-                    <span>Confirm & Check In</span>
-                  </button>
+                  {canCheckInRecord(selectedRecord) ? (
+                    <button
+                      type="button"
+                      disabled={isCheckingIn || selectedRecord.isArchived}
+                      onClick={() => handleQuickCheckin(selectedRecord)}
+                      className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <CheckCircle2 size={14} />
+                      <span>Confirm & Check In</span>
+                    </button>
+                  ) : (
+                    <span className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-mono">
+                      Read-only verification
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

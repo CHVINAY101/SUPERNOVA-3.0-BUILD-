@@ -38,7 +38,21 @@ interface UnifiedAttendee {
 }
 
 export default function AdminCheckin() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  const canViewVisitor = hasPermission("visitor:view");
+  const canViewParticipation = hasPermission("participation:view");
+  const canViewEsports = hasPermission("esports:view");
+  const canEditVisitor = hasPermission("visitor:edit");
+  const canEditParticipation = hasPermission("participation:edit");
+  const canEditEsports = hasPermission("esports:edit");
+  const canCreateWalkIn = hasPermission("visitor:create");
+
+  const canModifyAttendee = (type: UnifiedAttendee["type"]) => {
+    if (type === "visitor") return canEditVisitor;
+    if (type === "participation") return canEditParticipation;
+    return canEditEsports;
+  };
+
   const [attendees, setAttendees] = useState<UnifiedAttendee[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -59,26 +73,23 @@ export default function AdminCheckin() {
 
   const fetchAttendees = useCallback(async () => {
     try {
-      // 1. Fetch visitor passes
-      const { data: visitors } = await supabase
-        .from("visitor_registrations")
-        .select("*")
-        .order("submitted_at", { ascending: false });
+      const [visRes, partRes, espRes, ciRes] = await Promise.all([
+        canViewVisitor
+          ? supabase.from("visitor_registrations").select("*").order("submitted_at", { ascending: false })
+          : Promise.resolve({ data: [] as any[] }),
+        canViewParticipation
+          ? supabase.from("participation_registrations").select("*").order("submitted_at", { ascending: false })
+          : Promise.resolve({ data: [] as any[] }),
+        canViewEsports
+          ? supabase.from("registrations").select("*").order("submitted_at", { ascending: false })
+          : Promise.resolve({ data: [] as any[] }),
+        supabase.from("check_ins").select("*"),
+      ]);
 
-      // 2. Fetch participation projects
-      const { data: participations } = await supabase
-        .from("participation_registrations")
-        .select("*")
-        .order("submitted_at", { ascending: false });
-
-      // 3. Fetch esports registrations
-      const { data: esports } = await supabase
-        .from("registrations")
-        .select("*")
-        .order("submitted_at", { ascending: false });
-
-      // 4. Fetch check_ins records
-      const { data: checkins } = await supabase.from("check_ins").select("*");
+      const visitors = visRes.data || [];
+      const participations = partRes.data || [];
+      const esports = espRes.data || [];
+      const checkins = ciRes.data || [];
 
       const checkInMap = new Map<string, any>();
       (checkins || []).forEach((c) => {
@@ -153,7 +164,7 @@ export default function AdminCheckin() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canViewVisitor, canViewParticipation, canViewEsports]);
 
   // Multi-table Realtime Subscription for Check-in Desk
   const { connectionState, lastEventTime } = useRealtimeSubscription(
@@ -236,6 +247,10 @@ export default function AdminCheckin() {
 
   // Perform Check-in action
   const handleCheckIn = async (attendee: UnifiedAttendee) => {
+    if (!canModifyAttendee(attendee.type)) {
+      setStatusMessage({ type: "error", text: "Access denied: Read-only permission for this track." });
+      return;
+    }
     setStatusMessage(null);
     const nowIso = new Date().toISOString();
     const actor = user?.email || "gate-staff@supernova.edu";
@@ -280,7 +295,7 @@ export default function AdminCheckin() {
 
   // Undo Check-in action
   const confirmUndo = async () => {
-    if (!undoTarget) return;
+    if (!undoTarget || !canModifyAttendee(undoTarget.type)) return;
     setStatusMessage(null);
 
     try {
@@ -317,6 +332,7 @@ export default function AdminCheckin() {
   // Walk-in Registration & Immediate Check-in
   const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canCreateWalkIn) return;
     if (!walkInName.trim()) return;
 
     setWalkInSubmitting(true);
@@ -430,14 +446,16 @@ export default function AdminCheckin() {
 
         <div className="flex items-center gap-2.5 flex-wrap">
           <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} />
-          <button
-            type="button"
-            onClick={() => setWalkInOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-          >
-            <UserPlus size={14} />
-            <span>Walk-in Pass</span>
-          </button>
+          {canCreateWalkIn && (
+            <button
+              type="button"
+              onClick={() => setWalkInOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+            >
+              <UserPlus size={14} />
+              <span>Walk-in Pass</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setQrModalOpen(true)}
@@ -571,17 +589,19 @@ export default function AdminCheckin() {
             <p className="text-xs text-slate-600 max-w-md mx-auto mt-1 mb-4">
               No pass matching "{searchQuery}". You can create an on-the-spot walk-in pass below.
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                setWalkInName(searchQuery);
-                setWalkInOpen(true);
-              }}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs"
-            >
-              <UserPlus size={14} />
-              <span>Issue Walk-in Pass</span>
-            </button>
+            {canCreateWalkIn && (
+              <button
+                type="button"
+                onClick={() => {
+                  setWalkInName(searchQuery);
+                  setWalkInOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs"
+              >
+                <UserPlus size={14} />
+                <span>Issue Walk-in Pass</span>
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-3.5">
@@ -660,15 +680,17 @@ export default function AdminCheckin() {
                           <CheckCircle size={15} className="text-emerald-600" />
                           <span>CHECKED IN {formatTime(attendee.checkedInAt)}</span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setUndoTarget(attendee)}
-                          className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-rose-600 cursor-pointer transition-colors"
-                        >
-                          <RotateCcw size={11} /> Undo check-in
-                        </button>
+                        {canModifyAttendee(attendee.type) && (
+                          <button
+                            type="button"
+                            onClick={() => setUndoTarget(attendee)}
+                            className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-rose-600 cursor-pointer transition-colors"
+                          >
+                            <RotateCcw size={11} /> Undo check-in
+                          </button>
+                        )}
                       </div>
-                    ) : (
+                    ) : canModifyAttendee(attendee.type) ? (
                       <button
                         type="button"
                         onClick={() => handleCheckIn(attendee)}
@@ -677,6 +699,10 @@ export default function AdminCheckin() {
                         <CheckCircle size={16} />
                         <span>CHECK IN</span>
                       </button>
+                    ) : (
+                      <span className="inline-flex items-center px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 text-xs font-mono">
+                        Read-only
+                      </span>
                     )}
                   </div>
                 </div>

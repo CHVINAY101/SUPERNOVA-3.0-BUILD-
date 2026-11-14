@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { RegistrationControl } from "@/types/database";
 import { CheckCircle2, AlertCircle, Save, Calendar, Clock, RefreshCw, X } from "lucide-react";
 
@@ -28,6 +29,9 @@ const META_MAP: Record<string, FormMeta> = {
 };
 
 export default function AdminRegistrationControls() {
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission("system_settings:manage");
+
   const [controls, setControls] = useState<RegistrationControl[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -58,12 +62,17 @@ export default function AdminRegistrationControls() {
   }, []);
 
   const handleFieldChange = (formType: string, field: keyof RegistrationControl, value: any) => {
+    if (!canManage) return;
     setControls((prev) =>
       prev.map((c) => (c.form_type === formType ? { ...c, [field]: value } : c))
     );
   };
 
   const handleSave = async (control: RegistrationControl) => {
+    if (!canManage) {
+      setStatusMsg({ type: "error", text: "You do not have permission to update registration controls." });
+      return;
+    }
     setSavingKey(control.form_type);
     setStatusMsg(null);
     try {
@@ -223,8 +232,9 @@ export default function AdminRegistrationControls() {
                       type="button"
                       role="switch"
                       aria-checked={ctrl.is_open}
+                      disabled={!canManage}
                       onClick={() => handleFieldChange(ctrl.form_type, "is_open", !ctrl.is_open)}
-                      className={`w-12 h-6 rounded-full relative transition-colors cursor-pointer border ${
+                      className={`w-12 h-6 rounded-full relative transition-colors border disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer ${
                         ctrl.is_open ? "bg-emerald-600 border-emerald-600" : "bg-slate-300 border-slate-400"
                       }`}
                     >
@@ -245,10 +255,11 @@ export default function AdminRegistrationControls() {
                     </label>
                     <input
                       type="text"
+                      disabled={!canManage}
                       value={ctrl.closed_message || ""}
                       placeholder="e.g. Registrations are currently closed."
                       onChange={(e) => handleFieldChange(ctrl.form_type, "closed_message", e.target.value)}
-                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs"
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs disabled:opacity-60"
                     />
                   </div>
 
@@ -258,9 +269,10 @@ export default function AdminRegistrationControls() {
                     </label>
                     <input
                       type="datetime-local"
+                      disabled={!canManage}
                       value={formatForInput(ctrl.opens_at)}
                       onChange={(e) => handleFieldChange(ctrl.form_type, "opens_at", e.target.value ? new Date(e.target.value).toISOString() : null)}
-                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs font-mono"
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs font-mono disabled:opacity-60"
                     />
                   </div>
 
@@ -270,25 +282,28 @@ export default function AdminRegistrationControls() {
                     </label>
                     <input
                       type="datetime-local"
+                      disabled={!canManage}
                       value={formatForInput(ctrl.closes_at)}
                       onChange={(e) => handleFieldChange(ctrl.form_type, "closes_at", e.target.value ? new Date(e.target.value).toISOString() : null)}
-                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs font-mono"
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:border-blue-500 text-xs font-mono disabled:opacity-60"
                     />
                   </div>
                 </div>
 
                 {/* Save Button */}
-                <div className="flex justify-end pt-2">
-                  <button
-                    type="button"
-                    onClick={() => handleSave(ctrl)}
-                    disabled={isSaving}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    <Save size={13} />
-                    <span>{isSaving ? "Saving..." : "Save Settings"}</span>
-                  </button>
-                </div>
+                {canManage && (
+                  <div className="flex justify-end pt-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSave(ctrl)}
+                      disabled={isSaving}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <Save size={13} />
+                      <span>{isSaving ? "Saving..." : "Save Settings"}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

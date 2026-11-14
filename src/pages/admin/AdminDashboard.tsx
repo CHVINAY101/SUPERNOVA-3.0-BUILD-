@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
 import { LiveRegistrationCounters } from "@/components/admin/LiveRegistrationCounters";
@@ -20,6 +21,13 @@ import {
 } from "lucide-react";
 
 export default function AdminDashboard() {
+  const { hasPermission, canAccessRoute } = useAuth();
+  const canViewVisitors = hasPermission("visitor:view");
+  const canViewParticipation = hasPermission("participation:view");
+  const canViewEsports = hasPermission("esports:view");
+  const canViewAuditLogs = hasPermission("system_settings:view");
+  const canManageSettings = hasPermission("system_settings:manage");
+
   const [controls, setControls] = useState<RegistrationControl[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -36,12 +44,24 @@ export default function AdminDashboard() {
   const fetchDashboardData = useCallback(async () => {
     try {
       const [partsRes, esportsRes, visRes, checkinsRes, matchesRes, logsRes, controlsRes] = await Promise.all([
-        supabase.from("participation_registrations").select("id, status, admin_notes"),
-        supabase.from("registrations").select("id, status, admin_notes"),
-        supabase.from("visitor_registrations").select("id, status, admin_notes, check_in_status"),
-        supabase.from("check_ins").select("id"),
-        supabase.from("matches").select("*").eq("status", "live"),
-        supabase.from("audit_logs").select("*").order("created_at", { ascending: false }).limit(5),
+        canViewParticipation
+          ? supabase.from("participation_registrations").select("id, status, admin_notes")
+          : Promise.resolve({ data: [] as any[] }),
+        canViewEsports
+          ? supabase.from("registrations").select("id, status, admin_notes")
+          : Promise.resolve({ data: [] as any[] }),
+        canViewVisitors
+          ? supabase.from("visitor_registrations").select("id, status, admin_notes, check_in_status")
+          : Promise.resolve({ data: [] as any[] }),
+        canViewVisitors || canViewEsports
+          ? supabase.from("check_ins").select("id")
+          : Promise.resolve({ data: [] as any[] }),
+        canViewEsports
+          ? supabase.from("matches").select("*").eq("status", "live")
+          : Promise.resolve({ data: [] as any[] }),
+        canViewAuditLogs
+          ? supabase.from("audit_logs").select("*").order("created_at", { ascending: false }).limit(5)
+          : Promise.resolve({ data: [] as any[] }),
         supabase.from("registration_controls").select("*").order("form_type"),
       ]);
 
@@ -81,7 +101,7 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canViewParticipation, canViewEsports, canViewVisitors, canViewAuditLogs]);
 
   // Multi-table Realtime Subscription for Admin Command Center
   const { connectionState, lastEventTime } = useRealtimeSubscription(
@@ -104,6 +124,7 @@ export default function AdminDashboard() {
   }, [fetchDashboardData]);
 
   const handleToggleClick = (ctrl: RegistrationControl) => {
+    if (!canManageSettings) return;
     if (ctrl.is_open) {
       setConfirmCloseTarget(ctrl);
     } else {
@@ -112,6 +133,7 @@ export default function AdminDashboard() {
   };
 
   const executeToggle = async (ctrl: RegistrationControl, newIsOpen: boolean) => {
+    if (!canManageSettings) return;
     setTogglingType(ctrl.form_type);
     try {
       await supabase
@@ -174,76 +196,83 @@ export default function AdminDashboard() {
       {/* 1. LIVE REGISTRATION STATISTICS (5 Compact Cards) */}
       <LiveRegistrationCounters />
 
-      {/* 2. THREE COMPACT OPERATIONAL SHORTCUTS */}
-      <div>
-        <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 mb-3">
-          Operational Shortcuts
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {/* Shortcut 1: Check-in Desk */}
-          <Link
-            to="/admin/checkin"
-            className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-emerald-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <UserCheck size={20} />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 group-hover:text-emerald-700 transition-colors m-0">
-                  Open Check-in Desk
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5 m-0">
-                  Gate search & pass verification
-                </p>
-              </div>
-            </div>
-            <ArrowRight size={16} className="text-slate-400 group-hover:text-emerald-600 transition-colors shrink-0" />
-          </Link>
+      {/* 2. OPERATIONAL SHORTCUTS */}
+      {(canAccessRoute("/admin/checkin") ||
+        canAccessRoute("/admin/esports-control") ||
+        canAccessRoute("/admin/announcements")) && (
+        <div>
+          <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500 mb-3">
+            Operational Shortcuts
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {canAccessRoute("/admin/checkin") && (
+              <Link
+                to="/admin/checkin"
+                className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-emerald-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <UserCheck size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 group-hover:text-emerald-700 transition-colors m-0">
+                      Open Check-in Desk
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5 m-0">
+                      Gate search & pass verification
+                    </p>
+                  </div>
+                </div>
+                <ArrowRight size={16} className="text-slate-400 group-hover:text-emerald-600 transition-colors shrink-0" />
+              </Link>
+            )}
 
-          {/* Shortcut 2: Esports Control */}
-          <Link
-            to="/admin/esports-control"
-            className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-purple-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-purple-50 border border-purple-200 text-purple-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <Gamepad2 size={20} />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 group-hover:text-purple-700 transition-colors m-0">
-                  Esports Control
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5 m-0">
-                  Match staging, scores & board
-                </p>
-              </div>
-            </div>
-            <ArrowRight size={16} className="text-slate-400 group-hover:text-purple-600 transition-colors shrink-0" />
-          </Link>
+            {canAccessRoute("/admin/esports-control") && (
+              <Link
+                to="/admin/esports-control"
+                className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-purple-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-50 border border-purple-200 text-purple-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <Gamepad2 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 group-hover:text-purple-700 transition-colors m-0">
+                      Esports Control
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5 m-0">
+                      Match staging, scores & board
+                    </p>
+                  </div>
+                </div>
+                <ArrowRight size={16} className="text-slate-400 group-hover:text-purple-600 transition-colors shrink-0" />
+              </Link>
+            )}
 
-          {/* Shortcut 3: Post Announcement */}
-          <Link
-            to="/admin/announcements"
-            className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-blue-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <Bell size={20} />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 group-hover:text-blue-700 transition-colors m-0">
-                  Post an Announcement
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5 m-0">
-                  Broadcast alert to portal
-                </p>
-              </div>
-            </div>
-            <ArrowRight size={16} className="text-slate-400 group-hover:text-blue-600 transition-colors shrink-0" />
-          </Link>
+            {canAccessRoute("/admin/announcements") && (
+              <Link
+                to="/admin/announcements"
+                className="group p-4 rounded-2xl bg-white border border-slate-200/90 hover:border-blue-500 shadow-2xs hover:shadow-md transition-all no-underline flex items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                    <Bell size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 group-hover:text-blue-700 transition-colors m-0">
+                      Announcements
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5 m-0">
+                      Portal notices & schedule updates
+                    </p>
+                  </div>
+                </div>
+                <ArrowRight size={16} className="text-slate-400 group-hover:text-blue-600 transition-colors shrink-0" />
+              </Link>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 3. BALANCED GRID: Check-ins, Waiting for Review, Live Matches */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -297,13 +326,23 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="mt-3 pt-3 border-t border-slate-100">
-            <Link
-              to="/admin/esports-registrations"
-              className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline"
-            >
-              <span>Review Submissions</span>
-              <ArrowRight size={12} />
-            </Link>
+            {(canViewEsports || canViewParticipation || canViewVisitors) ? (
+              <Link
+                to={
+                  canViewEsports
+                    ? "/admin/esports-registrations"
+                    : canViewParticipation
+                    ? "/admin/participation-registrations"
+                    : "/admin/visitor-registrations"
+                }
+                className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline"
+              >
+                <span>Review Submissions</span>
+                <ArrowRight size={12} />
+              </Link>
+            ) : (
+              <span className="text-xs text-slate-400 font-mono">Restricted to registration queues</span>
+            )}
           </div>
         </div>
 
@@ -328,13 +367,17 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="mt-3 pt-3 border-t border-slate-100">
-            <Link
-              to="/admin/esports-control"
-              className="text-xs font-bold text-purple-700 hover:text-purple-800 inline-flex items-center gap-1 no-underline"
-            >
-              <span>Open Esports Stage Control</span>
-              <ArrowRight size={12} />
-            </Link>
+            {canAccessRoute("/admin/esports-control") ? (
+              <Link
+                to="/admin/esports-control"
+                className="text-xs font-bold text-purple-700 hover:text-purple-800 inline-flex items-center gap-1 no-underline"
+              >
+                <span>Open Esports Stage Control</span>
+                <ArrowRight size={12} />
+              </Link>
+            ) : (
+              <span className="text-xs text-slate-400 font-mono">Esports stage view</span>
+            )}
           </div>
         </div>
       </div>
@@ -350,16 +393,20 @@ export default function AdminDashboard() {
               </h2>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Instantly open or close submission portals for each registration track.
+              {canManageSettings
+                ? "Instantly open or close submission portals for each registration track."
+                : "Live status of public submission portals (read-only)."}
             </p>
           </div>
-          <Link
-            to="/admin/registration-controls"
-            className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline shrink-0"
-          >
-            <span>Advanced Schedule Settings</span>
-            <ArrowRight size={12} />
-          </Link>
+          {canAccessRoute("/admin/registration-controls") && (
+            <Link
+              to="/admin/registration-controls"
+              className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline shrink-0"
+            >
+              <span>Advanced Schedule Settings</span>
+              <ArrowRight size={12} />
+            </Link>
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
@@ -395,18 +442,20 @@ export default function AdminDashboard() {
                   </span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => handleToggleClick(ctrl)}
-                  disabled={isToggling}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
-                    ctrl.is_open
-                      ? "bg-white border-rose-200 text-rose-700 hover:bg-rose-50"
-                      : "bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 shadow-2xs"
-                  }`}
-                >
-                  {isToggling ? "Updating..." : ctrl.is_open ? "Close" : "Open"}
-                </button>
+                {canManageSettings && (
+                  <button
+                    type="button"
+                    onClick={() => handleToggleClick(ctrl)}
+                    disabled={isToggling}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                      ctrl.is_open
+                        ? "bg-white border-rose-200 text-rose-700 hover:bg-rose-50"
+                        : "bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700 shadow-2xs"
+                    }`}
+                  >
+                    {isToggling ? "Updating..." : ctrl.is_open ? "Close" : "Open"}
+                  </button>
+                )}
               </div>
             );
           })}
@@ -414,50 +463,54 @@ export default function AdminDashboard() {
       </div>
 
       {/* 5. RECENT STAFF ACTIVITY LOG */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs">
-        <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <Activity size={16} className="text-blue-700" />
-            <h2 className="text-base font-bold text-slate-900 m-0">
-              Recent Staff Activity Log
-            </h2>
-          </div>
-          <Link
-            to="/admin/audit-logs"
-            className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline"
-          >
-            <span>Full Audit History</span>
-            <ArrowRight size={12} />
-          </Link>
-        </div>
-
-        {recentLogs.length === 0 ? (
-          <p className="text-xs text-slate-400 italic py-2">
-            No recent activity recorded yet. Staff actions and status changes will be tracked here.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {recentLogs.map((log) => (
-              <div
-                key={log.id}
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs"
+      {canViewAuditLogs && (
+        <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs">
+          <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <Activity size={16} className="text-blue-700" />
+              <h2 className="text-base font-bold text-slate-900 m-0">
+                Recent Staff Activity Log
+              </h2>
+            </div>
+            {canAccessRoute("/admin/audit-logs") && (
+              <Link
+                to="/admin/audit-logs"
+                className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline"
               >
-                <div className="flex items-center gap-2.5 overflow-hidden">
-                  <span className="font-mono text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-blue-100/70 text-blue-800 shrink-0">
-                    {log.action}
-                  </span>
-                  <span className="font-semibold text-slate-800 truncate">
-                    {log.entity_type} {log.entity_id ? `(${log.entity_id.slice(0, 8)})` : ""}
+                <span>Full Audit History</span>
+                <ArrowRight size={12} />
+              </Link>
+            )}
+          </div>
+
+          {recentLogs.length === 0 ? (
+            <p className="text-xs text-slate-400 italic py-2">
+              No recent activity recorded yet. Staff actions and status changes will be tracked here.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {recentLogs.map((log) => (
+                <div
+                  key={log.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs"
+                >
+                  <div className="flex items-center gap-2.5 overflow-hidden">
+                    <span className="font-mono text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-blue-100/70 text-blue-800 shrink-0">
+                      {log.action}
+                    </span>
+                    <span className="font-semibold text-slate-800 truncate">
+                      {log.entity_type} {log.entity_id ? `(${log.entity_id.slice(0, 8)})` : ""}
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono text-slate-500 shrink-0">
+                    {new Date(log.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </div>
-                <span className="text-[11px] font-mono text-slate-500 shrink-0">
-                  {new Date(log.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Safe Confirmation Modal for Closing a Portal */}
       {confirmCloseTarget && (

@@ -11,6 +11,7 @@ import {
   sendRegistrationConfirmationEmail,
   getLocalLinkedTickets,
 } from "@/lib/registrationOperations";
+import { useAuth } from "@/lib/auth";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
@@ -36,6 +37,13 @@ export interface AdminParticipationItem extends ParticipationRegistration {
 }
 
 export default function AdminParticipationRegistrations() {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission("participation:edit");
+  const canApprove = hasPermission("participation:approve");
+  const canReject = hasPermission("participation:reject");
+  const canExport = hasPermission("participation:export");
+  const canResend = hasPermission("email_centre:resend");
+
   const [registrations, setRegistrations] = useState<AdminParticipationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -94,11 +102,16 @@ export default function AdminParticipationRegistrations() {
       if (error) throw error;
 
       let emailNotice = "";
+      let nextEmailStatus: string | undefined;
+      let emailOk = true;
       if (newStatus === "confirmed") {
         const currentItem = registrations.find((r) => r.id === id) || selectedReg;
-        const ticketRef = (currentItem as any)?.visitor_ticket_ref || 
-          getLocalLinkedTickets()[currentItem?.registration_ref || ""] || 
+        const ticketRef =
+          (currentItem as any)?.visitor_ticket_ref ||
+          getLocalLinkedTickets()[currentItem?.registration_ref || ""] ||
           `${currentItem?.registration_ref || "SN3-26-REG"}-VIS`;
+
+        let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
 
         // 1. Generate digital ticket PDF and archive to NAS
         if (currentItem) {
@@ -114,28 +127,47 @@ export default function AdminParticipationRegistrations() {
               applicationRef: currentItem.registration_ref,
               projectTitle: currentItem.project_title || undefined,
             });
+            pdfAttachments = [
+              {
+                filename: ticketRes.fileName,
+                base64Content: ticketRes.pdfBase64,
+                contentType: "application/pdf",
+              },
+            ];
 
-            await archiveTicketToNas(ticketRes, {
-              ticketRef,
-              recipientName: currentItem.full_name,
-              category: "Project Participant",
-              email: currentItem.email,
-              phone: currentItem.phone,
-              institution: currentItem.institution || undefined,
-              registrationType: "participation",
-              applicationRef: currentItem.registration_ref,
-              projectTitle: currentItem.project_title || undefined,
-            }, currentItem.id);
+            await archiveTicketToNas(
+              ticketRes,
+              {
+                ticketRef,
+                recipientName: currentItem.full_name,
+                category: "Project Participant",
+                email: currentItem.email,
+                phone: currentItem.phone,
+                institution: currentItem.institution || undefined,
+                registrationType: "participation",
+                applicationRef: currentItem.registration_ref,
+                projectTitle: currentItem.project_title || undefined,
+              },
+              currentItem.id
+            );
           } catch (nasErr) {
             console.warn("Participation NAS archival notice:", nasErr);
           }
         }
 
-        const emailRes = await sendRegistrationConfirmationEmail(id, "participation", false);
-        if (emailRes.ok) {
+        const emailRes = await sendRegistrationConfirmationEmail(id, "participation", false, {
+          recipientEmail: currentItem?.email,
+          recipientName: currentItem?.full_name,
+          registrationRef: currentItem?.registration_ref,
+          institution: currentItem?.institution || undefined,
+          attachments: pdfAttachments,
+        });
+        emailOk = Boolean(emailRes.ok && !emailRes.simulated);
+        nextEmailStatus = emailOk ? "sent" : "failed";
+        if (emailOk) {
           emailNotice = " · Confirmation email dispatched with official entry pass & archived to NAS.";
         } else {
-          emailNotice = ` · Email notice: ${emailRes.error}`;
+          emailNotice = ` · Email notice failed: ${emailRes.error}`;
         }
       }
 
@@ -146,7 +178,7 @@ export default function AdminParticipationRegistrations() {
                 ...r,
                 status: newStatus,
                 admin_notes: editNote,
-                ...(newStatus === "confirmed" ? { email_status: "sent" } : {}),
+                ...(nextEmailStatus ? { email_status: nextEmailStatus } : {}),
               }
             : r
         )
@@ -156,12 +188,12 @@ export default function AdminParticipationRegistrations() {
           ...selectedReg,
           status: newStatus,
           admin_notes: editNote,
-          ...(newStatus === "confirmed" ? { email_status: "sent" } : {}),
+          ...(nextEmailStatus ? { email_status: nextEmailStatus } : {}),
         });
       }
 
       setStatusMsg({
-        type: "success",
+        type: emailOk ? "success" : "error",
         text: `Registration status updated to ${newStatus.replace("_", " ")}${emailNotice}`,
       });
       setTimeout(() => setStatusMsg(null), 5000);
@@ -176,11 +208,47 @@ export default function AdminParticipationRegistrations() {
   };
 
   const handleResendEmail = async (reg: ParticipationRegistration) => {
+    if (!canResend) return;
     setIsUpdating(true);
     setStatusMsg(null);
     try {
-      const emailRes = await sendRegistrationConfirmationEmail(reg.id, "participation", true);
-      if (emailRes.ok) {
+      const ticketRef =
+        (reg as any)?.visitor_ticket_ref ||
+        getLocalLinkedTickets()[reg.registration_ref] ||
+        `${reg.registration_ref}-VIS`;
+
+      let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
+      try {
+        const ticketRes = await generateTicketPdf({
+          ticketRef,
+          recipientName: reg.full_name,
+          category: "Project Participant",
+          email: reg.email,
+          phone: reg.phone,
+          institution: reg.institution || undefined,
+          registrationType: "participation",
+          applicationRef: reg.registration_ref,
+          projectTitle: reg.project_title || undefined,
+        });
+        pdfAttachments = [
+          {
+            filename: ticketRes.fileName,
+            base64Content: ticketRes.pdfBase64,
+            contentType: "application/pdf",
+          },
+        ];
+      } catch {
+        // continue
+      }
+
+      const emailRes = await sendRegistrationConfirmationEmail(reg.id, "participation", true, {
+        recipientEmail: reg.email,
+        recipientName: reg.full_name,
+        registrationRef: reg.registration_ref,
+        institution: reg.institution || undefined,
+        attachments: pdfAttachments,
+      });
+      if (emailRes.ok && !emailRes.simulated) {
         setStatusMsg({
           type: "success",
           text: `Confirmation email re-sent successfully to ${reg.email}.`,
@@ -192,6 +260,12 @@ export default function AdminParticipationRegistrations() {
           setSelectedReg({ ...selectedReg, email_status: "sent" });
         }
       } else {
+        setRegistrations((prev) =>
+          prev.map((r) => (r.id === reg.id ? { ...r, email_status: "failed" } : r))
+        );
+        if (selectedReg && selectedReg.id === reg.id) {
+          setSelectedReg({ ...selectedReg, email_status: "failed" });
+        }
         throw new Error(emailRes.error || "Email delivery failed");
       }
       setTimeout(() => setStatusMsg(null), 5000);
@@ -412,14 +486,16 @@ export default function AdminParticipationRegistrations() {
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
             <span>Sync</span>
           </button>
-          <button
-            type="button"
-            onClick={handleExportCSV}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
-          >
-            <Download size={13} />
-            <span>Export CSV</span>
-          </button>
+          {canExport && (
+            <button
+              type="button"
+              onClick={handleExportCSV}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
+            >
+              <Download size={13} />
+              <span>Export CSV</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -624,7 +700,7 @@ export default function AdminParticipationRegistrations() {
                                 }`}
                               >
                                 <Mail size={10} />
-                                <span>{(reg as any).email_status || "sent"}</span>
+                                <span>{(reg as any).email_status || "not_sent"}</span>
                               </span>
                             </div>
                           )}
@@ -650,7 +726,7 @@ export default function AdminParticipationRegistrations() {
                             <span>View</span>
                           </button>
 
-                          {reg.status === "confirmed" && (
+                          {reg.status === "confirmed" && canResend && (
                             <button
                               type="button"
                               onClick={() => handleResendEmail(reg)}
@@ -662,26 +738,28 @@ export default function AdminParticipationRegistrations() {
                             </button>
                           )}
 
-                          {isArchived ? (
-                            <button
-                              type="button"
-                              onClick={() => handleRestore(reg)}
-                              disabled={isUpdating}
-                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
-                              title="Restore to active entries"
-                            >
-                              <RotateCcw size={12} />
-                              <span>Restore</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setArchiveTarget(reg)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                              title="Archive entry"
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                          {canEdit && (
+                            isArchived ? (
+                              <button
+                                type="button"
+                                onClick={() => handleRestore(reg)}
+                                disabled={isUpdating}
+                                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
+                                title="Restore to active entries"
+                              >
+                                <RotateCcw size={12} />
+                                <span>Restore</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setArchiveTarget(reg)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Archive entry"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
@@ -733,55 +811,65 @@ export default function AdminParticipationRegistrations() {
               </div>
 
               {/* Status Actions */}
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2.5">
-                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
-                  Update Status & Approval
-                </span>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <button
-                    type="button"
-                    disabled={isUpdating || selectedReg.status === "confirmed"}
-                    onClick={() => updateStatus(selectedReg.id, "confirmed")}
-                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Confirm & Send
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isUpdating || selectedReg.status === "correction_requested"}
-                    onClick={() => updateStatus(selectedReg.id, "correction_requested")}
-                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Correction
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isUpdating || selectedReg.status === "declined"}
-                    onClick={() => updateStatus(selectedReg.id, "declined")}
-                    className="py-2 px-3 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    Decline
-                  </button>
-                  {isRegistrationArchived(selectedReg as any) ? (
-                    <button
-                      type="button"
-                      disabled={isUpdating}
-                      onClick={() => handleRestore(selectedReg)}
-                      className="py-2 px-3 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
-                    >
-                      Restore
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setArchiveTarget(selectedReg)}
-                      className="py-2 px-3 rounded-lg text-xs font-semibold bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
-                    >
-                      Archive
-                    </button>
-                  )}
+              {(canApprove || canEdit || canReject) && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2.5">
+                  <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                    Update Status & Approval
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {canApprove && (
+                      <button
+                        type="button"
+                        disabled={isUpdating || selectedReg.status === "confirmed"}
+                        onClick={() => updateStatus(selectedReg.id, "confirmed")}
+                        className="py-2 px-3 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        Confirm & Send
+                      </button>
+                    )}
+                    {canEdit && (
+                      <button
+                        type="button"
+                        disabled={isUpdating || selectedReg.status === "correction_requested"}
+                        onClick={() => updateStatus(selectedReg.id, "correction_requested")}
+                        className="py-2 px-3 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        Correction
+                      </button>
+                    )}
+                    {canReject && (
+                      <button
+                        type="button"
+                        disabled={isUpdating || selectedReg.status === "declined"}
+                        onClick={() => updateStatus(selectedReg.id, "declined")}
+                        className="py-2 px-3 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        Decline
+                      </button>
+                    )}
+                    {canEdit && (
+                      isRegistrationArchived(selectedReg as any) ? (
+                        <button
+                          type="button"
+                          disabled={isUpdating}
+                          onClick={() => handleRestore(selectedReg)}
+                          className="py-2 px-3 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
+                        >
+                          Restore
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setArchiveTarget(selectedReg)}
+                          className="py-2 px-3 rounded-lg text-xs font-semibold bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                        >
+                          Archive
+                        </button>
+                      )
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Linked Visitor Pass, NAS Archive & Email Status */}
               <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-2.5 text-xs">
@@ -802,7 +890,7 @@ export default function AdminParticipationRegistrations() {
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600">Email Status:</span>
                   <span className="font-semibold text-slate-800 capitalize">
-                    {(selectedReg as any).email_status || (selectedReg.status === "confirmed" ? "sent" : "pending approval")}
+                    {(selectedReg as any).email_status || (selectedReg.status === "confirmed" ? "not sent" : "pending approval")}
                   </span>
                 </div>
 
@@ -856,15 +944,17 @@ export default function AdminParticipationRegistrations() {
                     <span>Download Ticket</span>
                   </button>
 
-                  <button
-                    type="button"
-                    disabled={isUpdating}
-                    onClick={() => handleResendEmail(selectedReg)}
-                    className="py-2 px-3 rounded-lg bg-white hover:bg-blue-50 border border-blue-300 text-blue-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Mail size={13} />
-                    <span>Resend Email</span>
-                  </button>
+                  {canResend && (
+                    <button
+                      type="button"
+                      disabled={isUpdating}
+                      onClick={() => handleResendEmail(selectedReg)}
+                      className="py-2 px-3 rounded-lg bg-white hover:bg-blue-50 border border-blue-300 text-blue-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Mail size={13} />
+                      <span>Resend Email</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -930,19 +1020,22 @@ export default function AdminParticipationRegistrations() {
                 <textarea
                   rows={3}
                   value={editNote}
+                  readOnly={!canEdit}
                   onChange={(e) => setEditNote(e.target.value)}
                   placeholder="e.g. Stall B-14 allocated, 230V AC socket verified..."
                   className="w-full p-2.5 text-xs rounded-xl border border-slate-200 bg-white text-slate-900 focus:outline-hidden focus:border-blue-500"
                 />
-                <button
-                  type="button"
-                  onClick={() => updateStatus(selectedReg.id, selectedReg.status)}
-                  disabled={isUpdating}
-                  className="w-full py-2 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Save size={13} />
-                  <span>Save Notes & Allocation</span>
-                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => updateStatus(selectedReg.id, selectedReg.status)}
+                    disabled={isUpdating}
+                    className="w-full py-2 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Save size={13} />
+                    <span>Save Notes & Allocation</span>
+                  </button>
+                )}
               </div>
             </div>
 

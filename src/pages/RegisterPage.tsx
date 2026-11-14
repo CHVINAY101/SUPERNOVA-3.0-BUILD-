@@ -376,6 +376,7 @@ export const RegisterPage: React.FC = () => {
         setLinkedVisitorTicket(refStr);
 
         // Generate digital ticket PDF and archive to NAS immediately
+        let ticketPdfAttachments: { filename: string; contentType: string; base64Content: string }[] = [];
         try {
           const ticketRes = await generateTicketPdf({
             ticketRef: refStr,
@@ -387,6 +388,14 @@ export const RegisterPage: React.FC = () => {
             registrationType: "visitor",
             daysAttending: visDays,
           });
+
+          ticketPdfAttachments = [
+            {
+              filename: ticketRes.fileName,
+              contentType: "application/pdf",
+              base64Content: ticketRes.pdfBase64,
+            },
+          ];
 
           await archiveTicketToNas(ticketRes, {
             ticketRef: refStr,
@@ -418,7 +427,9 @@ export const RegisterPage: React.FC = () => {
           // RLS query fallback
         }
 
-        // Trigger visitor confirmation email with full payload and error logging
+        // Trigger visitor confirmation email with PDF attachment and honest status reporting
+        let emailNoticeText =
+          "Your Visitor Pass is confirmed! Automatic email dispatch could not complete right now — please download your official PDF ticket pass below.";
         try {
           const emailRes = await sendRegistrationConfirmationEmail(
             visitorRecordId || refStr,
@@ -433,17 +444,21 @@ export const RegisterPage: React.FC = () => {
                 category: visCategory,
                 days: visDays,
               },
+              attachments: ticketPdfAttachments,
             }
           );
 
-          if (!emailRes.ok) {
-            console.error("Visitor confirmation email failure:", emailRes.error);
+          if (emailRes.ok && !emailRes.simulated) {
+            emailNoticeText =
+              "An official confirmation email with your printable PDF ticket pass has been dispatched to your email address.";
+          } else {
+            console.warn("Visitor confirmation email failure:", emailRes.error);
           }
         } catch (emailErr) {
-          console.error("Direct visitor email dispatch exception:", emailErr);
+          console.warn("Direct visitor email dispatch exception:", emailErr);
         }
 
-        setEmailNotice("An official confirmation email with your printable ticket pass has been dispatched to your email address.");
+        setEmailNotice(emailNoticeText);
         setSubmitSuccess(true);
       } else if (selectedType === "esports") {
         if (!selectedGameId) {

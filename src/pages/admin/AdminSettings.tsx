@@ -1,10 +1,20 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase, getSupabaseConnectionInfo } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { EventSetting } from "@/types/database";
 import { Settings, ExternalLink, CheckCircle, AlertCircle, Database, RefreshCw, Key, Copy, Check } from "lucide-react";
 
 export default function AdminSettings() {
+  const { hasPermission } = useAuth();
+  const canManageSettings = hasPermission("system_settings:manage");
+  const canEditSocial = hasPermission("social_links:edit");
+
+  const canEditRow = (setting: EventSetting) =>
+    setting.category === "social" || setting.key?.includes("social")
+      ? canManageSettings || canEditSocial
+      : canManageSettings;
+
   const [settings, setSettings] = useState<EventSetting[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -26,6 +36,11 @@ export default function AdminSettings() {
   }, [fetchSettings]);
 
   const updateSetting = async (id: string, field: keyof EventSetting, value: string | boolean) => {
+    const target = settings.find((s) => s.id === id);
+    if (target && !canEditRow(target)) {
+      setStatusMsg({ type: "error", text: "You do not have permission to edit this setting." });
+      return;
+    }
     setSaving(id);
     setStatusMsg(null);
     const update: Record<string, string | boolean | null> = {};
@@ -313,45 +328,51 @@ export default function AdminSettings() {
             <div className="card" style={{ padding: 0, overflow: "hidden" }}>
               {settings
                 .filter((s) => s.category === cat)
-                .map((setting, idx, arr) => (
-                  <div
-                    key={setting.id}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "minmax(180px, 1fr) 2fr auto",
-                      gap: 16,
-                      alignItems: "center",
-                      padding: "16px 20px",
-                      borderBottom: idx < arr.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none",
-                    }}
-                  >
-                    <div>
-                      <p style={{ fontSize: "0.92rem", fontWeight: 600, margin: 0, color: "var(--text-primary)" }}>{setting.label}</p>
-                      <p style={{ fontSize: "0.74rem", color: "var(--text-muted)", margin: "2px 0 0" }}>{setting.key}</p>
-                    </div>
-                    <input
-                      className="input"
-                      value={setting.value ?? ""}
-                      placeholder="To be announced"
-                      onChange={(e) => {
-                        const updated = settings.map((s) => (s.id === setting.id ? { ...s, value: e.target.value } : s));
-                        setSettings(updated);
+                .map((setting, idx, arr) => {
+                  const rowEditable = canEditRow(setting);
+                  return (
+                    <div
+                      key={setting.id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(180px, 1fr) 2fr auto",
+                        gap: 16,
+                        alignItems: "center",
+                        padding: "16px 20px",
+                        borderBottom: idx < arr.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none",
                       }}
-                      onBlur={(e) => updateSetting(setting.id, "value", e.target.value)}
-                      style={{ padding: "8px 12px", fontSize: "0.9rem" }}
-                    />
-                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                    >
+                      <div>
+                        <p style={{ fontSize: "0.92rem", fontWeight: 600, margin: 0, color: "var(--text-primary)" }}>{setting.label}</p>
+                        <p style={{ fontSize: "0.74rem", color: "var(--text-muted)", margin: "2px 0 0" }}>{setting.key}</p>
+                      </div>
                       <input
-                        type="checkbox"
-                        checked={setting.is_published}
-                        onChange={(e) => updateSetting(setting.id, "is_published", e.target.checked)}
+                        className="input"
+                        value={setting.value ?? ""}
+                        placeholder="To be announced"
+                        disabled={!rowEditable}
+                        onChange={(e) => {
+                          if (!rowEditable) return;
+                          const updated = settings.map((s) => (s.id === setting.id ? { ...s, value: e.target.value } : s));
+                          setSettings(updated);
+                        }}
+                        onBlur={(e) => rowEditable && updateSetting(setting.id, "value", e.target.value)}
+                        style={{ padding: "8px 12px", fontSize: "0.9rem", opacity: rowEditable ? 1 : 0.7 }}
                       />
-                      <span style={{ fontSize: "0.82rem", color: setting.is_published ? "#10b981" : "var(--text-muted)", fontWeight: 600 }}>
-                        {saving === setting.id ? "Saving..." : setting.is_published ? "Live" : "Draft"}
-                      </span>
-                    </label>
-                  </div>
-                ))}
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: rowEditable ? "pointer" : "not-allowed", opacity: rowEditable ? 1 : 0.6 }}>
+                        <input
+                          type="checkbox"
+                          checked={setting.is_published}
+                          disabled={!rowEditable}
+                          onChange={(e) => rowEditable && updateSetting(setting.id, "is_published", e.target.checked)}
+                        />
+                        <span style={{ fontSize: "0.82rem", color: setting.is_published ? "#10b981" : "var(--text-muted)", fontWeight: 600 }}>
+                          {saving === setting.id ? "Saving..." : setting.is_published ? "Live" : "Draft"}
+                        </span>
+                      </label>
+                    </div>
+                  );
+                })}
             </div>
           </div>
         ))

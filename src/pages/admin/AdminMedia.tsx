@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { MediaItem } from "@/types/database";
 import { ImagePicker } from "@/components/admin/ImagePicker";
 import {
@@ -17,6 +18,10 @@ import {
 } from "lucide-react";
 
 export default function AdminMedia() {
+  const { hasPermission } = useAuth();
+  const canUpload = hasPermission("gallery:upload");
+  const canDelete = hasPermission("gallery:delete");
+
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -65,6 +70,10 @@ export default function AdminMedia() {
 
   const handleAddMedia = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canUpload) {
+      setStatusMsg({ type: "error", text: "You do not have permission to upload media." });
+      return;
+    }
     if (!newUrl) {
       setStatusMsg({ type: "error", text: "Please upload or choose an image first." });
       return;
@@ -97,7 +106,7 @@ export default function AdminMedia() {
   };
 
   const confirmDelete = async () => {
-    if (!itemToDelete) return;
+    if (!itemToDelete || !canDelete) return;
     setIsDeleting(true);
     setStatusMsg(null);
 
@@ -142,17 +151,19 @@ export default function AdminMedia() {
             <span>View on website</span> <ExternalLink size={13} />
           </Link>
 
-          <button
-            onClick={() => {
-              setIsAdding(!isAdding);
-              setStatusMsg(null);
-            }}
-            className="btn btn-primary"
-            style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.88rem", fontWeight: 700 }}
-          >
-            {isAdding ? <X size={16} /> : <Plus size={16} />}
-            {isAdding ? "Close Form" : "Upload New Photo"}
-          </button>
+          {canUpload && (
+            <button
+              onClick={() => {
+                setIsAdding(!isAdding);
+                setStatusMsg(null);
+              }}
+              className="btn btn-primary"
+              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.88rem", fontWeight: 700 }}
+            >
+              {isAdding ? <X size={16} /> : <Plus size={16} />}
+              {isAdding ? "Close Form" : "Upload New Photo"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -379,13 +390,15 @@ export default function AdminMedia() {
           <p style={{ color: "var(--text-muted)", fontSize: "0.88rem", margin: 0, maxWidth: 440, marginInline: "auto" }}>
             Click "Upload New Photo" to add festival banners, logos, or posters. Images are automatically compressed and saved to the cloud storage bucket.
           </p>
-          <button
-            onClick={() => setIsAdding(true)}
-            className="btn btn-primary"
-            style={{ marginTop: 20 }}
-          >
-            <Plus size={16} /> Upload First Photo
-          </button>
+          {canUpload && (
+            <button
+              onClick={() => setIsAdding(true)}
+              className="btn btn-primary"
+              style={{ marginTop: 20 }}
+            >
+              <Plus size={16} /> Upload First Photo
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 20 }}>
@@ -470,20 +483,22 @@ export default function AdminMedia() {
                     )}
                   </button>
 
-                  <button
-                    onClick={() => setItemToDelete(item)}
-                    className="btn btn-ghost"
-                    style={{
-                      fontSize: "0.8rem",
-                      padding: "4px 8px",
-                      color: "#ef4444",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 5,
-                    }}
-                  >
-                    <Trash2 size={13} /> Delete
-                  </button>
+                  {canDelete && (
+                    <button
+                      onClick={() => setItemToDelete(item)}
+                      className="btn btn-ghost"
+                      style={{
+                        fontSize: "0.8rem",
+                        padding: "4px 8px",
+                        color: "#ef4444",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                      }}
+                    >
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

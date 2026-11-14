@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { InstitutionItem } from "@/types/database";
 import { GraduationCap, ExternalLink, Plus, Edit2, Check, X, Trash2, CheckCircle, AlertCircle } from "lucide-react";
 
@@ -40,6 +41,11 @@ const INITIAL_INSTITUTIONS: InstitutionItem[] = [
 ];
 
 export default function AdminInstitutions() {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission("event_info:create");
+  const canEdit = hasPermission("event_info:edit");
+  const canPublish = hasPermission("event_info:publish");
+
   const [institutions, setInstitutions] = useState<InstitutionItem[]>(INITIAL_INSTITUTIONS);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<InstitutionItem>>({});
@@ -66,12 +72,14 @@ export default function AdminInstitutions() {
   }, [fetchInstitutions]);
 
   const handleEdit = (inst: InstitutionItem) => {
+    if (!canEdit) return;
     setEditingId(inst.id);
     setDraft({ ...inst });
     setStatusMsg(null);
   };
 
   const handleSave = async (id: string) => {
+    if (!canEdit) return;
     const updated = institutions.map((item) => (item.id === id ? { ...item, ...draft } : item));
     setInstitutions(updated as InstitutionItem[]);
     setEditingId(null);
@@ -80,6 +88,7 @@ export default function AdminInstitutions() {
   };
 
   const handleTogglePublish = async (id: string, current: boolean) => {
+    if (!canPublish) return;
     const updated = institutions.map((item) => (item.id === id ? { ...item, is_published: !current } : item));
     setInstitutions(updated);
     await supabase.from("institutions").update({ is_published: !current }).eq("id", id);
@@ -90,6 +99,7 @@ export default function AdminInstitutions() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!canEdit) return;
     if (!confirm("Remove this institution?")) return;
     setInstitutions(institutions.filter((item) => item.id !== id));
     await supabase.from("institutions").delete().eq("id", id);
@@ -97,13 +107,14 @@ export default function AdminInstitutions() {
   };
 
   const handleAddNew = async () => {
+    if (!canCreate) return;
     if (!draft.name?.trim()) return;
     const newItem: InstitutionItem = {
       id: `inst-${Date.now()}`,
       name: draft.name.trim(),
       role: draft.role?.trim() || "Participating Institution",
       description: draft.description?.trim() || "",
-      is_published: true,
+      is_published: canPublish,
       sort_order: institutions.length + 1,
     };
     const updated = [...institutions, newItem];
@@ -143,7 +154,7 @@ export default function AdminInstitutions() {
             <span>View on website</span> <ExternalLink size={13} />
           </Link>
 
-          {!showAddForm && (
+          {!showAddForm && canCreate && (
             <button
               onClick={() => { setShowAddForm(true); setDraft({}); setStatusMsg(null); }}
               className="btn btn-primary"
@@ -226,12 +237,14 @@ export default function AdminInstitutions() {
           <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", margin: "0 0 12px" }}>
             No schools or institutions registered yet.
           </p>
-          <button
-            className="btn btn-primary"
-            onClick={() => { setShowAddForm(true); setDraft({}); }}
-          >
-            Add First School
-          </button>
+          {canCreate && (
+            <button
+              className="btn btn-primary"
+              onClick={() => { setShowAddForm(true); setDraft({}); }}
+            >
+              Add First School
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: "grid", gap: 16 }}>
@@ -289,6 +302,7 @@ export default function AdminInstitutions() {
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                       <button
+                        disabled={!canPublish}
                         onClick={() => handleTogglePublish(inst.id, inst.is_published)}
                         style={{
                           padding: "5px 12px",
@@ -296,7 +310,8 @@ export default function AdminInstitutions() {
                           fontSize: "0.75rem",
                           fontWeight: 700,
                           border: "none",
-                          cursor: "pointer",
+                          cursor: canPublish ? "pointer" : "not-allowed",
+                          opacity: canPublish ? 1 : 0.65,
                           background: inst.is_published ? "rgba(16, 185, 129, 0.15)" : "rgba(255,255,255,0.08)",
                           color: inst.is_published ? "#10b981" : "var(--text-muted)",
                         }}
@@ -304,22 +319,26 @@ export default function AdminInstitutions() {
                         {inst.is_published ? "Published" : "Draft"}
                       </button>
 
-                      <button
-                        onClick={() => handleEdit(inst)}
-                        className="btn btn-ghost"
-                        style={{ padding: "6px 10px", fontSize: "0.8rem" }}
-                      >
-                        <Edit2 size={14} /> Edit
-                      </button>
+                      {canEdit && (
+                        <button
+                          onClick={() => handleEdit(inst)}
+                          className="btn btn-ghost"
+                          style={{ padding: "6px 10px", fontSize: "0.8rem" }}
+                        >
+                          <Edit2 size={14} /> Edit
+                        </button>
+                      )}
 
-                      <button
-                        onClick={() => handleDelete(inst.id)}
-                        className="btn btn-ghost"
-                        style={{ padding: "6px 10px", fontSize: "0.8rem", color: "#ef4444" }}
-                        title="Delete institution"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      {canEdit && (
+                        <button
+                          onClick={() => handleDelete(inst.id)}
+                          className="btn btn-ghost"
+                          style={{ padding: "6px 10px", fontSize: "0.8rem", color: "#ef4444" }}
+                          title="Delete institution"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}

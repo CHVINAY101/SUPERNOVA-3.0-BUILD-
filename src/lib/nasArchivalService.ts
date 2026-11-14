@@ -228,8 +228,8 @@ export async function archiveTicketToNas(
       await supabase.from("audit_logs").insert({
         actor_id: user.user.id,
         action: online ? "nas_archive_completed" : "nas_archive_queued",
-        table_name: "nas_archives",
-        record_id: record.id,
+        entity_type: "nas_archives",
+        entity_id: record.id,
         metadata: {
           ticket_ref: ticket.ticketRef,
           nas_path: nasRelativePath,

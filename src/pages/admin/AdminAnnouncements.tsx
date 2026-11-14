@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { Announcement } from "@/types/database";
 import { Bell, ExternalLink, CheckCircle, AlertCircle, Plus, Pin } from "lucide-react";
 
@@ -17,6 +18,12 @@ const emptyAnnouncement: Announcement = {
 };
 
 export default function AdminAnnouncements() {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission("announcements:create");
+  const canEdit = hasPermission("announcements:edit");
+  const canPublish = hasPermission("announcements:publish");
+  const canDelete = hasPermission("announcements:delete");
+
   const [items, setItems] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Announcement | null>(null);
@@ -41,14 +48,19 @@ export default function AdminAnnouncements() {
 
   const handleSave = async () => {
     if (!editing || !editing.title.trim()) return;
+    if (editing.id ? !canEdit : !canCreate) {
+      setStatusMsg({ type: "error", text: "You do not have permission to save announcements." });
+      return;
+    }
     setSaving(true);
     setStatusMsg(null);
+    const effectivePublished = canPublish ? editing.is_published : false;
     const payload = {
       title: editing.title.trim(),
       body: editing.body,
       is_pinned: editing.is_pinned,
-      is_published: editing.is_published,
-      published_at: editing.is_published && !editing.published_at ? new Date().toISOString() : editing.published_at,
+      is_published: effectivePublished,
+      published_at: effectivePublished && !editing.published_at ? new Date().toISOString() : editing.published_at,
     };
     let result;
     if (editing.id) {
@@ -67,6 +79,7 @@ export default function AdminAnnouncements() {
   };
 
   const togglePublish = async (item: Announcement) => {
+    if (!canPublish) return;
     const nextPublished = !item.is_published;
     const update = {
       is_published: nextPublished,
@@ -81,6 +94,7 @@ export default function AdminAnnouncements() {
   };
 
   const togglePin = async (item: Announcement) => {
+    if (!canEdit) return;
     await supabase.from("announcements").update({ is_pinned: !item.is_pinned }).eq("id", item.id);
     setStatusMsg({
       type: "success",
@@ -90,6 +104,7 @@ export default function AdminAnnouncements() {
   };
 
   const deleteItem = async (id: string) => {
+    if (!canDelete) return;
     if (!confirm("Are you sure you want to delete this announcement?")) return;
     await supabase.from("announcements").delete().eq("id", id);
     setStatusMsg({ type: "success", text: "Announcement deleted successfully." });
@@ -125,11 +140,11 @@ export default function AdminAnnouncements() {
             <span>View on website</span> <ExternalLink size={13} />
           </Link>
 
-          {!editing && (
+          {!editing && canCreate && (
             <button
               className="btn btn-primary"
               onClick={() => {
-                setEditing({ ...emptyAnnouncement });
+                setEditing({ ...emptyAnnouncement, is_published: canPublish });
                 setStatusMsg(null);
               }}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.88rem", fontWeight: 700 }}
@@ -196,10 +211,11 @@ export default function AdminAnnouncements() {
               />
               <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>Pin to top of page</span>
             </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: canPublish ? "pointer" : "not-allowed", opacity: canPublish ? 1 : 0.6 }}>
               <input
                 type="checkbox"
-                checked={editing.is_published}
+                checked={canPublish ? editing.is_published : false}
+                disabled={!canPublish}
                 onChange={(e) => setEditing({ ...editing, is_published: e.target.checked })}
               />
               <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>Publish live immediately</span>
@@ -226,12 +242,14 @@ export default function AdminAnnouncements() {
           <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", margin: "0 0 12px" }}>
             No announcements posted yet. Click 'New Announcement' to publish your first festival update.
           </p>
-          <button
-            className="btn btn-primary"
-            onClick={() => setEditing({ ...emptyAnnouncement })}
-          >
-            Create First Announcement
-          </button>
+          {canCreate && (
+            <button
+              className="btn btn-primary"
+              onClick={() => setEditing({ ...emptyAnnouncement, is_published: canPublish })}
+            >
+              Create First Announcement
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: "grid", gap: 16 }}>
@@ -255,20 +273,30 @@ export default function AdminAnnouncements() {
               <p style={{ fontSize: "0.88rem", color: "var(--text-muted)", lineHeight: 1.5, margin: "0 0 16px" }}>
                 {item.body}
               </p>
-              <div style={{ display: "flex", gap: 10, borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12 }}>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem" }} onClick={() => setEditing(item)}>
-                  Edit
-                </button>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "var(--cyan-400)" }} onClick={() => togglePublish(item)}>
-                  {item.is_published ? "Unpublish" : "Publish"}
-                </button>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem" }} onClick={() => togglePin(item)}>
-                  {item.is_pinned ? "Unpin" : "Pin to Top"}
-                </button>
-                <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "#ef4444" }} onClick={() => deleteItem(item.id)}>
-                  Delete
-                </button>
-              </div>
+              {(canEdit || canPublish || canDelete) && (
+                <div style={{ display: "flex", gap: 10, borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12 }}>
+                  {canEdit && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem" }} onClick={() => setEditing(item)}>
+                      Edit
+                    </button>
+                  )}
+                  {canPublish && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "var(--cyan-400)" }} onClick={() => togglePublish(item)}>
+                      {item.is_published ? "Unpublish" : "Publish"}
+                    </button>
+                  )}
+                  {canEdit && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem" }} onClick={() => togglePin(item)}>
+                      {item.is_pinned ? "Unpin" : "Pin to Top"}
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button className="btn btn-ghost" style={{ fontSize: "0.82rem", color: "#ef4444" }} onClick={() => deleteItem(item.id)}>
+                      Delete
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

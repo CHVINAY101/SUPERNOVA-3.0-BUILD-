@@ -10,6 +10,7 @@ import {
   markRegistrationArchivedLocal,
   sendRegistrationConfirmationEmail,
 } from "@/lib/registrationOperations";
+import { useAuth } from "@/lib/auth";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
@@ -78,6 +79,13 @@ const REGISTRATION_STATUSES = [
 ];
 
 export default function AdminEsportsRegistrations() {
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission("esports:edit");
+  const canApprove = hasPermission("esports:approve");
+  const canReject = hasPermission("esports:reject");
+  const canExport = hasPermission("esports:export");
+  const canResend = hasPermission("email_centre:resend");
+
   const [registrations, setRegistrations] = useState<EsportsRegistrationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -164,7 +172,11 @@ export default function AdminEsportsRegistrations() {
       if (error) throw error;
 
       let emailNotice = "";
+      let nextEmailStatus: string | undefined;
+      let emailOk = true;
       if (newStatus === "confirmed") {
+        let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
+
         // 1. Generate and Archive Team Confirmation Document
         try {
           const teamDoc = await generateTicketPdf({
@@ -178,18 +190,29 @@ export default function AdminEsportsRegistrations() {
             teamName: item.team_name,
             projectTitle: item.gameTitle,
           });
+          pdfAttachments = [
+            {
+              filename: teamDoc.fileName,
+              base64Content: teamDoc.pdfBase64,
+              contentType: "application/pdf",
+            },
+          ];
 
-          await archiveTicketToNas(teamDoc, {
-            ticketRef: item.registration_ref,
-            recipientName: item.captain_name,
-            category: "Esports Squad",
-            email: item.email,
-            phone: item.phone,
-            institution: item.institution || undefined,
-            registrationType: "esports_team",
-            teamName: item.team_name,
-            projectTitle: item.gameTitle,
-          }, item.id);
+          await archiveTicketToNas(
+            teamDoc,
+            {
+              ticketRef: item.registration_ref,
+              recipientName: item.captain_name,
+              category: "Esports Squad",
+              email: item.email,
+              phone: item.phone,
+              institution: item.institution || undefined,
+              registrationType: "esports_team",
+              teamName: item.team_name,
+              projectTitle: item.gameTitle,
+            },
+            item.id
+          );
 
           // 2. Generate and Archive Each Player's Individual Ticket
           const squadPlayers = item.players || [];
@@ -210,29 +233,41 @@ export default function AdminEsportsRegistrations() {
               playerSlot: pIdx + 1,
             });
 
-            await archiveTicketToNas(playerDoc, {
-              ticketRef: playerTicketRef,
-              recipientName: player.player_name,
-              category: "Esports Player",
-              email: item.email,
-              phone: item.phone,
-              institution: item.institution || undefined,
-              registrationType: "esports_player",
-              applicationRef: item.registration_ref,
-              teamName: item.team_name,
-              gamerTag: player.gamer_tag || undefined,
-              playerSlot: pIdx + 1,
-            }, item.id);
+            await archiveTicketToNas(
+              playerDoc,
+              {
+                ticketRef: playerTicketRef,
+                recipientName: player.player_name,
+                category: "Esports Player",
+                email: item.email,
+                phone: item.phone,
+                institution: item.institution || undefined,
+                registrationType: "esports_player",
+                applicationRef: item.registration_ref,
+                teamName: item.team_name,
+                gamerTag: player.gamer_tag || undefined,
+                playerSlot: pIdx + 1,
+              },
+              item.id
+            );
           }
         } catch (nasErr) {
           console.warn("Esports ticket generation / NAS archival notice:", nasErr);
         }
 
-        const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", false);
-        if (emailRes.ok) {
+        const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", false, {
+          recipientEmail: item.email,
+          recipientName: item.captain_name,
+          registrationRef: item.registration_ref,
+          institution: item.institution || undefined,
+          attachments: pdfAttachments,
+        });
+        emailOk = Boolean(emailRes.ok && !emailRes.simulated);
+        nextEmailStatus = emailOk ? "sent" : "failed";
+        if (emailOk) {
           emailNotice = " · Squad confirmation email dispatched to captain & tickets archived to NAS.";
         } else {
-          emailNotice = ` · Email notice: ${emailRes.error}`;
+          emailNotice = ` · Email notice failed: ${emailRes.error}`;
         }
       }
 
@@ -242,7 +277,7 @@ export default function AdminEsportsRegistrations() {
             ? {
                 ...r,
                 status: newStatus,
-                ...(newStatus === "confirmed" ? { email_status: "sent" } : {}),
+                ...(nextEmailStatus ? { email_status: nextEmailStatus } : {}),
               }
             : r
         )
@@ -251,11 +286,11 @@ export default function AdminEsportsRegistrations() {
         setSelectedReg({
           ...selectedReg,
           status: newStatus,
-          ...(newStatus === "confirmed" ? { email_status: "sent" } : {}),
+          ...(nextEmailStatus ? { email_status: nextEmailStatus } : {}),
         });
       }
       setStatusMessage({
-        type: "success",
+        type: emailOk ? "success" : "error",
         text: `Team "${item.team_name}" (${item.registration_ref}) status changed to ${newStatus}${emailNotice}`,
       });
       setTimeout(() => setStatusMessage(null), 5000);
@@ -270,11 +305,42 @@ export default function AdminEsportsRegistrations() {
   };
 
   const handleResendEmail = async (item: ProcessedEsportsRegistration) => {
+    if (!canResend) return;
     setUpdatingId(item.id);
     setStatusMessage(null);
     try {
-      const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", true);
-      if (emailRes.ok) {
+      let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
+      try {
+        const teamDoc = await generateTicketPdf({
+          ticketRef: item.registration_ref,
+          recipientName: item.captain_name,
+          category: "Esports Squad",
+          email: item.email,
+          phone: item.phone,
+          institution: item.institution || undefined,
+          registrationType: "esports_team",
+          teamName: item.team_name,
+          projectTitle: item.gameTitle,
+        });
+        pdfAttachments = [
+          {
+            filename: teamDoc.fileName,
+            base64Content: teamDoc.pdfBase64,
+            contentType: "application/pdf",
+          },
+        ];
+      } catch {
+        // continue
+      }
+
+      const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", true, {
+        recipientEmail: item.email,
+        recipientName: item.captain_name,
+        registrationRef: item.registration_ref,
+        institution: item.institution || undefined,
+        attachments: pdfAttachments,
+      });
+      if (emailRes.ok && !emailRes.simulated) {
         setStatusMessage({
           type: "success",
           text: `Squad confirmation email re-sent successfully to captain (${item.email}).`,
@@ -286,6 +352,12 @@ export default function AdminEsportsRegistrations() {
           setSelectedReg({ ...selectedReg, email_status: "sent" });
         }
       } else {
+        setRegistrations((prev) =>
+          prev.map((r) => (r.id === item.id ? { ...r, email_status: "failed" } : r))
+        );
+        if (selectedReg && selectedReg.id === item.id) {
+          setSelectedReg({ ...selectedReg, email_status: "failed" });
+        }
         throw new Error(emailRes.error || "Email delivery failed");
       }
       setTimeout(() => setStatusMessage(null), 5000);
@@ -590,14 +662,16 @@ export default function AdminEsportsRegistrations() {
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
             <span>Sync</span>
           </button>
-          <button
-            type="button"
-            onClick={handleExportCSV}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
-          >
-            <Download size={13} />
-            <span>Export CSV</span>
-          </button>
+          {canExport && (
+            <button
+              type="button"
+              onClick={handleExportCSV}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors cursor-pointer"
+            >
+              <Download size={13} />
+              <span>Export CSV</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -860,7 +934,7 @@ export default function AdminEsportsRegistrations() {
                               }`}
                             >
                               <Mail size={10} />
-                              <span>{(item as any).email_status || "sent"}</span>
+                              <span>{(item as any).email_status || "not_sent"}</span>
                             </span>
                           </div>
                         )}
@@ -880,7 +954,7 @@ export default function AdminEsportsRegistrations() {
                           <span>View</span>
                         </button>
 
-                        {item.status === "confirmed" && (
+                        {item.status === "confirmed" && canResend && (
                           <button
                             type="button"
                             onClick={() => handleResendEmail(item)}
@@ -892,26 +966,28 @@ export default function AdminEsportsRegistrations() {
                           </button>
                         )}
 
-                        {item.isArchived ? (
-                          <button
-                            type="button"
-                            onClick={() => handleRestore(item)}
-                            disabled={updatingId === item.id}
-                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
-                            title="Restore to active submissions"
-                          >
-                            <RotateCcw size={12} />
-                            <span>Restore</span>
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setArchiveTarget(item)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                            title="Archive / Delete this registration"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                        {canEdit && (
+                          item.isArchived ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRestore(item)}
+                              disabled={updatingId === item.id}
+                              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors cursor-pointer"
+                              title="Restore to active submissions"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Restore</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setArchiveTarget(item)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Archive / Delete this registration"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )
                         )}
                       </div>
                     </td>
@@ -1135,7 +1211,7 @@ export default function AdminEsportsRegistrations() {
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600">Email Status:</span>
                   <span className="font-semibold text-slate-800 capitalize">
-                    {(selectedReg as any).email_status || (selectedReg.status === "confirmed" ? "sent" : "pending approval")}
+                    {(selectedReg as any).email_status || (selectedReg.status === "confirmed" ? "not sent" : "pending approval")}
                   </span>
                 </div>
 
@@ -1187,76 +1263,88 @@ export default function AdminEsportsRegistrations() {
                     <span>Download Team Doc</span>
                   </button>
 
-                  <button
-                    type="button"
-                    disabled={updatingId === selectedReg.id}
-                    onClick={() => handleResendEmail(selectedReg)}
-                    className="py-2 px-3 rounded-lg bg-white hover:bg-purple-50 border border-purple-300 text-purple-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Mail size={13} />
-                    <span>Resend Captain Email</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* SECTION D: Administrative Verification & Status Actions */}
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-3">
-                <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-700 m-0">
-                  Verification & Administrative Actions
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <button
-                    type="button"
-                    disabled={updatingId === selectedReg.id || selectedReg.status === "confirmed"}
-                    onClick={() => changeStatus(selectedReg, "confirmed")}
-                    className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    <Check size={13} />
-                    <span>Confirm</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={updatingId === selectedReg.id || selectedReg.status === "correction_requested"}
-                    onClick={() => changeStatus(selectedReg, "correction_requested")}
-                    className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    <Clock size={13} />
-                    <span>Correction</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={updatingId === selectedReg.id || selectedReg.status === "declined"}
-                    onClick={() => changeStatus(selectedReg, "declined")}
-                    className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    <Ban size={13} />
-                    <span>Decline</span>
-                  </button>
-
-                  {selectedReg.isArchived ? (
+                  {canResend && (
                     <button
                       type="button"
                       disabled={updatingId === selectedReg.id}
-                      onClick={() => handleRestore(selectedReg)}
-                      className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+                      onClick={() => handleResendEmail(selectedReg)}
+                      className="py-2 px-3 rounded-lg bg-white hover:bg-purple-50 border border-purple-300 text-purple-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                     >
-                      <RotateCcw size={13} />
-                      <span>Restore</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setArchiveTarget(selectedReg)}
-                      className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-white border border-rose-300 hover:bg-rose-50 text-rose-700 text-xs font-semibold transition-colors cursor-pointer"
-                    >
-                      <Trash2 size={13} />
-                      <span>Archive</span>
+                      <Mail size={13} />
+                      <span>Resend Captain Email</span>
                     </button>
                   )}
                 </div>
               </div>
+
+              {/* SECTION D: Administrative Verification & Status Actions */}
+              {(canApprove || canEdit || canReject) && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-3">
+                  <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-700 m-0">
+                    Verification & Administrative Actions
+                  </h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {canApprove && (
+                      <button
+                        type="button"
+                        disabled={updatingId === selectedReg.id || selectedReg.status === "confirmed"}
+                        onClick={() => changeStatus(selectedReg, "confirmed")}
+                        className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        <Check size={13} />
+                        <span>Confirm</span>
+                      </button>
+                    )}
+
+                    {canEdit && (
+                      <button
+                        type="button"
+                        disabled={updatingId === selectedReg.id || selectedReg.status === "correction_requested"}
+                        onClick={() => changeStatus(selectedReg, "correction_requested")}
+                        className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        <Clock size={13} />
+                        <span>Correction</span>
+                      </button>
+                    )}
+
+                    {canReject && (
+                      <button
+                        type="button"
+                        disabled={updatingId === selectedReg.id || selectedReg.status === "declined"}
+                        onClick={() => changeStatus(selectedReg, "declined")}
+                        className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        <Ban size={13} />
+                        <span>Decline</span>
+                      </button>
+                    )}
+
+                    {canEdit && (
+                      selectedReg.isArchived ? (
+                        <button
+                          type="button"
+                          disabled={updatingId === selectedReg.id}
+                          onClick={() => handleRestore(selectedReg)}
+                          className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+                        >
+                          <RotateCcw size={13} />
+                          <span>Restore</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setArchiveTarget(selectedReg)}
+                          className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-white border border-rose-300 hover:bg-rose-50 text-rose-700 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          <Trash2 size={13} />
+                          <span>Archive</span>
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Drawer Footer */}

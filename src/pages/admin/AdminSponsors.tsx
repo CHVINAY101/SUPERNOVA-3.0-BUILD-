@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { Sponsor } from "@/types/database";
 import { ImagePicker } from "@/components/admin/ImagePicker";
 import { Award, ExternalLink, CheckCircle, AlertCircle, Plus } from "lucide-react";
@@ -19,6 +20,11 @@ const emptySponsor: Sponsor = {
 };
 
 export default function AdminSponsors() {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission("event_info:create");
+  const canEdit = hasPermission("event_info:edit");
+  const canPublish = hasPermission("event_info:publish");
+
   const [items, setItems] = useState<Sponsor[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Sponsor | null>(null);
@@ -43,6 +49,10 @@ export default function AdminSponsors() {
 
   const handleSave = async () => {
     if (!editing || !editing.name.trim()) return;
+    if (editing.id ? !canEdit : !canCreate) {
+      setStatusMsg({ type: "error", text: "You do not have permission to save sponsors." });
+      return;
+    }
     setSaving(true);
     setStatusMsg(null);
     const payload = {
@@ -51,7 +61,7 @@ export default function AdminSponsors() {
       description: editing.description || null,
       logo_url: editing.logo_url || null,
       link_url: editing.link_url || null,
-      is_published: editing.is_published,
+      is_published: canPublish ? editing.is_published : false,
       sort_order: editing.sort_order,
     };
     let result;
@@ -71,6 +81,7 @@ export default function AdminSponsors() {
   };
 
   const togglePublish = async (item: Sponsor) => {
+    if (!canPublish) return;
     const nextPublished = !item.is_published;
     await supabase.from("sponsors").update({ is_published: nextPublished }).eq("id", item.id);
     setStatusMsg({
@@ -81,6 +92,7 @@ export default function AdminSponsors() {
   };
 
   const deleteItem = async (id: string) => {
+    if (!canEdit) return;
     if (!confirm("Are you sure you want to remove this sponsor?")) return;
     await supabase.from("sponsors").delete().eq("id", id);
     setStatusMsg({ type: "success", text: "Sponsor removed." });
@@ -116,11 +128,11 @@ export default function AdminSponsors() {
             <span>View on website</span> <ExternalLink size={13} />
           </Link>
 
-          {!editing && (
+          {!editing && canCreate && (
             <button
               className="btn btn-primary"
               onClick={() => {
-                setEditing({ ...emptySponsor, sort_order: items.length + 1 });
+                setEditing({ ...emptySponsor, sort_order: items.length + 1, is_published: canPublish });
                 setStatusMsg(null);
               }}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.88rem", fontWeight: 700 }}
@@ -221,10 +233,11 @@ export default function AdminSponsors() {
           </div>
 
           <div style={{ marginBottom: 20 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: canPublish ? "pointer" : "not-allowed", opacity: canPublish ? 1 : 0.6 }}>
               <input
                 type="checkbox"
-                checked={editing.is_published}
+                checked={canPublish ? editing.is_published : false}
+                disabled={!canPublish}
                 onChange={(e) => setEditing({ ...editing, is_published: e.target.checked })}
               />
               <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>Show on website</span>
@@ -252,12 +265,14 @@ export default function AdminSponsors() {
           <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", margin: "0 0 12px" }}>
             No sponsors added yet. Click 'Add Sponsor' to display partners on the website.
           </p>
-          <button
-            className="btn btn-primary"
-            onClick={() => setEditing({ ...emptySponsor })}
-          >
-            Add First Sponsor
-          </button>
+          {canCreate && (
+            <button
+              className="btn btn-primary"
+              onClick={() => setEditing({ ...emptySponsor, is_published: canPublish })}
+            >
+              Add First Sponsor
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 18 }}>
@@ -301,15 +316,21 @@ export default function AdminSponsors() {
                     {item.is_published ? "Published" : "Draft"}
                   </span>
                   <div style={{ display: "flex", gap: 8 }}>
-                    <button className="btn btn-ghost" style={{ fontSize: "0.8rem", padding: "4px 8px" }} onClick={() => setEditing(item)}>
-                      Edit
-                    </button>
-                    <button className="btn btn-ghost" style={{ fontSize: "0.8rem", padding: "4px 8px", color: "var(--cyan-400)" }} onClick={() => togglePublish(item)}>
-                      {item.is_published ? "Hide" : "Show"}
-                    </button>
-                    <button className="btn btn-ghost" style={{ fontSize: "0.8rem", padding: "4px 8px", color: "#ef4444" }} onClick={() => deleteItem(item.id)}>
-                      Delete
-                    </button>
+                    {canEdit && (
+                      <button className="btn btn-ghost" style={{ fontSize: "0.8rem", padding: "4px 8px" }} onClick={() => setEditing(item)}>
+                        Edit
+                      </button>
+                    )}
+                    {canPublish && (
+                      <button className="btn btn-ghost" style={{ fontSize: "0.8rem", padding: "4px 8px", color: "var(--cyan-400)" }} onClick={() => togglePublish(item)}>
+                        {item.is_published ? "Hide" : "Show"}
+                      </button>
+                    )}
+                    {canEdit && (
+                      <button className="btn btn-ghost" style={{ fontSize: "0.8rem", padding: "4px 8px", color: "#ef4444" }} onClick={() => deleteItem(item.id)}>
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

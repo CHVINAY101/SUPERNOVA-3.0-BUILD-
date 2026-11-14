@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import type { FormOption } from "@/types/database";
 import { Plus, ArrowUp, ArrowDown, Trash2, Edit2, CheckCircle2, AlertCircle, Save, X, RefreshCw } from "lucide-react";
 
 export default function AdminFormOptions() {
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission("system_settings:manage");
+
   const [options, setOptions] = useState<FormOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -40,6 +44,7 @@ export default function AdminFormOptions() {
   }, []);
 
   const handleToggleActive = async (opt: FormOption) => {
+    if (!canManage) return;
     const nextState = !opt.is_active;
     try {
       const { error } = await supabase
@@ -57,6 +62,7 @@ export default function AdminFormOptions() {
   };
 
   const handleMove = async (opt: FormOption, direction: "up" | "down") => {
+    if (!canManage) return;
     const subset = options.filter((o) => o.form_type === opt.form_type && o.field_key === opt.field_key);
     const index = subset.findIndex((o) => o.id === opt.id);
     if ((direction === "up" && index === 0) || (direction === "down" && index === subset.length - 1)) {
@@ -76,6 +82,7 @@ export default function AdminFormOptions() {
   };
 
   const handleDelete = async (id: string, label: string) => {
+    if (!canManage) return;
     if (!confirm(`Are you sure you want to delete the option "${label}"?`)) return;
     try {
       const { error } = await supabase.from("form_options").delete().eq("id", id);
@@ -92,6 +99,10 @@ export default function AdminFormOptions() {
 
   const handleSaveOption = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManage) {
+      setStatusMsg({ type: "error", text: "You do not have permission to edit form options." });
+      return;
+    }
     if (!editingOption || !editingOption.label || !editingOption.value) {
       setStatusMsg({ type: "error", text: "Please provide both Label and Value." });
       return;
@@ -155,21 +166,23 @@ export default function AdminFormOptions() {
         </div>
 
         <div style={{ display: "flex", gap: 10 }}>
-          <button
-            onClick={() =>
-              setEditingOption({
-                form_type: "participation",
-                field_key: "participant_category",
-                label: "",
-                value: "",
-                is_active: true,
-              })
-            }
-            className="btn btn-primary"
-            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.85rem" }}
-          >
-            <Plus size={16} /> Add New Choice
-          </button>
+          {canManage && (
+            <button
+              onClick={() =>
+                setEditingOption({
+                  form_type: "participation",
+                  field_key: "participant_category",
+                  label: "",
+                  value: "",
+                  is_active: true,
+                })
+              }
+              className="btn btn-primary"
+              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.85rem" }}
+            >
+              <Plus size={16} /> Add New Choice
+            </button>
+          )}
           <button
             onClick={fetchOptions}
             disabled={loading}
@@ -282,11 +295,13 @@ export default function AdminFormOptions() {
                     <td style={{ padding: "14px 18px" }}>
                       <button
                         type="button"
+                        disabled={!canManage}
                         onClick={() => handleToggleActive(opt)}
                         style={{
                           border: "none",
                           background: "none",
-                          cursor: "pointer",
+                          cursor: canManage ? "pointer" : "not-allowed",
+                          opacity: canManage ? 1 : 0.65,
                           padding: 0,
                           display: "inline-flex",
                           alignItems: "center",
@@ -308,40 +323,44 @@ export default function AdminFormOptions() {
                       </button>
                     </td>
                     <td style={{ padding: "14px 18px", textAlign: "right" }}>
-                      <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <button
-                          onClick={() => handleMove(opt, "up")}
-                          className="btn btn-ghost"
-                          style={{ padding: "4px 8px", fontSize: "0.76rem" }}
-                          title="Move up"
-                        >
-                          <ArrowUp size={14} />
-                        </button>
-                        <button
-                          onClick={() => handleMove(opt, "down")}
-                          className="btn btn-ghost"
-                          style={{ padding: "4px 8px", fontSize: "0.76rem" }}
-                          title="Move down"
-                        >
-                          <ArrowDown size={14} />
-                        </button>
-                        <button
-                          onClick={() => setEditingOption(opt)}
-                          className="btn btn-ghost"
-                          style={{ padding: "4px 8px", fontSize: "0.76rem" }}
-                          title="Edit"
-                        >
-                          <Edit2 size={14} />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(opt.id, opt.label)}
-                          className="btn btn-ghost"
-                          style={{ padding: "4px 8px", fontSize: "0.76rem", color: "#ef4444" }}
-                          title="Delete"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
+                      {canManage ? (
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <button
+                            onClick={() => handleMove(opt, "up")}
+                            className="btn btn-ghost"
+                            style={{ padding: "4px 8px", fontSize: "0.76rem" }}
+                            title="Move up"
+                          >
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleMove(opt, "down")}
+                            className="btn btn-ghost"
+                            style={{ padding: "4px 8px", fontSize: "0.76rem" }}
+                            title="Move down"
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                          <button
+                            onClick={() => setEditingOption(opt)}
+                            className="btn btn-ghost"
+                            style={{ padding: "4px 8px", fontSize: "0.76rem" }}
+                            title="Edit"
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(opt.id, opt.label)}
+                            className="btn btn-ghost"
+                            style={{ padding: "4px 8px", fontSize: "0.76rem", color: "#ef4444" }}
+                            title="Delete"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Read only</span>
+                      )}
                     </td>
                   </tr>
                 ))
