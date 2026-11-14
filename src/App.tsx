@@ -46,6 +46,7 @@ import AdminSystemReadiness from "./pages/admin/AdminSystemReadiness";
 import AdminDataExports from "./pages/admin/AdminDataExports";
 import AdminCrmEmails from "./pages/admin/AdminCrmEmails";
 import AdminUsers from "./pages/admin/AdminUsers";
+import AdminConductorMatches from "./pages/admin/AdminConductorMatches";
 
 export default function App() {
   return (
@@ -92,6 +93,7 @@ export default function App() {
         <Route index element={<AdminDashboard />} />
         <Route path="checkin" element={<AdminCheckin />} />
         <Route path="esports-control" element={<AdminEsportsControl />} />
+        <Route path="conductor-matches" element={<AdminConductorMatches />} />
         <Route path="registration-controls" element={<AdminRegistrationControls />} />
         <Route path="participation-registrations" element={<AdminParticipationRegistrations />} />
         <Route path="esports-registrations" element={<AdminEsportsRegistrations />} />

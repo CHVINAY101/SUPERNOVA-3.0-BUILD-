@@ -1,6 +1,12 @@
+import {
+  FunctionsFetchError,
+  FunctionsHttpError,
+  FunctionsRelayError,
+} from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import type { CrmEmail, CrmEmailStatus } from "@/types/database";
 import {
+  classifyEdgeFunctionError,
   containsHeaderInjection,
   evaluateProviderDelivery,
   redactSensitiveText,
@@ -63,24 +69,89 @@ function saveLocalCrmEmail(email: CrmEmail) {
   }
 }
 
-async function extractEdgeFunctionError(error: any, data: any): Promise<{ message: string; status: number }> {
-  let status = typeof error?.context?.status === "number" ? error.context.status : 500;
-  let message = data?.error || error?.message || "Edge Function invocation failed";
+async function getAdminInvokeHeaders(): Promise<Record<string, string>> {
+  const apiKey = (
+    import.meta.env.VITE_SUPABASE_ANON_KEY ||
+    import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    ""
+  ).trim();
+  const headers: Record<string, string> = {};
+  if (apiKey) headers["apikey"] = apiKey;
+  try {
+    const { data } = await supabase.auth.getSession();
+    let session = data?.session ?? null;
+    if (session?.expires_at && session.expires_at * 1000 - Date.now() < 60_000) {
+      const refreshed = await supabase.auth.refreshSession();
+      if (refreshed.data?.session) session = refreshed.data.session;
+    }
+    if (session?.access_token) {
+      headers["Authorization"] = `Bearer ${session.access_token}`;
+    }
+  } catch {
+    // fallback to supabase-js default auth header
+  }
+  return headers;
+}
 
-  if (error?.context && typeof error.context.json === "function") {
+async function extractEdgeFunctionError(error: any, data: any): Promise<{ message: string; status: number }> {
+  const ctx = error?.context;
+  const httpStatus = typeof ctx?.status === "number" ? ctx.status : undefined;
+  let bodyError: string | undefined = typeof data?.error === "string" ? data.error : undefined;
+  let bodyCode: string | undefined;
+
+  if (ctx && typeof ctx.json === "function") {
     try {
-      const cloned = typeof error.context.clone === "function" ? error.context.clone() : error.context;
+      const cloned = typeof ctx.clone === "function" ? ctx.clone() : ctx;
       const body = await cloned.json();
-      if (body?.error) message = body.error;
+      if (typeof body?.error === "string") bodyError = body.error;
+      else if (typeof body?.message === "string") bodyError = body.message;
+      if (typeof body?.code === "string") bodyCode = body.code;
     } catch {
       // ignore body parse issues
     }
-  } else if (status === 404 || String(message).includes("404") || String(message).includes("NOT_FOUND")) {
-    status = 404;
-    message = "Edge Function send-crm-email is not deployed on Supabase yet.";
   }
 
-  return { message: redactSensitiveText(message), status };
+  const isFetchErr =
+    error instanceof FunctionsFetchError ||
+    error?.name === "FunctionsFetchError" ||
+    String(error?.message || "").includes("Failed to send a request to the Edge Function");
+  const isRelayErr = error instanceof FunctionsRelayError || error?.name === "FunctionsRelayError";
+  const isHttpErr = error instanceof FunctionsHttpError || error?.name === "FunctionsHttpError";
+
+  let probeStatus: number | undefined;
+  let probeCode: string | undefined;
+  if (isFetchErr) {
+    try {
+      const baseUrl = (import.meta.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+      if (baseUrl) {
+        const res = await fetch(`${baseUrl}/functions/v1/send-crm-email`, { method: "GET" });
+        probeStatus = res.status;
+        const j = await res.json().catch(() => null);
+        if (typeof j?.code === "string") probeCode = j.code;
+      }
+    } catch {
+      // ignore probe failure
+    }
+  }
+
+  const classified = classifyEdgeFunctionError({
+    errorName: isFetchErr
+      ? "FunctionsFetchError"
+      : isRelayErr
+      ? "FunctionsRelayError"
+      : isHttpErr
+      ? "FunctionsHttpError"
+      : error?.name,
+    errorMessage: error?.message,
+    httpStatus,
+    bodyError,
+    bodyCode,
+    functionName: "send-crm-email",
+    probeStatus,
+    probeCode,
+  });
+
+  return { message: classified.message, status: classified.httpStatusCode };
 }
 
 /**
@@ -88,7 +159,9 @@ async function extractEdgeFunctionError(error: any, data: any): Promise<{ messag
  */
 export async function checkGmailConnectionStatus(): Promise<GmailConnectionStatus> {
   try {
+    const invokeHeaders = await getAdminInvokeHeaders();
     const { data, error } = await supabase.functions.invoke("send-crm-email", {
+      headers: invokeHeaders,
       body: { action: "status" },
     });
 
@@ -261,7 +334,14 @@ export async function sendCrmEmail(
   saveLocalCrmEmail(pendingRecord);
 
   try {
+    const invokeHeaders = await getAdminInvokeHeaders();
+    if (!invokeHeaders["Authorization"]) {
+      const authMsg = "Admin session missing or expired (HTTP 401). Please sign in again.";
+      saveLocalCrmEmail({ ...pendingRecord, status: "failed", error_message: authMsg });
+      return { ok: false, error: authMsg };
+    }
     const { data, error } = await supabase.functions.invoke("send-crm-email", {
+      headers: invokeHeaders,
       body: {
         action: "send",
         recipient: recipientCheck.normalizedEmail,

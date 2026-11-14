@@ -355,14 +355,15 @@ export default function AdminVisitorRegistrations() {
   };
 
   const handleResendEmail = async (record: VisitorRegistrationRecord) => {
-    if (!canResend) return;
+    if (!canResend || savingId === record.id) return;
     setSavingId(record.id);
     setStatusMsg(null);
+    const ticketRef = (record as any).ticket_ref || record.registration_ref;
     try {
       let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
       try {
         const ticketPdf = await generateTicketPdf({
-          ticketRef: record.registration_ref,
+          ticketRef,
           recipientName: record.full_name,
           category: record.visitor_category || "General Visitor",
           email: record.email,
@@ -396,7 +397,7 @@ export default function AdminVisitorRegistrations() {
       if (res.ok && !res.simulated) {
         setStatusMsg({
           type: "success",
-          text: `Visitor ticket pass resent successfully to ${record.email}.`,
+          text: `Visitor ticket pass (${ticketRef}) resent successfully to ${record.email}.`,
         });
         setRegistrations((prev) =>
           prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: "sent" } : item)) : null
@@ -405,13 +406,15 @@ export default function AdminVisitorRegistrations() {
           setInspectedRecord({ ...inspectedRecord, email_status: "sent" });
         }
       } else {
+        const nextStatus = record.email_status === "sent" ? "sent" : "failed";
         setRegistrations((prev) =>
-          prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: "failed" } : item)) : null
+          prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: nextStatus } : item)) : null
         );
         if (inspectedRecord && inspectedRecord.id === record.id) {
-          setInspectedRecord({ ...inspectedRecord, email_status: "failed" });
+          setInspectedRecord({ ...inspectedRecord, email_status: nextStatus });
         }
-        throw new Error(res.error || "Email delivery failed");
+        const statusSuffix = res.httpStatusCode ? ` [HTTP ${res.httpStatusCode}${res.errorType ? ` · ${res.errorType}` : ""}]` : "";
+        throw new Error(`${res.error || "Email delivery failed"}${statusSuffix}`);
       }
       setTimeout(() => setStatusMsg(null), 5000);
     } catch (err: any) {

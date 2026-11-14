@@ -74,7 +74,9 @@ export default function EsportsLive() {
     : matches.filter((m) => m.game_id === selectedGameId);
 
   const liveMatches = filteredMatches.filter((m) => m.status === "live");
-  const upcomingMatches = filteredMatches.filter((m) => m.status === "upcoming");
+  const upcomingMatches = filteredMatches.filter((m) =>
+    ["upcoming", "scheduled", "check_in", "ready"].includes(m.status)
+  );
   const completedMatches = filteredMatches.filter((m) => m.status === "completed");
 
   const formatTime = (isoString?: string | null) => {
@@ -212,7 +214,7 @@ export default function EsportsLive() {
                 animation: "pulse 1.5s infinite",
               }}
             />
-            <h2 style={{ fontSize: "1.4rem", fontWeight: 800, margin: 0, letterSpacing: "0.02em" }}>
+            <h2 style={{ fontSize: "1.4rem", fontWeight: 800, margin: 0, letterSpacing: "0.02em", color: "#ffffff" }}>
               LIVE NOW IN THE ARENA
             </h2>
           </div>
@@ -274,7 +276,7 @@ export default function EsportsLive() {
 
                     <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 16, alignItems: "center", textAlign: "center" }}>
                       <div style={{ textAlign: "right" }}>
-                        <h3 style={{ fontSize: "clamp(1.2rem, 3vw, 1.8rem)", fontWeight: 900, margin: 0 }}>
+                        <h3 style={{ fontSize: "clamp(1.2rem, 3vw, 1.8rem)", fontWeight: 900, margin: 0, color: "#ffffff" }}>
                           {teamA?.team_name || "Team Alpha"}
                         </h3>
                         <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
@@ -299,7 +301,7 @@ export default function EsportsLive() {
                       </div>
 
                       <div style={{ textAlign: "left" }}>
-                        <h3 style={{ fontSize: "clamp(1.2rem, 3vw, 1.8rem)", fontWeight: 900, margin: 0 }}>
+                        <h3 style={{ fontSize: "clamp(1.2rem, 3vw, 1.8rem)", fontWeight: 900, margin: 0, color: "#ffffff" }}>
                           {teamB?.team_name || "Team Bravo"}
                         </h3>
                         <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.6)", marginTop: 4 }}>

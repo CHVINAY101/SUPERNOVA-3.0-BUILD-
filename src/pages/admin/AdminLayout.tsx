@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { getRoleLabel } from "@/lib/rbac";
+import { getRoleLabel, isDedicatedOperationsRole } from "@/lib/rbac";
 import {
   LayoutDashboard,
   FileText,
@@ -28,6 +28,7 @@ import {
   Menu,
   X,
   Search,
+  Trophy,
 } from "lucide-react";
 import { TicketVerificationModal } from "@/components/admin/TicketVerificationModal";
 
@@ -47,8 +48,9 @@ const navSections: NavSection[] = [
     title: "Today",
     items: [
       { to: "/admin", label: "Dashboard", icon: LayoutDashboard },
-      { to: "/admin/checkin", label: "Check-in Desk", icon: UserCheck },
+      { to: "/admin/checkin", label: "Entry & Check-in", icon: UserCheck },
       { to: "/admin/esports-control", label: "Esports Control", icon: Gamepad2 },
+      { to: "/admin/conductor-matches", label: "Match Console", icon: Trophy },
     ],
   },
   {
@@ -99,7 +101,14 @@ export default function AdminLayout() {
     navigate("/admin/login");
   };
 
-  const canVerifyTicket = hasPermission(["visitor:view", "participation:view", "esports:view"]);
+  const canVerifyTicket = hasPermission([
+    "visitor:view",
+    "participation:view",
+    "esports:view",
+    "entry:scan_visitor",
+    "entry:scan_esports",
+  ]);
+  const isDedicatedOps = isDedicatedOperationsRole(role);
 
   const visibleSections = navSections
     .map((sec) => ({
@@ -107,6 +116,76 @@ export default function AdminLayout() {
       items: sec.items.filter((item) => canAccessRoute(item.to)),
     }))
     .filter((sec) => sec.items.length > 0);
+
+  if (isDedicatedOps) {
+    const dedicatedNavItems = visibleSections.flatMap((s) => s.items).filter((i) => i.to !== "/admin");
+    return (
+      <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-slate-900 font-sans">
+        <header className="bg-[#0B1120] text-white border-b border-slate-800 sticky top-0 z-40">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <img src="/logo.svg" alt="Supernova 3.0" className="w-7 h-7" />
+              <div>
+                <span className="font-display font-black text-sm tracking-wide block leading-none">
+                  SUPERNOVA 3.0
+                </span>
+                <span className="text-[10px] font-mono text-cyan-400 font-bold uppercase tracking-wider block mt-0.5">
+                  {getRoleLabel(role)} Workspace
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+              {dedicatedNavItems.length > 1 && (
+                <nav className="flex items-center gap-1.5">
+                  {dedicatedNavItems.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <NavLink
+                        key={item.to}
+                        to={item.to}
+                        className={({ isActive }) =>
+                          `inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold no-underline transition-colors ${
+                            isActive
+                              ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+                              : "text-slate-300 hover:bg-slate-800"
+                          }`
+                        }
+                      >
+                        <Icon size={14} />
+                        <span>{item.label}</span>
+                      </NavLink>
+                    );
+                  })}
+                </nav>
+              )}
+
+              <span className="hidden sm:inline-block text-xs font-mono text-slate-300 truncate max-w-[200px]">
+                {user?.email}
+              </span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-cyan-950 border border-cyan-800 text-cyan-300">
+                {getRoleLabel(role)}
+              </span>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition-colors"
+              >
+                <LogOut size={13} />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 min-w-0 bg-[#F8FAFC] text-slate-900">
+          <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
+            <Outlet />
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-[#F8FAFC] text-slate-900 font-sans">

@@ -2,8 +2,10 @@ export type CanonicalCrmRole =
   | "super_admin"
   | "crm_admin"
   | "registration_staff"
+  | "esports_entry_staff"
   | "participation_manager"
   | "esports_manager"
+  | "match_conductor"
   | "content_manager"
   | "viewer";
 
@@ -31,6 +33,25 @@ export type PermissionKey =
   | "esports:approve"
   | "esports:reject"
   | "esports:export"
+  | "entry:view"
+  | "entry:scan_visitor"
+  | "entry:checkin_visitor"
+  | "entry:scan_esports"
+  | "entry:checkin_esports"
+  | "entry:issue_wristband"
+  | "entry:override_checkin"
+  | "entry:manage_wristbands"
+  | "tournament:manage_games"
+  | "tournament:select_teams"
+  | "tournament:build_bracket"
+  | "tournament:assign_conductors"
+  | "tournament:confirm_results"
+  | "tournament:resolve_disputes"
+  | "conductor:view_assigned"
+  | "conductor:verify_roster"
+  | "conductor:start_match"
+  | "conductor:submit_result"
+  | "conductor:report_dispute"
   | "announcements:view"
   | "announcements:create"
   | "announcements:edit"
@@ -70,13 +91,28 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
   {
     id: "visitor",
     label: "Visitor Registration",
-    description: "Visitor passes, check-in records, and attendee details",
+    description: "Visitor passes, walk-in records, and attendee details",
     permissions: [
       { key: "visitor:view", label: "View" },
       { key: "visitor:create", label: "Create" },
       { key: "visitor:edit", label: "Edit" },
       { key: "visitor:delete", label: "Delete / Archive" },
       { key: "visitor:export", label: "Export" },
+    ],
+  },
+  {
+    id: "entry",
+    label: "Event Entry & Wristbands",
+    description: "QR scanning, gate verification, check-in, wristbands, and overrides",
+    permissions: [
+      { key: "entry:view", label: "View Entry Desk" },
+      { key: "entry:scan_visitor", label: "Scan Visitor Passes" },
+      { key: "entry:checkin_visitor", label: "Check In Visitors" },
+      { key: "entry:scan_esports", label: "Scan Esports Passes" },
+      { key: "entry:checkin_esports", label: "Check In Esports Players" },
+      { key: "entry:issue_wristband", label: "Issue Wristbands" },
+      { key: "entry:override_checkin", label: "Supervisor Override" },
+      { key: "entry:manage_wristbands", label: "Configure Wristbands" },
     ],
   },
   {
@@ -95,7 +131,7 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
   {
     id: "esports",
     label: "Esports Teams & Players",
-    description: "Tournament squad rosters, match staging, and brackets",
+    description: "Tournament squad rosters, approvals, and exports",
     permissions: [
       { key: "esports:view", label: "View" },
       { key: "esports:create", label: "Create" },
@@ -103,6 +139,24 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
       { key: "esports:approve", label: "Approve" },
       { key: "esports:reject", label: "Reject" },
       { key: "esports:export", label: "Export" },
+    ],
+  },
+  {
+    id: "tournament",
+    label: "Esports Tournament & Conductor Ops",
+    description: "Game configuration, bracket builder, conductor scoring, and disputes",
+    permissions: [
+      { key: "tournament:manage_games", label: "Configure Games" },
+      { key: "tournament:select_teams", label: "Select Tournament Teams" },
+      { key: "tournament:build_bracket", label: "Build Brackets" },
+      { key: "tournament:assign_conductors", label: "Assign Conductors" },
+      { key: "tournament:confirm_results", label: "Confirm Results" },
+      { key: "tournament:resolve_disputes", label: "Resolve Disputes" },
+      { key: "conductor:view_assigned", label: "View Assigned Matches" },
+      { key: "conductor:verify_roster", label: "Verify Match Rosters" },
+      { key: "conductor:start_match", label: "Start Assigned Matches" },
+      { key: "conductor:submit_result", label: "Submit Match Results" },
+      { key: "conductor:report_dispute", label: "Escalate Disputes" },
     ],
   },
   {
@@ -200,18 +254,23 @@ export const ROLE_METADATA: Record<
 > = {
   super_admin: {
     label: "Super Admin",
-    description: "Full system access including user management, permissions, and settings.",
+    description: "Full system access including user management, wristband config, and settings.",
     badgeTone: "bg-slate-900 text-white border-slate-900",
   },
   crm_admin: {
     label: "CRM Admin",
-    description: "Operational management across registrations, content, esports, and email centre.",
+    description: "Operational management across registrations, entry, tournaments, content, and email.",
     badgeTone: "bg-blue-50 text-blue-700 border-blue-200",
   },
   registration_staff: {
-    label: "Registration Staff",
-    description: "Visitor registration and gate check-in desk operations.",
+    label: "Entry Staff (Visitors)",
+    description: "Event Entry & Verification Centre for visitor QR scanning, check-in, and wristbands.",
     badgeTone: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  },
+  esports_entry_staff: {
+    label: "Esports Entry Staff",
+    description: "Esports gate verification: scan player passes, verify team eligibility, issue esports wristbands.",
+    badgeTone: "bg-indigo-50 text-indigo-700 border-indigo-200",
   },
   participation_manager: {
     label: "Participation Manager",
@@ -220,8 +279,13 @@ export const ROLE_METADATA: Record<
   },
   esports_manager: {
     label: "Esports Manager",
-    description: "Manage esports teams, players, approvals, and live tournament matches.",
+    description: "Review teams, select tournament squads, configure games, build brackets, and confirm results.",
     badgeTone: "bg-purple-50 text-purple-700 border-purple-200",
+  },
+  match_conductor: {
+    label: "Match Conductor",
+    description: "Operate assigned matches only: verify rosters, record attendance, start matches, and submit scores.",
+    badgeTone: "bg-orange-50 text-orange-800 border-orange-200",
   },
   content_manager: {
     label: "Content Manager",
@@ -246,11 +310,15 @@ export function normalizeRole(role: string | null | undefined): CanonicalCrmRole
     case "registration_staff":
     case "checkin_staff":
       return "registration_staff";
+    case "esports_entry_staff":
+      return "esports_entry_staff";
     case "participation_manager":
       return "participation_manager";
     case "esports_manager":
     case "score_operator":
       return "esports_manager";
+    case "match_conductor":
+      return "match_conductor";
     case "content_manager":
       return "content_manager";
     case "viewer":
@@ -273,6 +341,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "visitor:edit",
     "visitor:delete",
     "visitor:export",
+    "entry:view",
+    "entry:scan_visitor",
+    "entry:checkin_visitor",
+    "entry:scan_esports",
+    "entry:checkin_esports",
+    "entry:issue_wristband",
+    "entry:override_checkin",
     "participation:view",
     "participation:create",
     "participation:edit",
@@ -285,6 +360,17 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "esports:approve",
     "esports:reject",
     "esports:export",
+    "tournament:manage_games",
+    "tournament:select_teams",
+    "tournament:build_bracket",
+    "tournament:assign_conductors",
+    "tournament:confirm_results",
+    "tournament:resolve_disputes",
+    "conductor:view_assigned",
+    "conductor:verify_roster",
+    "conductor:start_match",
+    "conductor:submit_result",
+    "conductor:report_dispute",
     "announcements:view",
     "announcements:create",
     "announcements:edit",
@@ -312,6 +398,16 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "visitor:view",
     "visitor:create",
     "visitor:edit",
+    "entry:view",
+    "entry:scan_visitor",
+    "entry:checkin_visitor",
+    "entry:issue_wristband",
+  ],
+  esports_entry_staff: [
+    "entry:view",
+    "entry:scan_esports",
+    "entry:checkin_esports",
+    "entry:issue_wristband",
   ],
   participation_manager: [
     "participation:view",
@@ -329,7 +425,26 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "esports:approve",
     "esports:reject",
     "esports:export",
+    "tournament:manage_games",
+    "tournament:select_teams",
+    "tournament:build_bracket",
+    "tournament:assign_conductors",
+    "tournament:confirm_results",
+    "tournament:resolve_disputes",
+    "conductor:view_assigned",
+    "conductor:verify_roster",
+    "conductor:start_match",
+    "conductor:submit_result",
+    "conductor:report_dispute",
+    "entry:scan_esports",
     "reports:view",
+  ],
+  match_conductor: [
+    "conductor:view_assigned",
+    "conductor:verify_roster",
+    "conductor:start_match",
+    "conductor:submit_result",
+    "conductor:report_dispute",
   ],
   content_manager: [
     "announcements:view",
@@ -414,9 +529,42 @@ export function hasCrmPermission(
  */
 export const ROUTE_PERMISSIONS: { prefix: string; exact?: boolean; anyOf: PermissionKey[]; label: string }[] = [
   { prefix: "/admin", exact: true, anyOf: ALL_PERMISSIONS, label: "Dashboard" },
-  { prefix: "/admin/checkin", anyOf: ["visitor:view", "visitor:edit", "esports:view"], label: "Check-in Desk" },
-  { prefix: "/admin/esports-control", anyOf: ["esports:view", "esports:edit"], label: "Esports Control" },
-  { prefix: "/admin/esports-registrations", anyOf: ["esports:view"], label: "Esports Teams" },
+  {
+    prefix: "/admin/checkin",
+    anyOf: [
+      "entry:view",
+      "entry:scan_visitor",
+      "entry:checkin_visitor",
+      "entry:scan_esports",
+      "entry:checkin_esports",
+      "visitor:view",
+      "visitor:edit",
+    ],
+    label: "Event Entry & Verification",
+  },
+  {
+    prefix: "/admin/conductor-matches",
+    anyOf: ["conductor:view_assigned", "tournament:confirm_results", "esports:edit"],
+    label: "Conductor Match Console",
+  },
+  {
+    prefix: "/admin/esports-control",
+    anyOf: [
+      "esports:edit",
+      "tournament:manage_games",
+      "tournament:select_teams",
+      "tournament:build_bracket",
+      "tournament:assign_conductors",
+      "tournament:confirm_results",
+      "tournament:resolve_disputes",
+    ],
+    label: "Esports Operations Centre",
+  },
+  {
+    prefix: "/admin/esports-registrations",
+    anyOf: ["esports:view", "tournament:select_teams"],
+    label: "Esports Teams",
+  },
   { prefix: "/admin/participation-registrations", anyOf: ["participation:view"], label: "Participation" },
   { prefix: "/admin/visitor-registrations", anyOf: ["visitor:view"], label: "Visitors" },
   { prefix: "/admin/crm-emails", anyOf: ["email_centre:view"], label: "Email Centre" },
@@ -428,7 +576,11 @@ export const ROUTE_PERMISSIONS: { prefix: string; exact?: boolean; anyOf: Permis
   { prefix: "/admin/content", anyOf: ["event_info:view"], label: "Page Text" },
   { prefix: "/admin/sponsors", anyOf: ["event_info:view"], label: "Sponsors" },
   { prefix: "/admin/faqs", anyOf: ["event_info:view"], label: "FAQs" },
-  { prefix: "/admin/games", anyOf: ["event_info:view", "esports:view"], label: "Games" },
+  {
+    prefix: "/admin/games",
+    anyOf: ["event_info:view", "esports:view", "tournament:manage_games"],
+    label: "Tournament Games",
+  },
   { prefix: "/admin/institutions", anyOf: ["event_info:view"], label: "Schools" },
   { prefix: "/admin/registration-controls", anyOf: ["system_settings:manage"], label: "Registration Controls" },
   { prefix: "/admin/settings", anyOf: ["system_settings:view", "system_settings:manage"], label: "Event & System Settings" },
@@ -472,6 +624,35 @@ export function canAccessAdminRoute(
   }
 
   return matched.anyOf.some((perm) => effectivePermissions.has(perm));
+}
+
+export function isDedicatedOperationsRole(role: string | null | undefined): boolean {
+  const canonical = normalizeRole(role);
+  return (
+    canonical === "registration_staff" ||
+    canonical === "esports_entry_staff" ||
+    canonical === "match_conductor"
+  );
+}
+
+export function getDefaultAdminRoute(
+  role: string | null | undefined,
+  effectivePermissions: Set<PermissionKey>
+): string {
+  const canonical = normalizeRole(role);
+  if (canonical === "registration_staff" || canonical === "esports_entry_staff") {
+    return "/admin/checkin";
+  }
+  if (canonical === "match_conductor") {
+    return "/admin/conductor-matches";
+  }
+  if (effectivePermissions.has("reports:view") || effectivePermissions.has("system_settings:view")) {
+    return "/admin";
+  }
+  const firstPermitted = ROUTE_PERMISSIONS.find(
+    (r) => !r.exact && r.anyOf.some((p) => effectivePermissions.has(p))
+  );
+  return firstPermitted?.prefix || "/admin";
 }
 
 export interface CrmUserGuardCheckInput {

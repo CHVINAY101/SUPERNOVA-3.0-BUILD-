@@ -2,11 +2,21 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-supabase-api-version, x-region",
+  "Access-Control-Max-Age": "86400",
 };
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/;
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
 
 function escapeHtml(str: string): string {
   return String(str || "")
@@ -21,6 +31,7 @@ function redactSecrets(text: string): string {
   return String(text || "")
     .replace(/Bearer\s+[A-Za-z0-9._\-/+]+/gi, "Bearer [REDACTED]")
     .replace(/(ya29\.[A-Za-z0-9_\-]+)/g, "[REDACTED_OAUTH_TOKEN]")
+    .replace(/(1\/\/[A-Za-z0-9_\-]+)/g, "[REDACTED_REFRESH_TOKEN]")
     .replace(/(re_[A-Za-z0-9_]+)/g, "[REDACTED_RESEND_KEY]");
 }
 
@@ -45,22 +56,21 @@ function chunkBase64(b64: string, width = 76): string {
   return out.join("\r\n");
 }
 
-function base64UrlEncode(str: string): string {
+function encodeUtf8ToBase64(str: string): string {
   const bytes = new TextEncoder().encode(str);
   let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(binary);
+}
+
+function base64UrlEncode(str: string): string {
+  return encodeUtf8ToBase64(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function encodeSubject(subject: string): string {
-  const bytes = new TextEncoder().encode(subject);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return `=?utf-8?B?${btoa(binary)}?=`;
+  return `=?utf-8?B?${encodeUtf8ToBase64(subject)}?=`;
 }
 
 interface AttachmentInput {
@@ -97,16 +107,18 @@ function buildMimeWithAttachments(params: {
     `MIME-Version: 1.0`,
   ];
 
+  const encodedHtml = chunkBase64(encodeUtf8ToBase64(params.html));
+
   if (!params.attachments.length) {
-    headers.push(`Content-Type: text/html; charset=utf-8`);
-    return `${headers.join("\r\n")}\r\n\r\n${params.html}`;
+    headers.push(`Content-Type: text/html; charset=utf-8`, `Content-Transfer-Encoding: base64`);
+    return `${headers.join("\r\n")}\r\n\r\n${encodedHtml}`;
   }
 
   const boundary = `----=_Supernova_Confirm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
 
   const parts: string[] = [
-    `--${boundary}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${params.html}`,
+    `--${boundary}\r\nContent-Type: text/html; charset="utf-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedHtml}`,
   ];
 
   for (const att of params.attachments) {
@@ -122,9 +134,45 @@ function buildMimeWithAttachments(params: {
   return `${headers.join("\r\n")}\r\n\r\n${parts.join("\r\n")}`;
 }
 
+function resolveProvider(env: {
+  explicitProvider: string;
+  hasGmailCreds: boolean;
+  hasResendKey: boolean;
+}): "gmail" | "resend" {
+  const explicit = env.explicitProvider.trim().toLowerCase();
+  if (explicit === "gmail") return "gmail";
+  if (explicit === "resend") return "resend";
+  if (env.hasGmailCreds) return "gmail";
+  if (env.hasResendKey) return "resend";
+  // Default to Gmail (project's primary configured provider); never silently substitute Resend
+  return "gmail";
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  if (req.method === "GET") {
+    const explicitProvider = Deno.env.get("EMAIL_PROVIDER") ?? "";
+    const hasGmailCreds = Boolean(
+      Deno.env.get("GMAIL_CLIENT_ID") &&
+        Deno.env.get("GMAIL_CLIENT_SECRET") &&
+        Deno.env.get("GMAIL_REFRESH_TOKEN")
+    );
+    const hasResendKey = Boolean(Deno.env.get("RESEND_API_KEY"));
+    const provider = resolveProvider({ explicitProvider, hasGmailCreds, hasResendKey });
+    const configured = provider === "gmail" ? hasGmailCreds : hasResendKey;
+    return jsonResponse({
+      ok: true,
+      function: "send-registration-confirmation",
+      provider,
+      configured,
+    });
+  }
+
+  if (req.method !== "POST") {
+    return jsonResponse({ ok: false, error: `Method ${req.method} not allowed` }, 405);
   }
 
   try {
@@ -133,14 +181,21 @@ Deno.serve(async (req) => {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
     if (!supabaseUrl || !serviceRoleKey) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Supabase runtime environment keys missing in Edge Function." }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      return jsonResponse(
+        { ok: false, error: "Supabase runtime environment keys missing in Edge Function." },
+        503
       );
     }
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
-    const body: RequestPayload = await req.json();
+
+    let body: RequestPayload;
+    try {
+      body = await req.json();
+    } catch {
+      return jsonResponse({ ok: false, error: "Invalid JSON request body" }, 400);
+    }
+
     const {
       registrationId,
       registrationRef,
@@ -148,7 +203,7 @@ Deno.serve(async (req) => {
       isResend = false,
       recipientEmail: claimedRecipientEmail,
       attachments = [],
-    } = body;
+    } = body || ({} as RequestPayload);
 
     if (
       (!registrationId && !registrationRef) ||
@@ -156,10 +211,7 @@ Deno.serve(async (req) => {
       !["visitor", "esports", "participation"].includes(registrationType) ||
       typeof isResend !== "boolean"
     ) {
-      return new Response(JSON.stringify({ ok: false, error: "Invalid confirmation email payload" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ ok: false, error: "Invalid confirmation email payload" }, 400);
     }
 
     // Check caller authentication & RBAC permission
@@ -289,36 +341,100 @@ Deno.serve(async (req) => {
     if (!validRecipient) {
       await adminClient
         .from(table)
-        .update({ email_status: "failed", email_sending_started_at: null, email_error: "Missing or invalid recipient email" })
+        .update({ email_status: "failed", email_error: "Missing or invalid recipient email" })
         .eq("id", targetId);
 
-      return new Response(JSON.stringify({ ok: false, error: "Invalid recipient email address" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ ok: false, error: "Invalid recipient email address" }, 400);
+    }
+
+    // Resolve configured provider BEFORE claiming email_status = "sending" so missing secrets preserve the existing record state cleanly
+    const explicitProvider = Deno.env.get("EMAIL_PROVIDER") ?? "";
+    const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
+    const fromEmail = Deno.env.get("SUPERNOVA_FROM_EMAIL") ?? "Supernova 3.0 <animationthenationalcollege@gmail.com>";
+    const gmailClientId = Deno.env.get("GMAIL_CLIENT_ID") ?? "";
+    const gmailClientSecret = Deno.env.get("GMAIL_CLIENT_SECRET") ?? "";
+    const gmailRefreshToken = Deno.env.get("GMAIL_REFRESH_TOKEN") ?? "";
+    const gmailSenderEmail = Deno.env.get("GMAIL_SENDER_EMAIL") ?? "animationthenationalcollege@gmail.com";
+
+    const activeProvider = resolveProvider({
+      explicitProvider,
+      hasGmailCreds: Boolean(gmailClientId && gmailClientSecret && gmailRefreshToken),
+      hasResendKey: Boolean(resendApiKey),
+    });
+
+    if (activeProvider === "gmail" && (!gmailClientId || !gmailClientSecret || !gmailRefreshToken)) {
+      const missingSecrets = [
+        !gmailClientId ? "GMAIL_CLIENT_ID" : null,
+        !gmailClientSecret ? "GMAIL_CLIENT_SECRET" : null,
+        !gmailRefreshToken ? "GMAIL_REFRESH_TOKEN" : null,
+      ].filter(Boolean);
+      return jsonResponse(
+        {
+          ok: false,
+          provider: "gmail",
+          missingSecrets,
+          error: `Gmail OAuth secrets (${missingSecrets.join(", ")}) are not configured on Supabase Edge Functions. Registration record preserved.`,
+        },
+        503
+      );
+    }
+
+    if (activeProvider === "resend" && !resendApiKey) {
+      return jsonResponse(
+        {
+          ok: false,
+          provider: "resend",
+          missingSecrets: ["RESEND_API_KEY"],
+          error: "RESEND_API_KEY is not configured in Supabase Edge Function secrets (simulated delivery disabled).",
+        },
+        503
+      );
     }
 
     // Atomic claim to prevent duplicate concurrent dispatches
     const nowIso = new Date().toISOString();
     const staleThresholdIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const previousEmailStatus: string = record.email_status || "not_sent";
 
-    let claimQuery = adminClient
+    const statusFilter = isResend
+      ? `email_status.is.null,email_status.neq.sending,email_sending_started_at.lt.${staleThresholdIso}`
+      : `email_status.is.null,and(email_status.neq.sending,email_status.neq.sent),and(email_status.eq.sending,email_sending_started_at.lt.${staleThresholdIso})`;
+
+    let claimResult = await adminClient
       .from(table)
       .update({ email_status: "sending", email_sending_started_at: nowIso, email_error: null })
       .eq("id", targetId)
       .is("archived_at", null)
       .eq("status", "confirmed")
-      .or(`email_status.is.null,email_status.neq.sending,email_sending_started_at.lt.${staleThresholdIso}`);
+      .or(statusFilter)
+      .select("id")
+      .maybeSingle();
 
-    if (!isResend) {
-      claimQuery = claimQuery.or("email_status.is.null,email_status.neq.sent");
+    // Compatibility fallback if email_sending_started_at column hasn't been added to this table yet
+    if (claimResult.error && (claimResult.error.code === "42703" || String(claimResult.error.message || "").includes("email_sending_started_at"))) {
+      const fallbackFilter = isResend
+        ? "email_status.is.null,email_status.neq.sending"
+        : "email_status.is.null,and(email_status.neq.sending,email_status.neq.sent)";
+      claimResult = await adminClient
+        .from(table)
+        .update({ email_status: "sending", email_error: null })
+        .eq("id", targetId)
+        .is("archived_at", null)
+        .eq("status", "confirmed")
+        .or(fallbackFilter)
+        .select("id")
+        .maybeSingle();
     }
 
-    const { data: claimed, error: claimErr } = await claimQuery.select("id").maybeSingle();
-    if (claimErr || !claimed) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Email is already being processed or was already sent" }),
-        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    if (claimResult.error || !claimResult.data) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: claimResult.error
+            ? redactSecrets(claimResult.error.message)
+            : "Email is already being processed or was already sent.",
+        },
+        claimResult.error ? 500 : 409
       );
     }
 
@@ -438,36 +554,34 @@ Deno.serve(async (req) => {
           .slice(0, 3)
       : [];
 
-    // Respect explicit configured provider (never silently swap providers, never simulate "sent")
-    const configuredProvider = (Deno.env.get("EMAIL_PROVIDER") ?? "resend").toLowerCase();
-    const resendApiKey = Deno.env.get("RESEND_API_KEY") ?? "";
-    const fromEmail = Deno.env.get("SUPERNOVA_FROM_EMAIL") ?? "Supernova 3.0 <animationthenationalcollege@gmail.com>";
-    const gmailClientId = Deno.env.get("GMAIL_CLIENT_ID") ?? "";
-    const gmailClientSecret = Deno.env.get("GMAIL_CLIENT_SECRET") ?? "";
-    const gmailRefreshToken = Deno.env.get("GMAIL_REFRESH_TOKEN") ?? "";
-    const gmailSenderEmail = Deno.env.get("GMAIL_SENDER_EMAIL") ?? "animationthenationalcollege@gmail.com";
-
     const idempotencyKey = isResend
       ? `supernova-resend-${registrationType}-${targetId}-${Date.now()}`
       : `supernova-confirm-${registrationType}-${targetId}`;
 
     let providerMessageId = "";
     let providerThreadId: string | null = null;
-    let activeProvider = configuredProvider;
 
     const recordFailure = async (status: number, reason: string) => {
       const safeReason = redactSecrets(reason).slice(0, 500);
-      await adminClient
+      // On resend of an already-sent ticket, preserve "sent" status if provider failed; otherwise mark "failed"
+      const nextStatus = isResend && previousEmailStatus === "sent" ? "sent" : "failed";
+      const failUpd = await adminClient
         .from(table)
-        .update({ email_status: "failed", email_sending_started_at: null, email_error: safeReason })
+        .update({ email_status: nextStatus, email_sending_started_at: null, email_error: safeReason })
         .eq("id", targetId);
+      if (failUpd.error && (failUpd.error.code === "42703" || String(failUpd.error.message || "").includes("email_sending_started_at"))) {
+        await adminClient
+          .from(table)
+          .update({ email_status: nextStatus, email_error: safeReason })
+          .eq("id", targetId);
+      }
 
       try {
         await adminClient.from("crm_emails").insert({
           recipient: validRecipient,
           subject: emailSubject,
           body_html: html,
-          sender_email: gmailSenderEmail,
+          sender_email: activeProvider === "gmail" ? gmailSenderEmail : fromEmail,
           sent_by: actorId,
           sent_by_email: actorEmail,
           status: "failed",
@@ -482,19 +596,10 @@ Deno.serve(async (req) => {
         // Non-blocking if crm_emails migration pending
       }
 
-      return new Response(
-        JSON.stringify({ ok: false, error: safeReason, provider: activeProvider }),
-        { status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return jsonResponse({ ok: false, error: safeReason, provider: activeProvider }, status);
     };
 
-    if (configuredProvider === "gmail") {
-      if (!gmailClientId || !gmailClientSecret || !gmailRefreshToken) {
-        return await recordFailure(
-          503,
-          "Gmail API secrets (GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN) are not configured on Supabase Edge Functions."
-        );
-      }
+    if (activeProvider === "gmail") {
 
       const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
@@ -543,7 +648,6 @@ Deno.serve(async (req) => {
       providerThreadId = gmailResult.threadId ?? null;
     } else {
       // Configured provider is Resend (strictly required — NO simulation fallback)
-      activeProvider = "resend";
       if (!resendApiKey) {
         return await recordFailure(
           503,
@@ -587,10 +691,16 @@ Deno.serve(async (req) => {
     }
 
     const sentAt = new Date().toISOString();
-    await adminClient
+    const sentUpd = await adminClient
       .from(table)
       .update({ email_status: "sent", email_sent_at: sentAt, email_sending_started_at: null, email_error: null })
       .eq("id", targetId);
+    if (sentUpd.error && (sentUpd.error.code === "42703" || String(sentUpd.error.message || "").includes("email_sending_started_at"))) {
+      await adminClient
+        .from(table)
+        .update({ email_status: "sent", email_sent_at: sentAt, email_error: null })
+        .eq("id", targetId);
+    }
 
     try {
       await adminClient.from("crm_emails").insert({

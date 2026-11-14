@@ -1,11 +1,11 @@
 import { Navigate, useLocation, Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { isMisconfigured } from "@/lib/supabase";
-import { getRoleLabel, ROUTE_PERMISSIONS } from "@/lib/rbac";
+import { getDefaultAdminRoute, getRoleLabel, isDedicatedOperationsRole } from "@/lib/rbac";
 import { ShieldAlert, ServerOff, LogOut, Lock, ArrowRight } from "lucide-react";
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
-  const { session, loading, isAdmin, role, accountStatus, canAccessRoute, signOut, refreshRole } = useAuth();
+  const { session, loading, isAdmin, role, accountStatus, permissions, canAccessRoute, signOut, refreshRole } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -101,10 +101,14 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const normalizedPath = location.pathname.replace(/\/+$/, "") || "/admin";
+  if (normalizedPath === "/admin" && isDedicatedOperationsRole(role)) {
+    return <Navigate to={getDefaultAdminRoute(role, permissions)} replace />;
+  }
+
   // Enforce route-level RBAC permission check
   if (!canAccessRoute(location.pathname)) {
-    const firstAllowedRoute =
-      ROUTE_PERMISSIONS.find((r) => !r.exact && canAccessRoute(r.prefix))?.prefix || "/admin";
+    const firstAllowedRoute = getDefaultAdminRoute(role, permissions);
 
     return (
       <div className="flex justify-center items-center min-h-screen bg-[#F8FAFC] p-6">

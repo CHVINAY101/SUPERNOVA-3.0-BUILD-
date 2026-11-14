@@ -1,8 +1,15 @@
+import {
+  FunctionsFetchError,
+  FunctionsHttpError,
+  FunctionsRelayError,
+} from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
+  classifyEdgeFunctionError,
   evaluateProviderDelivery,
   redactSensitiveText,
   validateRecipientEmail,
+  type EdgeFunctionErrorKind,
   type EmailAttachmentInput,
 } from "@/lib/emailPayload";
 
@@ -314,6 +321,8 @@ export interface EmailDeliveryResult {
   sender: string;
   status: "sent" | "failed" | "skipped";
   httpStatusCode?: number;
+  errorType?: EdgeFunctionErrorKind | "ValidationError" | "AuthError" | "DuplicateInFlight";
+  diagnostic?: string;
   apiResponse?: string;
   errorMessage?: string;
   timestamp: string;
@@ -347,6 +356,28 @@ export function saveLocalEmailDispatchLog(entry: EmailDeliveryResult): void {
   }
 }
 
+// Prevent simultaneous duplicate dispatches for the same registration
+const inFlightConfirmationDispatches = new Map<string, Promise<any>>();
+
+async function probeEdgeFunctionStatus(functionName: string): Promise<{ status?: number; code?: string }> {
+  try {
+    const baseUrl = (import.meta.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+    if (!baseUrl) return {};
+    // Simple GET without custom headers bypasses CORS preflight and exposes gateway 404/NOT_FOUND status
+    const res = await fetch(`${baseUrl}/functions/v1/${functionName}`, { method: "GET" });
+    let code: string | undefined;
+    try {
+      const json = await res.json();
+      if (typeof json?.code === "string") code = json.code;
+    } catch {
+      // ignore non-JSON
+    }
+    return { status: res.status, code };
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Dispatch confirmation email with support for visitor, esports, and participation.
  * Strictly checks real provider delivery via Supabase Edge Function — never fabricates a "sent" status.
@@ -363,25 +394,128 @@ export async function sendRegistrationConfirmationEmail(
     extraDetails?: Record<string, any>;
     attachments?: EmailAttachmentInput[];
   }
-): Promise<{ ok: boolean; error?: string; simulated?: boolean; log?: EmailDeliveryResult }> {
-  const table =
-    registrationType === "visitor"
-      ? "visitor_registrations"
-      : registrationType === "esports"
-      ? "registrations"
-      : "participation_registrations";
+): Promise<{
+  ok: boolean;
+  error?: string;
+  errorType?: EdgeFunctionErrorKind | "ValidationError" | "AuthError" | "DuplicateInFlight";
+  httpStatusCode?: number;
+  diagnostic?: string;
+  simulated?: boolean;
+  log?: EmailDeliveryResult;
+}> {
+  const lockKey = `${registrationType}:${registrationIdOrRef}`;
+  if (inFlightConfirmationDispatches.has(lockKey)) {
+    return {
+      ok: false,
+      errorType: "DuplicateInFlight",
+      httpStatusCode: 409,
+      error: "A confirmation email request for this registration is already in progress.",
+      simulated: false,
+    };
+  }
 
-  const nowIso = new Date().toISOString();
-  const officialSender = "animationthenationalcollege@gmail.com";
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(registrationIdOrRef);
+  const runDispatch = async () => {
+    const table =
+      registrationType === "visitor"
+        ? "visitor_registrations"
+        : registrationType === "esports"
+        ? "registrations"
+        : "participation_registrations";
 
-  const recipientEmail = metadataFallback?.recipientEmail || "";
-  const regRef = metadataFallback?.registrationRef || (isUuid ? undefined : registrationIdOrRef);
+    const nowIso = new Date().toISOString();
+    const officialSender = "animationthenationalcollege@gmail.com";
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(registrationIdOrRef);
 
-  if (recipientEmail) {
-    const emailCheck = validateRecipientEmail(recipientEmail);
-    if (!emailCheck.valid) {
-      const invalidLog: EmailDeliveryResult = {
+    const recipientEmail = metadataFallback?.recipientEmail || "";
+    const regRef = metadataFallback?.registrationRef || (isUuid ? undefined : registrationIdOrRef);
+
+    if (recipientEmail) {
+      const emailCheck = validateRecipientEmail(recipientEmail);
+      if (!emailCheck.valid) {
+        const invalidLog: EmailDeliveryResult = {
+          ok: false,
+          registrationId: isUuid ? registrationIdOrRef : undefined,
+          recipientEmail,
+          registrationRef: regRef,
+          registrationType,
+          channel: "supabase_edge_function",
+          sender: officialSender,
+          status: "failed",
+          httpStatusCode: 400,
+          errorType: "ValidationError",
+          errorMessage: emailCheck.error || "Invalid recipient email address.",
+          timestamp: nowIso,
+          isResend,
+        };
+        saveLocalEmailDispatchLog(invalidLog);
+        return {
+          ok: false,
+          error: invalidLog.errorMessage,
+          errorType: "ValidationError" as const,
+          httpStatusCode: 400,
+          log: invalidLog,
+        };
+      }
+    }
+
+    // Track existing DB email_status so we never accidentally overwrite a previously confirmed "sent" status if an Edge Function fails pre-delivery
+    let existingDbEmailStatus: string | null = null;
+    if (isUuid) {
+      try {
+        const { data } = await supabase
+          .from(table)
+          .select("email_status, email_sent_at")
+          .eq("id", registrationIdOrRef)
+          .maybeSingle();
+
+        existingDbEmailStatus = (data as any)?.email_status || null;
+        if (!isResend && existingDbEmailStatus === "sent") {
+          const skippedLog: EmailDeliveryResult = {
+            ok: true,
+            registrationId: registrationIdOrRef,
+            recipientEmail,
+            registrationRef: regRef,
+            registrationType,
+            channel: "supabase_edge_function",
+            sender: officialSender,
+            status: "skipped",
+            apiResponse: "Already dispatched (idempotency preserved)",
+            timestamp: nowIso,
+            isResend,
+          };
+          saveLocalEmailDispatchLog(skippedLog);
+          return { ok: true, simulated: false, log: skippedLog };
+        }
+      } catch {
+        // Continue
+      }
+    }
+
+    // Ensure authenticated admin session JWT is fresh and explicitly sent on resend / admin operations
+    const apiKey = (
+      import.meta.env.VITE_SUPABASE_ANON_KEY ||
+      import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+      ""
+    ).trim();
+
+    let accessToken: string | null = null;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      let session = sessionData?.session ?? null;
+      if (session?.expires_at && session.expires_at * 1000 - Date.now() < 60_000) {
+        const refreshed = await supabase.auth.refreshSession();
+        if (refreshed.data?.session) {
+          session = refreshed.data.session;
+        }
+      }
+      accessToken = session?.access_token ?? null;
+    } catch {
+      accessToken = null;
+    }
+
+    if (isResend && !accessToken) {
+      const authError = "Admin session missing or expired (HTTP 401). Sign in again before resending confirmation emails.";
+      const authLog: EmailDeliveryResult = {
         ok: false,
         registrationId: isUuid ? registrationIdOrRef : undefined,
         recipientEmail,
@@ -390,165 +524,211 @@ export async function sendRegistrationConfirmationEmail(
         channel: "supabase_edge_function",
         sender: officialSender,
         status: "failed",
-        httpStatusCode: 400,
-        errorMessage: emailCheck.error || "Invalid recipient email address.",
+        httpStatusCode: 401,
+        errorType: "AuthError",
+        errorMessage: authError,
         timestamp: nowIso,
         isResend,
       };
-      saveLocalEmailDispatchLog(invalidLog);
-      return { ok: false, error: invalidLog.errorMessage, log: invalidLog };
+      saveLocalEmailDispatchLog(authLog);
+      return {
+        ok: false,
+        error: authError,
+        errorType: "AuthError" as const,
+        httpStatusCode: 401,
+        simulated: false,
+        log: authLog,
+      };
     }
-  }
 
-  // Prevent double sending unless explicit resend
-  if (!isResend && isUuid) {
+    const invokeHeaders: Record<string, string> = {};
+    if (apiKey) invokeHeaders["apikey"] = apiKey;
+    if (accessToken) invokeHeaders["Authorization"] = `Bearer ${accessToken}`;
+
+    let httpCode = 500;
+    let errorType: EdgeFunctionErrorKind | "ValidationError" | "AuthError" = "UnknownError";
+    let failureMessage = "Email Edge Function returned an error.";
+    let diagnosticDetail = "";
+
     try {
-      const { data } = await supabase
-        .from(table)
-        .select("email_status, email_sent_at")
-        .eq("id", registrationIdOrRef)
-        .maybeSingle();
-
-      if (data && (data as any).email_status === "sent") {
-        const skippedLog: EmailDeliveryResult = {
-          ok: true,
-          registrationId: registrationIdOrRef,
-          recipientEmail,
+      const { data, error } = await supabase.functions.invoke("send-registration-confirmation", {
+        headers: invokeHeaders,
+        body: {
+          registrationId: isUuid ? registrationIdOrRef : undefined,
           registrationRef: regRef,
           registrationType,
-          channel: "supabase_edge_function",
-          sender: officialSender,
-          status: "skipped",
-          apiResponse: "Already dispatched (idempotency preserved)",
-          timestamp: nowIso,
           isResend,
-        };
-        saveLocalEmailDispatchLog(skippedLog);
-        return { ok: true, simulated: false, log: skippedLog };
-      }
-    } catch {
-      // Continue
-    }
-  }
-
-  let httpCode = 500;
-  let failureMessage = "Email Edge Function returned an error.";
-
-  try {
-    const { data, error } = await supabase.functions.invoke("send-registration-confirmation", {
-      body: {
-        registrationId: isUuid ? registrationIdOrRef : undefined,
-        registrationRef: regRef,
-        registrationType,
-        isResend,
-        recipientEmail: recipientEmail || undefined,
-        attachments: metadataFallback?.attachments,
-      },
-    });
-
-    if (!error && data?.skipped) {
-      const skippedLog: EmailDeliveryResult = {
-        ok: true,
-        registrationId: isUuid ? registrationIdOrRef : undefined,
-        recipientEmail: data?.recipient || recipientEmail,
-        registrationRef: regRef,
-        registrationType,
-        channel: "supabase_edge_function",
-        sender: officialSender,
-        status: "skipped",
-        httpStatusCode: 200,
-        apiResponse: data?.reason || "Already sent previously",
-        timestamp: nowIso,
-        isResend,
-      };
-      saveLocalEmailDispatchLog(skippedLog);
-      return { ok: true, simulated: false, log: skippedLog };
-    }
-
-    if (!error) {
-      const evalRes = evaluateProviderDelivery({
-        httpOk: true,
-        statusCode: 200,
-        okFlag: data?.ok,
-        simulated: data?.simulated,
-        messageId: data?.messageId,
-        error: data?.error,
+          recipientEmail: recipientEmail || undefined,
+          attachments: metadataFallback?.attachments,
+        },
       });
 
-      if (evalRes.delivered) {
-        const successLog: EmailDeliveryResult = {
+      if (!error && data?.skipped) {
+        const skippedLog: EmailDeliveryResult = {
           ok: true,
           registrationId: isUuid ? registrationIdOrRef : undefined,
           recipientEmail: data?.recipient || recipientEmail,
           registrationRef: regRef,
           registrationType,
-          channel: data?.provider === "gmail" ? "gmail_api" : "resend_api",
+          channel: "supabase_edge_function",
           sender: officialSender,
-          status: "sent",
+          status: "skipped",
           httpStatusCode: 200,
-          apiResponse: `Confirmed messageId=${data.messageId} (${data.provider || "provider"})`,
-          timestamp: data?.sent_at || nowIso,
+          apiResponse: data?.reason || "Already sent previously",
+          timestamp: nowIso,
           isResend,
         };
-        saveLocalEmailDispatchLog(successLog);
-        return { ok: true, simulated: false, log: successLog };
+        saveLocalEmailDispatchLog(skippedLog);
+        return { ok: true, httpStatusCode: 200, simulated: false, log: skippedLog };
       }
 
-      failureMessage = evalRes.error || "Email provider did not confirm delivery.";
-    } else {
-      httpCode = typeof (error as any)?.context?.status === "number" ? (error as any).context.status : 500;
-      failureMessage = error.message || failureMessage;
-      if ((error as any)?.context && typeof (error as any).context.json === "function") {
-        try {
-          const cloned = typeof (error as any).context.clone === "function" ? (error as any).context.clone() : (error as any).context;
-          const errBody = await cloned.json();
-          if (errBody?.error) failureMessage = errBody.error;
-        } catch {
-          // ignore
+      if (!error) {
+        const evalRes = evaluateProviderDelivery({
+          httpOk: true,
+          statusCode: 200,
+          okFlag: data?.ok,
+          simulated: data?.simulated,
+          messageId: data?.messageId,
+          error: data?.error,
+        });
+
+        if (evalRes.delivered) {
+          const successLog: EmailDeliveryResult = {
+            ok: true,
+            registrationId: isUuid ? registrationIdOrRef : undefined,
+            recipientEmail: data?.recipient || recipientEmail,
+            registrationRef: regRef,
+            registrationType,
+            channel: data?.provider === "gmail" ? "gmail_api" : "resend_api",
+            sender: officialSender,
+            status: "sent",
+            httpStatusCode: 200,
+            apiResponse: `Confirmed messageId=${data.messageId} (${data.provider || "provider"})`,
+            timestamp: data?.sent_at || nowIso,
+            isResend,
+          };
+          saveLocalEmailDispatchLog(successLog);
+          return { ok: true, httpStatusCode: 200, simulated: false, log: successLog };
         }
-      } else if (httpCode === 404 || failureMessage.includes("404")) {
-        httpCode = 404;
-        failureMessage = "Email delivery Edge Function (send-registration-confirmation) is not deployed on Supabase.";
+
+        failureMessage = evalRes.error || "Email provider did not confirm delivery.";
+      } else {
+        const ctx: any = (error as any)?.context;
+        let parsedStatus = typeof ctx?.status === "number" ? ctx.status : undefined;
+        let bodyError: string | undefined;
+        let bodyCode: string | undefined;
+
+        if (ctx && typeof ctx.json === "function") {
+          try {
+            const cloned = typeof ctx.clone === "function" ? ctx.clone() : ctx;
+            const errBody = await cloned.json();
+            if (typeof errBody?.error === "string") bodyError = errBody.error;
+            else if (typeof errBody?.message === "string") bodyError = errBody.message;
+            if (typeof errBody?.code === "string") bodyCode = errBody.code;
+          } catch {
+            if (typeof ctx.text === "function") {
+              try {
+                const clonedTxt = typeof ctx.clone === "function" ? ctx.clone() : ctx;
+                const txt = await clonedTxt.text();
+                if (txt) bodyError = txt.slice(0, 300);
+              } catch {
+                // ignore
+              }
+            }
+          }
+        }
+
+        const isFetchErr =
+          error instanceof FunctionsFetchError ||
+          error?.name === "FunctionsFetchError" ||
+          String(error?.message || "").includes("Failed to send a request to the Edge Function");
+        const isRelayErr = error instanceof FunctionsRelayError || error?.name === "FunctionsRelayError";
+        const isHttpErr = error instanceof FunctionsHttpError || error?.name === "FunctionsHttpError";
+
+        let probe: { status?: number; code?: string } = {};
+        if (isFetchErr) {
+          probe = await probeEdgeFunctionStatus("send-registration-confirmation");
+        }
+
+        const classified = classifyEdgeFunctionError({
+          errorName: isFetchErr
+            ? "FunctionsFetchError"
+            : isRelayErr
+            ? "FunctionsRelayError"
+            : isHttpErr
+            ? "FunctionsHttpError"
+            : error?.name,
+          errorMessage: error?.message,
+          httpStatus: parsedStatus,
+          bodyError,
+          bodyCode,
+          functionName: "send-registration-confirmation",
+          probeStatus: probe.status,
+          probeCode: probe.code,
+        });
+
+        errorType = classified.errorType;
+        httpCode = classified.httpStatusCode;
+        failureMessage = classified.message;
+        diagnosticDetail = classified.diagnostic;
       }
+    } catch (fnErr: any) {
+      failureMessage = fnErr?.message || "Email Edge Function invocation failed.";
     }
-  } catch (fnErr: any) {
-    failureMessage = fnErr?.message || "Email Edge Function invocation failed.";
-  }
 
-  const safeError = redactSensitiveText(failureMessage);
+    const safeError = redactSensitiveText(failureMessage);
 
-  // Record honest failure status on DB record when admin-authenticated
-  try {
-    if (isUuid) {
-      await supabase
-        .from(table)
-        .update({
-          email_status: "failed",
-          email_error: safeError.slice(0, 500),
-        })
-        .eq("id", registrationIdOrRef);
+    // Record honest failure details on DB record while preserving previously confirmed "sent" status on unreachable resends
+    try {
+      if (isUuid) {
+        const shouldPreserveSent = isResend && existingDbEmailStatus === "sent";
+        await supabase
+          .from(table)
+          .update(
+            shouldPreserveSent
+              ? { email_error: safeError.slice(0, 500) }
+              : { email_status: "failed", email_error: safeError.slice(0, 500) }
+          )
+          .eq("id", registrationIdOrRef);
+      }
+    } catch {
+      // Non-blocking for anon callers under strict RLS
     }
-  } catch {
-    // Non-blocking for anon callers under strict RLS
-  }
 
-  const failedLog: EmailDeliveryResult = {
-    ok: false,
-    registrationId: isUuid ? registrationIdOrRef : undefined,
-    recipientEmail,
-    registrationRef: regRef,
-    registrationType,
-    channel: "supabase_edge_function",
-    sender: officialSender,
-    status: "failed",
-    httpStatusCode: httpCode,
-    errorMessage: safeError,
-    timestamp: nowIso,
-    isResend,
+    const failedLog: EmailDeliveryResult = {
+      ok: false,
+      registrationId: isUuid ? registrationIdOrRef : undefined,
+      recipientEmail,
+      registrationRef: regRef,
+      registrationType,
+      channel: "supabase_edge_function",
+      sender: officialSender,
+      status: "failed",
+      httpStatusCode: httpCode,
+      errorType,
+      diagnostic: diagnosticDetail || undefined,
+      errorMessage: safeError,
+      timestamp: nowIso,
+      isResend,
+    };
+    saveLocalEmailDispatchLog(failedLog);
+
+    return {
+      ok: false,
+      error: safeError,
+      errorType,
+      httpStatusCode: httpCode,
+      diagnostic: diagnosticDetail || undefined,
+      simulated: false,
+      log: failedLog,
+    };
   };
-  saveLocalEmailDispatchLog(failedLog);
 
-  return { ok: false, error: safeError, simulated: false, log: failedLog };
+  const promise = runDispatch().finally(() => {
+    inFlightConfirmationDispatches.delete(lockKey);
+  });
+  inFlightConfirmationDispatches.set(lockKey, promise);
+  return promise;
 }
 
 const LOCAL_ARCHIVED_KEY = "supernova_archived_registrations";

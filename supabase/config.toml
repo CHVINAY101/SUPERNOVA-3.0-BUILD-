@@ -1,0 +1,13 @@
+project_id = "cirreovughlncadrbvcn"
+
+[functions.send-crm-email]
+verify_jwt = true
+
+[functions.manage-crm-users]
+verify_jwt = true
+
+# Supports both authenticated admin resends / participation / esports emails
+# (validated via userClient.auth.getUser() + has_crm_permission inside the function)
+# and immediate post-submission visitor pass confirmations using the publishable key.
+[functions.send-registration-confirmation]
+verify_jwt = false

@@ -2,7 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-supabase-api-version, x-region",
+  "Access-Control-Max-Age": "86400",
 };
 
 const VALID_ROLES = [
@@ -10,13 +13,30 @@ const VALID_ROLES = [
   "crm_admin",
   "event_admin",
   "registration_staff",
+  "esports_entry_staff",
   "checkin_staff",
   "participation_manager",
   "esports_manager",
+  "match_conductor",
   "score_operator",
   "content_manager",
   "viewer",
 ];
+
+function parseOverridesPayload(raw: unknown): { permission_key: string; allowed: boolean }[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((item: any) => item && typeof item.permission_key === "string")
+      .map((item: any) => ({ permission_key: item.permission_key, allowed: Boolean(item.allowed) }));
+  }
+  if (raw && typeof raw === "object") {
+    return Object.entries(raw as Record<string, unknown>).map(([permission_key, allowed]) => ({
+      permission_key,
+      allowed: Boolean(allowed),
+    }));
+  }
+  return [];
+}
 
 const VALID_STATUSES = ["invited", "active", "deactivated", "revoked"];
 const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/;
@@ -30,7 +50,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   try {
@@ -155,9 +175,9 @@ Deno.serve(async (req) => {
       const email = String(payload.email || "").trim().toLowerCase();
       const fullName = String(payload.fullName || "").trim();
       const role = String(payload.role || "").trim();
-      const overrides: { permission_key: string; allowed: boolean }[] = Array.isArray(payload.overrides)
-        ? payload.overrides
-        : [];
+      const overrides = parseOverridesPayload(
+        payload.overrides !== undefined ? payload.overrides : payload.customPermissions
+      );
       const redirectTo =
         typeof payload.redirectTo === "string" && payload.redirectTo.startsWith("http")
           ? payload.redirectTo
@@ -359,9 +379,9 @@ Deno.serve(async (req) => {
     // 4. UPDATE USER CUSTOM PERMISSIONS
     // -------------------------------------------------------------------------
     if (action === "update_user_permissions") {
-      const overrides: { permission_key: string; allowed: boolean }[] = Array.isArray(payload.overrides)
-        ? payload.overrides
-        : [];
+      const overrides = parseOverridesPayload(
+        payload.overrides !== undefined ? payload.overrides : payload.customPermissions
+      );
 
       await adminClient.from("crm_user_permissions").delete().eq("user_id", targetUserId);
       if (overrides.length > 0) {

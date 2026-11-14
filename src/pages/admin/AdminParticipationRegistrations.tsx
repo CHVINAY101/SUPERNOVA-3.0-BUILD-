@@ -208,7 +208,7 @@ export default function AdminParticipationRegistrations() {
   };
 
   const handleResendEmail = async (reg: ParticipationRegistration) => {
-    if (!canResend) return;
+    if (!canResend || isUpdating) return;
     setIsUpdating(true);
     setStatusMsg(null);
     try {
@@ -251,7 +251,7 @@ export default function AdminParticipationRegistrations() {
       if (emailRes.ok && !emailRes.simulated) {
         setStatusMsg({
           type: "success",
-          text: `Confirmation email re-sent successfully to ${reg.email}.`,
+          text: `Confirmation email re-sent successfully to ${reg.email} (Ticket: ${ticketRef}).`,
         });
         setRegistrations((prev) =>
           prev.map((r) => (r.id === reg.id ? { ...r, email_status: "sent" } : r))
@@ -260,13 +260,15 @@ export default function AdminParticipationRegistrations() {
           setSelectedReg({ ...selectedReg, email_status: "sent" });
         }
       } else {
+        const nextStatus = (reg as any).email_status === "sent" ? "sent" : "failed";
         setRegistrations((prev) =>
-          prev.map((r) => (r.id === reg.id ? { ...r, email_status: "failed" } : r))
+          prev.map((r) => (r.id === reg.id ? { ...r, email_status: nextStatus } : r))
         );
         if (selectedReg && selectedReg.id === reg.id) {
-          setSelectedReg({ ...selectedReg, email_status: "failed" });
+          setSelectedReg({ ...selectedReg, email_status: nextStatus });
         }
-        throw new Error(emailRes.error || "Email delivery failed");
+        const statusSuffix = emailRes.httpStatusCode ? ` [HTTP ${emailRes.httpStatusCode}${emailRes.errorType ? ` · ${emailRes.errorType}` : ""}]` : "";
+        throw new Error(`${emailRes.error || "Email delivery failed"}${statusSuffix}`);
       }
       setTimeout(() => setStatusMsg(null), 5000);
     } catch (err: any) {

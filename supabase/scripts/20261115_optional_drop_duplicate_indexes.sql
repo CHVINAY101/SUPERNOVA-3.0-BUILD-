@@ -1,0 +1,44 @@
+-- ==============================================================================
+-- SUPERNOVA 3.0 — APPROVAL-GATED OPTIONAL CLEANUP FOR GENUINE DUPLICATE INDEXES
+-- Target Project: https://cirreovughlncadrbvcn.supabase.co
+--
+-- WARNING:
+--   DO NOT execute blindly. Verify with `20261115_fk_indexes_diagnostic.sql`
+--   first and obtain explicit stakeholder approval before dropping any index.
+--   Run each `DROP INDEX CONCURRENTLY` statement outside a transaction block.
+--
+--   The 11 non-duplicate indexes reported by Performance Advisor (e.g.,
+--   idx_site_content_published, idx_sponsors_published, idx_gallery_category,
+--   idx_registrations_team_name, idx_registrations_captain, idx_registrations_email,
+--   idx_registrations_status, idx_matches_published, idx_announcements_published,
+--   idx_audit_entity, idx_institutions_published) are intentionally EXCLUDED
+--   from this cleanup script and should be retained and monitored through live
+--   event-day traffic before making removal decisions.
+-- ==============================================================================
+
+-- ------------------------------------------------------------------------------
+-- Candidate 1 (Safe once `registrations_registration_ref_key` is confirmed valid):
+--   `idx_registrations_ref` on public.registrations(registration_ref) duplicates
+--   the UNIQUE constraint index `registrations_registration_ref_key` created by
+--   `registration_ref text UNIQUE NOT NULL` in migration 0003.
+-- ------------------------------------------------------------------------------
+-- DROP INDEX CONCURRENTLY IF EXISTS public.idx_registrations_ref;
+
+-- ------------------------------------------------------------------------------
+-- Candidate 2 (Safe ONLY if BOTH `idx_matches_game` and `idx_matches_game_id`
+--   exist on public.matches(game_id) and are valid):
+--   Migration 0003 created `idx_matches_game ON public.matches(game_id)`.
+--   Migration 0014 created `idx_matches_game_id ON public.matches(game_id)`.
+--   CRITICAL: Keep ONE of them so `matches_game_id_fkey` remains indexed!
+--   Dropping `idx_matches_game` retains `idx_matches_game_id` (consistent naming).
+-- ------------------------------------------------------------------------------
+-- DROP INDEX CONCURRENTLY IF EXISTS public.idx_matches_game;
+
+-- ------------------------------------------------------------------------------
+-- Bonus Duplicate Found During Audit (Safe ONLY if BOTH `idx_checkins_registration`
+--   and `idx_check_ins_registration` exist on public.check_ins(registration_id)):
+--   Migration 0003 created `idx_checkins_registration ON public.check_ins(registration_id)`.
+--   Migration 0014 created `idx_check_ins_registration ON public.check_ins(registration_id)`.
+--   Dropping the older `idx_checkins_registration` keeps `idx_check_ins_registration`.
+-- ------------------------------------------------------------------------------
+-- DROP INDEX CONCURRENTLY IF EXISTS public.idx_checkins_registration;

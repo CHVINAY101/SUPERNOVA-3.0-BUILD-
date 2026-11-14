@@ -22,9 +22,9 @@ interface TicketVerificationModalProps {
 
 export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationModalProps) {
   const { hasPermission } = useAuth();
-  const canViewVisitors = hasPermission("visitor:view");
+  const canViewVisitors = hasPermission(["visitor:view", "entry:scan_visitor"]);
   const canViewParticipation = hasPermission("participation:view");
-  const canViewEsports = hasPermission("esports:view");
+  const canViewEsports = hasPermission(["esports:view", "entry:scan_esports"]);
 
   const [query, setQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -44,9 +44,9 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
   };
 
   const canCheckInRecord = (rec: UniversalLookupResult) => {
-    if (rec.type === "visitor") return hasPermission("visitor:edit");
+    if (rec.type === "visitor") return hasPermission(["visitor:edit", "entry:checkin_visitor"]);
     if (rec.type === "participation") return hasPermission("participation:edit");
-    return hasPermission("esports:edit");
+    return hasPermission(["esports:edit", "entry:checkin_esports"]);
   };
 
   const handleSearch = async (e?: React.FormEvent) => {

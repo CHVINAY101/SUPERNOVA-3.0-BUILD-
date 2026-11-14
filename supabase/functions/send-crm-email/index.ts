@@ -2,7 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-supabase-api-version, x-region",
+  "Access-Control-Max-Age": "86400",
 };
 
 const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/;
@@ -46,25 +49,24 @@ function stripDataUrlPrefix(b64: string): string {
   return idx >= 0 ? b64.slice(idx + 7) : b64;
 }
 
-function base64UrlEncode(str: string): string {
+function encodeUtf8ToBase64(str: string): string {
   const bytes = new TextEncoder().encode(str);
   let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
-  return btoa(binary)
+  return btoa(binary);
+}
+
+function base64UrlEncode(str: string): string {
+  return encodeUtf8ToBase64(str)
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 }
 
 function encodeSubject(subject: string): string {
-  const bytes = new TextEncoder().encode(subject);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return `=?utf-8?B?${btoa(binary)}?=`;
+  return `=?utf-8?B?${encodeUtf8ToBase64(subject)}?=`;
 }
 
 interface AttachmentInput {
@@ -88,7 +90,14 @@ interface SendEmailPayload {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  if (req.method !== "POST" && req.method !== "GET") {
+    return new Response(JSON.stringify({ ok: false, error: `Method ${req.method} not allowed` }), {
+      status: 405,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 
   try {
@@ -130,7 +139,10 @@ Deno.serve(async (req) => {
       try {
         payload = await req.json();
       } catch {
-        // empty body
+        return new Response(JSON.stringify({ ok: false, error: "Invalid JSON request body" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
     }
 
@@ -424,14 +436,15 @@ Deno.serve(async (req) => {
     headers.push(`Subject: ${encodeSubject(cleanSubject)}`, `MIME-Version: 1.0`);
 
     let rawMessage = "";
+    const encodedHtmlBody = chunkBase64(encodeUtf8ToBase64(bodyHtml));
     if (!cleanAttachments.length) {
-      headers.push(`Content-Type: text/html; charset=utf-8`);
-      rawMessage = `${headers.join("\r\n")}\r\n\r\n${bodyHtml}`;
+      headers.push(`Content-Type: text/html; charset=utf-8`, `Content-Transfer-Encoding: base64`);
+      rawMessage = `${headers.join("\r\n")}\r\n\r\n${encodedHtmlBody}`;
     } else {
       const boundary = `----=_Supernova_CRM_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
       const parts: string[] = [
-        `--${boundary}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${bodyHtml}`,
+        `--${boundary}\r\nContent-Type: text/html; charset="utf-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedHtmlBody}`,
       ];
       for (const att of cleanAttachments) {
         const safeName = att.filename.replace(/["\r\n\\/]/g, "_").slice(0, 120) || "attachment.pdf";

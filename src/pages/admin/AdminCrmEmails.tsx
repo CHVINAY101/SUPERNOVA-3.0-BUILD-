@@ -294,36 +294,58 @@ export default function AdminCrmEmails() {
       const crmStatus = await checkGmailConnectionStatus();
       setServerGmailStatus(crmStatus);
 
-      // Probe send-registration-confirmation deployment cleanly using invalid/missing check
+      // Probe send-registration-confirmation deployment cleanly
       try {
-        const { data, error } = await supabase.functions.invoke("send-registration-confirmation", {
-          body: { registrationType: "visitor" },
-        });
-        const errStatus = (error as any)?.context?.status;
-        if (errStatus === 404 || String(error?.message || "").includes("404")) {
+        const baseUrl = (import.meta.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+        const getResp = baseUrl
+          ? await fetch(`${baseUrl}/functions/v1/send-registration-confirmation`, { method: "GET" })
+          : null;
+
+        if (getResp && getResp.status === 404) {
           setRegConfirmHealth({
             checked: true,
             ok: false,
-            detail: "Edge Function send-registration-confirmation is not deployed (HTTP 404).",
+            detail: "Edge Function send-registration-confirmation is not deployed on Supabase (HTTP 404 NOT_FOUND).",
           });
-        } else if (errStatus === 503) {
+        } else if (getResp && getResp.ok) {
+          const healthJson = await getResp.json().catch(() => ({}));
           setRegConfirmHealth({
             checked: true,
-            ok: false,
-            detail: "Edge Function deployed, but email provider secrets (RESEND_API_KEY or EMAIL_PROVIDER=gmail credentials) are not configured.",
-          });
-        } else if (errStatus === 400 || data?.error) {
-          setRegConfirmHealth({
-            checked: true,
-            ok: true,
-            detail: "Edge Function send-registration-confirmation is deployed and enforcing validation.",
+            ok: Boolean(healthJson?.configured),
+            detail: healthJson?.configured
+              ? `Edge Function send-registration-confirmation is deployed (${healthJson.provider} configured).`
+              : `Edge Function deployed (provider: ${healthJson?.provider || "gmail"}), but required email provider secrets are missing.`,
           });
         } else {
-          setRegConfirmHealth({
-            checked: true,
-            ok: !error,
-            detail: error?.message || "Endpoint responded normally.",
+          const { data, error } = await supabase.functions.invoke("send-registration-confirmation", {
+            body: { registrationType: "visitor" },
           });
+          const errStatus = (error as any)?.context?.status;
+          if (errStatus === 404 || String(error?.message || "").includes("404")) {
+            setRegConfirmHealth({
+              checked: true,
+              ok: false,
+              detail: "Edge Function send-registration-confirmation is not deployed (HTTP 404).",
+            });
+          } else if (errStatus === 503) {
+            setRegConfirmHealth({
+              checked: true,
+              ok: false,
+              detail: "Edge Function deployed, but email provider secrets (GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN or RESEND_API_KEY) are not configured.",
+            });
+          } else if (errStatus === 400 || data?.error) {
+            setRegConfirmHealth({
+              checked: true,
+              ok: true,
+              detail: "Edge Function send-registration-confirmation is deployed and enforcing validation.",
+            });
+          } else {
+            setRegConfirmHealth({
+              checked: true,
+              ok: !error,
+              detail: error?.message || "Endpoint responded normally.",
+            });
+          }
         }
       } catch (probeErr: any) {
         setRegConfirmHealth({
@@ -407,6 +429,7 @@ export default function AdminCrmEmails() {
       setStatusMsg({ type: "error", text: "Permission denied: email_centre:resend is required." });
       return;
     }
+    if (resendingId === item.id) return;
 
     setResendingId(item.id);
     setStatusMsg(null);
@@ -457,12 +480,15 @@ export default function AdminCrmEmails() {
         });
         await fetchEmailLogs();
       } else {
-        throw new Error(res.error || "Email provider did not confirm delivery.");
+        const statusSuffix = res.httpStatusCode
+          ? ` [HTTP ${res.httpStatusCode}${res.errorType ? ` · ${res.errorType}` : ""}]`
+          : "";
+        throw new Error(`${res.error || "Email provider did not confirm delivery."}${statusSuffix}`);
       }
     } catch (err: any) {
       setStatusMsg({
         type: "error",
-        text: `Error dispatching email: ${err.message}`,
+        text: `Failed to resend confirmation email: ${err.message}`,
       });
       await fetchEmailLogs();
     } finally {

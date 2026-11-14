@@ -210,9 +210,107 @@ export function evaluateProviderDelivery(res: RawProviderResponse): {
 
 export function redactSensitiveText(input: string): string {
   return String(input || "")
+    .replace(/Bearer\s+[A-Za-z0-9._\-/+]+/gi, "Bearer [REDACTED]")
     .replace(/ya29\.[A-Za-z0-9._-]+/g, "[REDACTED_OAUTH_TOKEN]")
     .replace(/1\/\/[A-Za-z0-9._-]+/g, "[REDACTED_REFRESH_TOKEN]")
     .replace(/re_[A-Za-z0-9_-]{12,}/g, "[REDACTED_RESEND_KEY]")
     .replace(/eyJ[A-Za-z0-9._-]{20,}/g, "[REDACTED_JWT]")
     .replace(/(client_secret|refresh_token|access_token)=([^&\s]+)/gi, "$1=[REDACTED]");
 }
+
+export type EdgeFunctionErrorKind =
+  | "FunctionsFetchError"
+  | "FunctionsRelayError"
+  | "FunctionsHttpError"
+  | "UnknownError";
+
+export interface ClassifiedEdgeFunctionError {
+  errorType: EdgeFunctionErrorKind;
+  httpStatusCode: number;
+  message: string;
+  diagnostic: string;
+}
+
+export function classifyEdgeFunctionError(params: {
+  errorName?: string;
+  errorMessage?: string;
+  httpStatus?: number;
+  bodyError?: string;
+  bodyCode?: string;
+  functionName: string;
+  probeStatus?: number;
+  probeCode?: string;
+}): ClassifiedEdgeFunctionError {
+  const fn = params.functionName;
+  const rawName = String(params.errorName || "");
+  const rawMsg = redactSensitiveText(params.errorMessage || "");
+  const bodyMsg = redactSensitiveText(params.bodyError || "");
+
+  if (rawName === "FunctionsFetchError" || rawMsg.includes("Failed to send a request to the Edge Function")) {
+    if (params.probeStatus === 404 || params.probeCode === "NOT_FOUND") {
+      return {
+        errorType: "FunctionsFetchError",
+        httpStatusCode: 404,
+        message: `Edge Function '${fn}' is not deployed on Supabase (HTTP 404 NOT_FOUND; CORS preflight blocked).`,
+        diagnostic: `FunctionsFetchError -> diagnostic GET returned HTTP 404 (${params.probeCode || "NOT_FOUND"}). Deploy '${fn}' to Supabase.`,
+      };
+    }
+    return {
+      errorType: "FunctionsFetchError",
+      httpStatusCode: params.probeStatus || 0,
+      message: `Unable to reach Edge Function '${fn}' (FunctionsFetchError): check deployment, CORS headers, or network connectivity.`,
+      diagnostic: rawMsg || "Fetch rejected before receiving HTTP response.",
+    };
+  }
+
+  if (rawName === "FunctionsRelayError" || rawMsg.includes("Relay Error")) {
+    const status = typeof params.httpStatus === "number" && params.httpStatus > 0 ? params.httpStatus : 502;
+    const detail = bodyMsg || rawMsg || "Supabase Edge Relay failed to process the function invocation.";
+    return {
+      errorType: "FunctionsRelayError",
+      httpStatusCode: status,
+      message: `Supabase Relay Error (HTTP ${status}) invoking '${fn}': ${detail}`,
+      diagnostic: `FunctionsRelayError (HTTP ${status})`,
+    };
+  }
+
+  if (rawName === "FunctionsHttpError" || (typeof params.httpStatus === "number" && params.httpStatus >= 400)) {
+    const status = typeof params.httpStatus === "number" && params.httpStatus > 0 ? params.httpStatus : 500;
+    if (status === 404 || params.bodyCode === "NOT_FOUND") {
+      return {
+        errorType: "FunctionsHttpError",
+        httpStatusCode: 404,
+        message: `Edge Function '${fn}' returned HTTP 404 NOT_FOUND (not deployed on Supabase).`,
+        diagnostic: `FunctionsHttpError (HTTP 404)`,
+      };
+    }
+    const detail = bodyMsg || rawMsg || `Edge Function '${fn}' returned HTTP ${status}.`;
+    return {
+      errorType: "FunctionsHttpError",
+      httpStatusCode: status,
+      message: `HTTP ${status}: ${detail}`,
+      diagnostic: `FunctionsHttpError (HTTP ${status})`,
+    };
+  }
+
+  return {
+    errorType: "UnknownError",
+    httpStatusCode: typeof params.httpStatus === "number" ? params.httpStatus : 500,
+    message: bodyMsg || rawMsg || `Unexpected error invoking '${fn}'.`,
+    diagnostic: rawName || "UnknownError",
+  };
+}
+
+export function resolveConfiguredEmailProvider(env: {
+  explicitProvider?: string;
+  hasGmailCreds: boolean;
+  hasResendKey: boolean;
+}): "gmail" | "resend" {
+  const explicit = (env.explicitProvider || "").trim().toLowerCase();
+  if (explicit === "gmail") return "gmail";
+  if (explicit === "resend") return "resend";
+  if (env.hasGmailCreds) return "gmail";
+  if (env.hasResendKey) return "resend";
+  return "gmail";
+}
+
