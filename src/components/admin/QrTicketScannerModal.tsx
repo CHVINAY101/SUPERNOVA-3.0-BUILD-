@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
-import { parseTicketQrPayload } from "@/lib/entryOperations";
+import { parseSecureQrPayload } from "@/lib/ticketing";
 import { Camera, CameraOff, QrCode, X, Keyboard } from "lucide-react";
 
 interface QrTicketScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onScanSuccess: (ticketRef: string) => void;
+  onScanSuccess: (rawPayloadOrRef: string) => void;
   title?: string;
 }
 
@@ -72,14 +72,14 @@ export function QrTicketScannerModal({
           { fps: 10, qrbox: { width: 220, height: 220 } },
           (decodedText) => {
             if (handledRef.current) return;
-            const parsed = parseTicketQrPayload(decodedText);
-            if (!parsed.ticketRef) {
-              setCameraError("QR code does not contain a valid Supernova ticket reference.");
+            const parsed = parseSecureQrPayload(decodedText);
+            if (!parsed.ok) {
+              setCameraError("QR code does not contain a valid Supernova ticket reference or token.");
               return;
             }
             handledRef.current = true;
             void stopCamera().then(() => {
-              onScanSuccess(parsed.ticketRef!);
+              onScanSuccess(decodedText.trim());
               onClose();
             });
           },
@@ -110,17 +110,28 @@ export function QrTicketScannerModal({
     };
   }, [isOpen, onClose, onScanSuccess]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        void stopCamera().then(onClose);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const parsed = parseTicketQrPayload(manualCode);
-    if (!parsed.ticketRef) {
-      setCameraError("Enter a valid ticket code or pass reference (e.g. SN3-VIS-205118 or SN3-ESP-102345-P1).");
+    const parsed = parseSecureQrPayload(manualCode);
+    if (!parsed.ok) {
+      setCameraError("Enter a valid ticket code or pass reference (e.g. SN3-VIS-205118 or SN3-26-102345).");
       return;
     }
     void stopCamera().then(() => {
-      onScanSuccess(parsed.ticketRef!);
+      onScanSuccess(manualCode.trim());
       onClose();
     });
   };

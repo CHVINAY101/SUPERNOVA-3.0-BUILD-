@@ -15,11 +15,12 @@ import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirm
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
 import { archiveTicketToNas, getLocalNasArchives } from "@/lib/nasArchivalService";
+import { fetchTicketByRegistration, issueTicketForRegistration } from "@/lib/ticketClient";
 import {
   validateRegistrationStatusUpdate,
   validateSelectionUpdate,
 } from "@/lib/tournamentEngine";
-import type { Registration, RegistrationStatus, TeamStatusHistoryEntry, TournamentSelectionStatus } from "@/types/database";
+import type { Registration, RegistrationStatus, TeamStatusHistoryEntry, TicketRecord, TournamentSelectionStatus } from "@/types/database";
 import {
   Search,
   CheckCircle2,
@@ -119,6 +120,7 @@ export default function AdminEsportsRegistrations() {
 
   // Selected for Drawer
   const [selectedReg, setSelectedReg] = useState<ProcessedEsportsRegistration | null>(null);
+  const [selectedTicket, setSelectedTicket] = useState<TicketRecord | null>(null);
 
   // Reason Modal for Reject / Correction / Disqualify / Withdrawn
   const [reasonModal, setReasonModal] = useState<{
@@ -196,6 +198,20 @@ export default function AdminEsportsRegistrations() {
   useEffect(() => {
     fetchRegistrations();
   }, [fetchRegistrations]);
+
+  useEffect(() => {
+    if (!selectedReg) {
+      setSelectedTicket(null);
+      return;
+    }
+    let active = true;
+    fetchTicketByRegistration("esports", selectedReg.id).then((tkt) => {
+      if (active) setSelectedTicket(tkt);
+    });
+    return () => {
+      active = false;
+    };
+  }, [selectedReg]);
 
   const recordStatusHistory = async (
     registrationId: string,
@@ -275,16 +291,21 @@ export default function AdminEsportsRegistrations() {
 
       await recordStatusHistory(item.id, "registration_status", item.status, newStatus, reason);
 
-      let emailNotice = "";
+      let ticketNotice = "";
       let nextEmailStatus: string | undefined;
-      let emailOk = true;
       if (newStatus === "confirmed") {
+        const issuedRes = await issueTicketForRegistration("esports", item.id);
+        const issuedTicket = issuedRes.ok ? issuedRes.ticket : null;
+        if (issuedTicket) {
+          setSelectedTicket(issuedTicket);
+        }
+        const teamTicketRef = issuedTicket?.ticket_ref || item.registration_ref;
         let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
 
-        // 1. Generate and Archive Team Confirmation Document
         try {
           const teamDoc = await generateTicketPdf({
-            ticketRef: item.registration_ref,
+            ticketRef: teamTicketRef,
+            qrToken: issuedTicket?.qr_token,
             recipientName: item.captain_name,
             category: "Esports Squad",
             email: item.email,
@@ -305,7 +326,8 @@ export default function AdminEsportsRegistrations() {
           await archiveTicketToNas(
             teamDoc,
             {
-              ticketRef: item.registration_ref,
+              ticketRef: teamTicketRef,
+              qrToken: issuedTicket?.qr_token,
               recipientName: item.captain_name,
               category: "Esports Squad",
               email: item.email,
@@ -318,13 +340,13 @@ export default function AdminEsportsRegistrations() {
             item.id
           );
 
-          // 2. Generate and Archive Each Player's Individual Ticket
           const squadPlayers = item.players || [];
           for (let pIdx = 0; pIdx < squadPlayers.length; pIdx++) {
             const player = squadPlayers[pIdx];
             const playerTicketRef = `${item.registration_ref}-P${pIdx + 1}`;
             const playerDoc = await generateTicketPdf({
               ticketRef: playerTicketRef,
+              qrToken: issuedTicket?.qr_token,
               recipientName: player.player_name,
               category: "Esports Player",
               email: item.email,
@@ -341,6 +363,7 @@ export default function AdminEsportsRegistrations() {
               playerDoc,
               {
                 ticketRef: playerTicketRef,
+                qrToken: issuedTicket?.qr_token,
                 recipientName: player.player_name,
                 category: "Esports Player",
                 email: item.email,
@@ -359,19 +382,24 @@ export default function AdminEsportsRegistrations() {
           console.warn("Esports ticket generation / NAS archival notice:", nasErr);
         }
 
-        const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", false, {
-          recipientEmail: item.email,
-          recipientName: item.captain_name,
-          registrationRef: item.registration_ref,
-          institution: item.institution || undefined,
-          attachments: pdfAttachments,
-        });
-        emailOk = Boolean(emailRes.ok && !emailRes.simulated);
-        nextEmailStatus = emailOk ? "sent" : "failed";
-        if (emailOk) {
-          emailNotice = " · Squad confirmation email dispatched to captain & tickets archived to NAS.";
-        } else {
-          emailNotice = ` · Email notice failed: ${emailRes.error}`;
+        ticketNotice = ` · Official team ticket issued (${teamTicketRef})`;
+
+        // Best-effort email copy; ticket issuance never depends on email delivery
+        try {
+          const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", false, {
+            recipientEmail: item.email,
+            recipientName: item.captain_name,
+            registrationRef: item.registration_ref,
+            institution: item.institution || undefined,
+            attachments: pdfAttachments,
+          });
+          const emailOk = Boolean(emailRes.ok && !emailRes.simulated);
+          nextEmailStatus = emailOk ? "sent" : "failed";
+          if (emailOk) {
+            ticketNotice += " & emailed to captain.";
+          }
+        } catch {
+          nextEmailStatus = "failed";
         }
       }
 
@@ -398,8 +426,8 @@ export default function AdminEsportsRegistrations() {
         });
       }
       setStatusMessage({
-        type: emailOk ? "success" : "error",
-        text: `Team "${item.team_name}" (${item.registration_ref}) status changed to ${newStatus}${emailNotice}`,
+        type: "success",
+        text: `Team "${item.team_name}" (${item.registration_ref}) status changed to ${newStatus}${ticketNotice}`,
       });
       setTimeout(() => setStatusMessage(null), 5000);
     } catch (err: any) {
@@ -1417,6 +1445,22 @@ export default function AdminEsportsRegistrations() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center pt-1">
+                  <span className="text-slate-600">Official Team Ticket:</span>
+                  <strong className="font-mono text-xs text-purple-900">
+                    {selectedReg.status === "confirmed" && !selectedReg.isArchived
+                      ? selectedTicket?.ticket_ref || selectedReg.registration_ref
+                      : "Pending Confirmation — Not Issued"}
+                  </strong>
+                </div>
+                {selectedTicket?.checked_in_at && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Gate Check-In:</span>
+                    <span className="font-mono text-[11px] font-bold text-emerald-700">
+                      Checked in {new Date(selectedTicket.checked_in_at).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center">
                   <span className="text-slate-600">Captain Email:</span>
                   <strong className="font-mono text-xs text-purple-900">{selectedReg.email}</strong>
                 </div>
@@ -1429,7 +1473,7 @@ export default function AdminEsportsRegistrations() {
 
                 {/* NAS Archive Status */}
                 {(() => {
-                  const nasRecord = getLocalNasArchives().find((a) => a.ticketRef === selectedReg.registration_ref);
+                  const nasRecord = getLocalNasArchives().find((a) => a.ticketRef === (selectedTicket?.ticket_ref || selectedReg.registration_ref));
                   return (
                     <div className="pt-2 border-t border-purple-200/60 space-y-1.5">
                       <div className="flex justify-between items-center">
@@ -1454,28 +1498,43 @@ export default function AdminEsportsRegistrations() {
                 })()}
 
                 <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      downloadTicketPdfFile({
-                        ticketRef: selectedReg.registration_ref,
-                        recipientName: selectedReg.captain_name,
-                        category: "Esports Squad",
-                        email: selectedReg.email,
-                        phone: selectedReg.phone,
-                        institution: selectedReg.institution || undefined,
-                        registrationType: "esports_team",
-                        teamName: selectedReg.team_name,
-                        projectTitle: selectedReg.gameTitle,
-                      });
-                    }}
-                    className="py-2 px-3 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Download size={13} />
-                    <span>Download Team Doc</span>
-                  </button>
+                  {selectedReg.status === "confirmed" && !selectedReg.isArchived ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        let tkt = selectedTicket;
+                        if (!tkt) {
+                          const issued = await issueTicketForRegistration("esports", selectedReg.id);
+                          if (issued.ok && issued.ticket) {
+                            tkt = issued.ticket;
+                            setSelectedTicket(tkt);
+                          }
+                        }
+                        await downloadTicketPdfFile({
+                          ticketRef: tkt?.ticket_ref || selectedReg.registration_ref,
+                          qrToken: tkt?.qr_token,
+                          recipientName: selectedReg.captain_name,
+                          category: "Esports Squad",
+                          email: selectedReg.email,
+                          phone: selectedReg.phone,
+                          institution: selectedReg.institution || undefined,
+                          registrationType: "esports_team",
+                          teamName: selectedReg.team_name,
+                          projectTitle: selectedReg.gameTitle,
+                        });
+                      }}
+                      className="py-2 px-3 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Download size={13} />
+                      <span>Download Team Pass PDF</span>
+                    </button>
+                  ) : (
+                    <div className="py-2 px-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] font-mono font-semibold text-center">
+                      Confirm Team to Issue Ticket
+                    </div>
+                  )}
 
-                  {canResend && (
+                  {canResend && selectedReg.status === "confirmed" && (
                     <button
                       type="button"
                       disabled={updatingId === selectedReg.id}

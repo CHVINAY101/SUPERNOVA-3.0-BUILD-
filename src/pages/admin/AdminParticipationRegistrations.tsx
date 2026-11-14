@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
-import type { ParticipationRegistration, RegistrationStatus } from "@/types/database";
+import type { ParticipationRegistration, RegistrationStatus, TicketRecord } from "@/types/database";
 import {
   archiveRegistrationRecord,
   restoreRegistrationRecord,
@@ -16,6 +16,7 @@ import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirm
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
 import { archiveTicketToNas, getLocalNasArchives } from "@/lib/nasArchivalService";
+import { fetchTicketByRegistration, issueTicketForRegistration } from "@/lib/ticketClient";
 import { 
   Search, 
   CheckCircle2, 
@@ -53,6 +54,7 @@ export default function AdminParticipationRegistrations() {
 
   // Selected registration for Drawer
   const [selectedReg, setSelectedReg] = useState<AdminParticipationItem | null>(null);
+  const [selectedTicket, setSelectedTicket] = useState<TicketRecord | null>(null);
   const [editNote, setEditNote] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -60,6 +62,20 @@ export default function AdminParticipationRegistrations() {
   // Safe Archive Modal state
   const [archiveTarget, setArchiveTarget] = useState<ParticipationRegistration | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
+
+  useEffect(() => {
+    if (!selectedReg) {
+      setSelectedTicket(null);
+      return;
+    }
+    let active = true;
+    fetchTicketByRegistration("participation", selectedReg.id).then((tkt) => {
+      if (active) setSelectedTicket(tkt);
+    });
+    return () => {
+      active = false;
+    };
+  }, [selectedReg]);
 
   const fetchRegistrations = useCallback(async () => {
     setLoading(true);
@@ -101,23 +117,30 @@ export default function AdminParticipationRegistrations() {
 
       if (error) throw error;
 
-      let emailNotice = "";
+      let ticketNotice = "";
       let nextEmailStatus: string | undefined;
-      let emailOk = true;
       if (newStatus === "confirmed") {
         const currentItem = registrations.find((r) => r.id === id) || selectedReg;
+        const issuedRes = await issueTicketForRegistration("participation", id);
+        const issuedTicket = issuedRes.ok ? issuedRes.ticket : null;
+        if (issuedTicket) {
+          setSelectedTicket(issuedTicket);
+        }
+
         const ticketRef =
+          issuedTicket?.ticket_ref ||
           (currentItem as any)?.visitor_ticket_ref ||
           getLocalLinkedTickets()[currentItem?.registration_ref || ""] ||
-          `${currentItem?.registration_ref || "SN3-26-REG"}-VIS`;
+          currentItem?.registration_ref ||
+          "SN3-26-REG";
 
         let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
 
-        // 1. Generate digital ticket PDF and archive to NAS
         if (currentItem) {
           try {
             const ticketRes = await generateTicketPdf({
               ticketRef,
+              qrToken: issuedTicket?.qr_token,
               recipientName: currentItem.full_name,
               category: "Project Participant",
               email: currentItem.email,
@@ -139,6 +162,7 @@ export default function AdminParticipationRegistrations() {
               ticketRes,
               {
                 ticketRef,
+                qrToken: issuedTicket?.qr_token,
                 recipientName: currentItem.full_name,
                 category: "Project Participant",
                 email: currentItem.email,
@@ -155,19 +179,24 @@ export default function AdminParticipationRegistrations() {
           }
         }
 
-        const emailRes = await sendRegistrationConfirmationEmail(id, "participation", false, {
-          recipientEmail: currentItem?.email,
-          recipientName: currentItem?.full_name,
-          registrationRef: currentItem?.registration_ref,
-          institution: currentItem?.institution || undefined,
-          attachments: pdfAttachments,
-        });
-        emailOk = Boolean(emailRes.ok && !emailRes.simulated);
-        nextEmailStatus = emailOk ? "sent" : "failed";
-        if (emailOk) {
-          emailNotice = " · Confirmation email dispatched with official entry pass & archived to NAS.";
-        } else {
-          emailNotice = ` · Email notice failed: ${emailRes.error}`;
+        ticketNotice = ` · Official ticket issued (${ticketRef})`;
+
+        // Best-effort email copy; ticket issuance never depends on email
+        try {
+          const emailRes = await sendRegistrationConfirmationEmail(id, "participation", false, {
+            recipientEmail: currentItem?.email,
+            recipientName: currentItem?.full_name,
+            registrationRef: currentItem?.registration_ref,
+            institution: currentItem?.institution || undefined,
+            attachments: pdfAttachments,
+          });
+          const emailOk = Boolean(emailRes.ok && !emailRes.simulated);
+          nextEmailStatus = emailOk ? "sent" : "failed";
+          if (emailOk) {
+            ticketNotice += " & emailed to participant.";
+          }
+        } catch {
+          nextEmailStatus = "failed";
         }
       }
 
@@ -193,8 +222,8 @@ export default function AdminParticipationRegistrations() {
       }
 
       setStatusMsg({
-        type: emailOk ? "success" : "error",
-        text: `Registration status updated to ${newStatus.replace("_", " ")}${emailNotice}`,
+        type: "success",
+        text: `Registration status updated to ${newStatus.replace("_", " ")}${ticketNotice}`,
       });
       setTimeout(() => setStatusMsg(null), 5000);
     } catch (err: any) {
@@ -884,11 +913,23 @@ export default function AdminParticipationRegistrations() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center pt-1">
-                  <span className="text-slate-600">Visitor Ticket Code:</span>
+                  <span className="text-slate-600">Official Ticket Ref:</span>
                   <strong className="font-mono text-xs text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-200">
-                    {(selectedReg as any).visitor_ticket_ref || getLocalLinkedTickets()[selectedReg.registration_ref] || `${selectedReg.registration_ref}-VIS`}
+                    {selectedReg.status === "confirmed" && !isRegistrationArchived(selectedReg as any)
+                      ? selectedTicket?.ticket_ref ||
+                        (selectedReg as any).visitor_ticket_ref ||
+                        selectedReg.registration_ref
+                      : "Pending Approval — Not Issued"}
                   </strong>
                 </div>
+                {selectedTicket?.checked_in_at && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Gate Check-In:</span>
+                    <span className="font-mono text-[11px] font-bold text-emerald-700">
+                      Checked in {new Date(selectedTicket.checked_in_at).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600">Email Status:</span>
                   <span className="font-semibold text-slate-800 capitalize">
@@ -898,7 +939,10 @@ export default function AdminParticipationRegistrations() {
 
                 {/* NAS Archive Status */}
                 {(() => {
-                  const tRef = (selectedReg as any).visitor_ticket_ref || getLocalLinkedTickets()[selectedReg.registration_ref] || `${selectedReg.registration_ref}-VIS`;
+                  const tRef =
+                    selectedTicket?.ticket_ref ||
+                    (selectedReg as any).visitor_ticket_ref ||
+                    selectedReg.registration_ref;
                   const nasRecord = getLocalNasArchives().find((a) => a.ticketRef === tRef);
                   return (
                     <div className="pt-2 border-t border-blue-200/60 space-y-1.5">
@@ -924,29 +968,47 @@ export default function AdminParticipationRegistrations() {
                 })()}
 
                 <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const tRef = (selectedReg as any).visitor_ticket_ref || getLocalLinkedTickets()[selectedReg.registration_ref] || `${selectedReg.registration_ref}-VIS`;
-                      downloadTicketPdfFile({
-                        ticketRef: tRef,
-                        recipientName: selectedReg.full_name,
-                        category: "Project Participant",
-                        email: selectedReg.email,
-                        phone: selectedReg.phone,
-                        institution: selectedReg.institution || undefined,
-                        registrationType: "participation",
-                        applicationRef: selectedReg.registration_ref,
-                        projectTitle: selectedReg.project_title || undefined,
-                      });
-                    }}
-                    className="py-2 px-3 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Download size={13} />
-                    <span>Download Ticket</span>
-                  </button>
+                  {selectedReg.status === "confirmed" && !isRegistrationArchived(selectedReg as any) ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        let tkt = selectedTicket;
+                        if (!tkt) {
+                          const issued = await issueTicketForRegistration("participation", selectedReg.id);
+                          if (issued.ok && issued.ticket) {
+                            tkt = issued.ticket;
+                            setSelectedTicket(tkt);
+                          }
+                        }
+                        const tRef =
+                          tkt?.ticket_ref ||
+                          (selectedReg as any).visitor_ticket_ref ||
+                          selectedReg.registration_ref;
+                        await downloadTicketPdfFile({
+                          ticketRef: tRef,
+                          qrToken: tkt?.qr_token,
+                          recipientName: selectedReg.full_name,
+                          category: "Project Participant",
+                          email: selectedReg.email,
+                          phone: selectedReg.phone,
+                          institution: selectedReg.institution || undefined,
+                          registrationType: "participation",
+                          applicationRef: selectedReg.registration_ref,
+                          projectTitle: selectedReg.project_title || undefined,
+                        });
+                      }}
+                      className="py-2 px-3 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Download size={13} />
+                      <span>Download Ticket PDF</span>
+                    </button>
+                  ) : (
+                    <div className="py-2 px-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] font-mono font-semibold text-center">
+                      Approve to Issue Ticket
+                    </div>
+                  )}
 
-                  {canResend && (
+                  {canResend && selectedReg.status === "confirmed" && (
                     <button
                       type="button"
                       disabled={isUpdating}

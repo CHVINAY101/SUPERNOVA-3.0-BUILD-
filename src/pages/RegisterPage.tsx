@@ -2,17 +2,23 @@ import React, { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { SITE_CONTENT } from "../content/site";
-import { CheckCircle2, Copy, GraduationCap, Building2, Users } from "lucide-react";
+import { CheckCircle2, Copy, GraduationCap, Building2, Users, Download, Eye, QrCode, Search, Clock, AlertCircle, X, Ticket } from "lucide-react";
+import QRCode from "qrcode";
 import { supabase } from "../lib/supabase";
 import { getOfficialTeamSize, validateEsportsRoster } from "@/utils/esportsRules";
 import { 
-  unifyAndLinkVisitor, 
   generateTicketReference, 
   sendRegistrationConfirmationEmail 
 } from "@/lib/registrationOperations";
-import { generateTicketPdf, downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import {
+  buildTicketQrContent,
+  generateTicketPdf,
+  downloadTicketPdfFile,
+} from "@/lib/ticketPdfService";
 import { archiveTicketToNas } from "@/lib/nasArchivalService";
-import { Download } from "lucide-react";
+import { lookupPublicTicket, submitVisitorAndIssueTicket } from "@/lib/ticketClient";
+import { TicketPassModal } from "@/components/TicketPassModal";
+import type { PublicTicketLookupResult, TicketRecord } from "@/types/database";
 
 type FormType = "participation" | "visitor" | "esports" | null;
 
@@ -140,11 +146,73 @@ export const RegisterPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [registeredRef, setRegisteredRef] = useState<string | null>(null);
-  const [linkedVisitorTicket, setLinkedVisitorTicket] = useState<string | null>(null);
-  const [squadRosterTickets, setSquadRosterTickets] = useState<{ name: string; tag?: string; ticket: string }[]>([]);
+  const [issuedVisitorTicket, setIssuedVisitorTicket] = useState<TicketRecord | null>(null);
+  const [visitorQrPreviewUrl, setVisitorQrPreviewUrl] = useState<string>("");
+  const [passModalOpen, setPassModalOpen] = useState(false);
   const [emailNotice, setEmailNotice] = useState<string | null>(null);
   const [copiedRef, setCopiedRef] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Anti-IDOR Public Pass Lookup Modal State
+  const [lookupOpen, setLookupOpen] = useState(false);
+  const [lookupRef, setLookupRef] = useState("");
+  const [lookupEmail, setLookupEmail] = useState("");
+  const [lookupPhone, setLookupPhone] = useState("");
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupResult, setLookupResult] = useState<PublicTicketLookupResult | null>(null);
+  const [lookupPassModalOpen, setLookupPassModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!lookupOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLookupOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lookupOpen]);
+
+  useEffect(() => {
+    if (!submitSuccess || selectedType !== "visitor" || !registeredRef) {
+      setVisitorQrPreviewUrl("");
+      return;
+    }
+    let active = true;
+    const qrContent = buildTicketQrContent(
+      issuedVisitorTicket?.ticket_ref || registeredRef,
+      issuedVisitorTicket?.qr_token
+    );
+    QRCode.toDataURL(qrContent, {
+      errorCorrectionLevel: "H",
+      margin: 1,
+      width: 240,
+      color: { dark: "#0B1120", light: "#FFFFFF" },
+    })
+      .then((url) => {
+        if (active) setVisitorQrPreviewUrl(url);
+      })
+      .catch(() => {
+        if (active) setVisitorQrPreviewUrl("");
+      });
+    return () => {
+      active = false;
+    };
+  }, [submitSuccess, selectedType, registeredRef, issuedVisitorTicket]);
+
+  const handleLookupPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLookupLoading(true);
+    setLookupResult(null);
+    try {
+      const res = await lookupPublicTicket({
+        reference: lookupRef,
+        email: lookupEmail,
+        phone: lookupPhone,
+      });
+      setLookupResult(res);
+    } finally {
+      setLookupLoading(false);
+    }
+  };
 
   // When game selection changes, resize players roster to match exact official team_size
   const handleGameChange = (gameId: string) => {
@@ -310,8 +378,8 @@ export const RegisterPage: React.FC = () => {
 
     setIsSubmitting(true);
     setSubmitError(null);
-    setLinkedVisitorTicket(null);
-    setSquadRosterTickets([]);
+    setIssuedVisitorTicket(null);
+    setVisitorQrPreviewUrl("");
     setEmailNotice(null);
 
     try {
@@ -321,65 +389,44 @@ export const RegisterPage: React.FC = () => {
             ? (visInstitutionSelect === "Other" ? visInstitutionOther.trim() : visInstitutionSelect.trim())
             : (visOrg.trim() || "General Visitor");
 
-        let refStr = "";
-        let visitorRecordId = "";
-
-        // Attempt submit_visitor_registration_v2 with complete conditional fields
-        const { data: v2Data, error: v2Error } = await supabase.rpc("submit_visitor_registration_v2", {
-          p_full_name: visName.trim(),
-          p_email: visEmail.trim().toLowerCase(),
-          p_phone: visPhone.trim(),
-          p_institution: effectiveInstitution,
-          p_visitor_category: visCategory,
-          p_student_class: visCategory === "Student" ? visStudentClass : null,
-          p_student_id: visCategory === "Student" ? visStudentId.trim() : null,
-          p_designation: visCategory === "Faculty / Staff" ? visDesignation.trim() : null,
-          p_esports_interest: visCategory === "Student" ? visEsportsInterest : false,
-          p_preferred_game: visCategory === "Student" && visEsportsInterest ? visPreferredGame : null,
-          p_esports_intent: visCategory === "Student" && visEsportsInterest ? visEsportsIntent : null,
-          p_in_game_id: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visInGameId.trim() : null,
-          p_team_name: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visTeamName.trim() : null,
-          p_competition_notes: visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing" ? visCompetitionNotes.trim() : null,
-          p_days_attending: visDays,
-          p_consent: true,
-          p_website: "",
+        const submissionRes = await submitVisitorAndIssueTicket({
+          fullName: visName.trim(),
+          email: visEmail.trim().toLowerCase(),
+          phone: visPhone.trim(),
+          institution: effectiveInstitution,
+          visitorCategory: visCategory,
+          studentClass: visCategory === "Student" ? visStudentClass : null,
+          studentId: visCategory === "Student" ? visStudentId.trim() : null,
+          designation: visCategory === "Faculty / Staff" ? visDesignation.trim() : null,
+          esportsInterest: visCategory === "Student" ? visEsportsInterest : false,
+          preferredGame: visCategory === "Student" && visEsportsInterest ? visPreferredGame : null,
+          esportsIntent: visCategory === "Student" && visEsportsInterest ? visEsportsIntent : null,
+          inGameId:
+            visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing"
+              ? visInGameId.trim()
+              : null,
+          teamName:
+            visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing"
+              ? visTeamName.trim()
+              : null,
+          competitionNotes:
+            visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing"
+              ? visCompetitionNotes.trim()
+              : null,
+          daysAttending: visDays,
         });
 
-        if (!v2Error && v2Data) {
-          refStr = typeof v2Data === "string" ? v2Data : String(v2Data);
-        } else {
-          // If v2 is not yet deployed, fallback gracefully to base submit_visitor_registration
-          let fallbackCat = "General visitor";
-          if (visCategory === "Student") {
-            fallbackCat = (visStudentClass.includes("PUC") || visStudentClass.includes("Degree"))
-              ? "College student"
-              : "School student";
-          } else if (visCategory === "Faculty / Staff") {
-            fallbackCat = "Teacher or educator";
-          }
+        const ticketRef = submissionRes.ticket?.ticket_ref || submissionRes.registrationRef;
+        const qrToken = submissionRes.ticket?.qr_token;
+        setRegisteredRef(ticketRef);
+        setIssuedVisitorTicket(submissionRes.ticket || null);
 
-          const { data: fallbackData, error: fallbackError } = await supabase.rpc("submit_visitor_registration", {
-            p_full_name: visName.trim(),
-            p_email: visEmail.trim().toLowerCase(),
-            p_phone: visPhone.trim(),
-            p_institution: effectiveInstitution,
-            p_visitor_category: fallbackCat,
-            p_consent: true,
-            p_website: "",
-          });
-
-          if (fallbackError) throw fallbackError;
-          refStr = typeof fallbackData === "string" ? fallbackData : "SN3-26-REG";
-        }
-
-        setRegisteredRef(refStr);
-        setLinkedVisitorTicket(refStr);
-
-        // Generate digital ticket PDF and archive to NAS immediately
+        // Generate PDF ticket (with secure token when available) and archive best-effort
         let ticketPdfAttachments: { filename: string; contentType: string; base64Content: string }[] = [];
         try {
           const ticketRes = await generateTicketPdf({
-            ticketRef: refStr,
+            ticketRef,
+            qrToken,
             recipientName: visName.trim(),
             category: visCategory,
             email: visEmail.trim().toLowerCase(),
@@ -398,7 +445,8 @@ export const RegisterPage: React.FC = () => {
           ];
 
           await archiveTicketToNas(ticketRes, {
-            ticketRef: refStr,
+            ticketRef,
+            qrToken,
             recipientName: visName.trim(),
             category: visCategory,
             email: visEmail.trim().toLowerCase(),
@@ -411,34 +459,18 @@ export const RegisterPage: React.FC = () => {
           console.warn("NAS archival / PDF creation notice:", nasErr);
         }
 
-        // 3. Confirm that ID / record exists in the database and trigger visitor confirmation email
-        try {
-          const { data: createdRecord } = await supabase
-            .from("visitor_registrations")
-            .select("id")
-            .eq("registration_ref", refStr)
-            .limit(1)
-            .maybeSingle();
-
-          if (createdRecord?.id) {
-            visitorRecordId = createdRecord.id;
-          }
-        } catch {
-          // RLS query fallback
-        }
-
-        // Trigger visitor confirmation email with PDF attachment and honest status reporting
+        // Best-effort email copy (ticket issuance does NOT depend on email delivery)
         let emailNoticeText =
-          "Your Visitor Pass is confirmed! Automatic email dispatch could not complete right now — please download your official PDF ticket pass below.";
+          "Your official pass is active immediately above — download your PDF ticket or screenshot your QR pass now. You can also retrieve it anytime using your Ticket Reference, Email, and Phone.";
         try {
           const emailRes = await sendRegistrationConfirmationEmail(
-            visitorRecordId || refStr,
+            submissionRes.registrationId || ticketRef,
             "visitor",
             false,
             {
               recipientEmail: visEmail.trim().toLowerCase(),
               recipientName: visName.trim(),
-              registrationRef: refStr,
+              registrationRef: ticketRef,
               institution: effectiveInstitution,
               extraDetails: {
                 category: visCategory,
@@ -450,12 +482,10 @@ export const RegisterPage: React.FC = () => {
 
           if (emailRes.ok && !emailRes.simulated) {
             emailNoticeText =
-              "An official confirmation email with your printable PDF ticket pass has been dispatched to your email address.";
-          } else {
-            console.warn("Visitor confirmation email failure:", emailRes.error);
+              "Your official pass is active immediately above, and a copy of your PDF ticket has also been emailed to you.";
           }
-        } catch (emailErr) {
-          console.warn("Direct visitor email dispatch exception:", emailErr);
+        } catch {
+          // Email is optional; ticket pass is already generated and downloadable directly
         }
 
         setEmailNotice(emailNoticeText);
@@ -468,13 +498,11 @@ export const RegisterPage: React.FC = () => {
         const gameTitle = game?.title || "Tournament Title";
         const expectedCount = getOfficialTeamSize(game?.title, game?.team_size);
 
-        // Multi-level frontend and submission handler validation
         const validation = validateEsportsRoster(gameTitle, espPlayers.slice(0, expectedCount));
         if (!validation.isValid) {
           throw new Error(validation.errorMessage || `All ${expectedCount} players are required.`);
         }
 
-        // Construct payload using strictly the permitted number of players
         const playersPayload = espPlayers.slice(0, expectedCount).map((p) => ({
           player_name: p.name.trim(),
           gamer_tag: p.inGameId.trim(),
@@ -502,56 +530,14 @@ export const RegisterPage: React.FC = () => {
         const refStr = typeof data === "string" ? data : "SN3-26-REG";
         setRegisteredRef(refStr);
 
-        // Auto-create/link visitor record for captain (deduplicated)
-        const capLink = await unifyAndLinkVisitor({
-          name: espRep.trim(),
-          email: espEmail.trim().toLowerCase(),
-          phone: espPhone.trim(),
-          institution: espInstitution.trim(),
-          source: "esports_captain",
-          linkedRef: refStr,
-          category: "Esports Player",
-          esportsInterest: true,
-          preferredGame: gameTitle,
-          teamName: espTeamName.trim(),
-        });
-        setLinkedVisitorTicket(capLink.ticketRef);
-
-        // Auto-create/link visitor tickets for all squad players
-        const rosterTickets: { name: string; tag?: string; ticket: string }[] = [];
-        for (let i = 0; i < playersPayload.length; i++) {
-          const player = playersPayload[i];
-          const playerTicket = `${refStr}-P${i + 1}`;
-          await unifyAndLinkVisitor({
-            name: player.player_name,
-            email: `${refStr.toLowerCase()}_p${i + 1}@esports.supernova`,
-            phone: espPhone.trim(),
-            institution: espInstitution.trim(),
-            source: "esports_player",
-            linkedRef: refStr,
-            category: "Esports Player",
-            esportsInterest: true,
-            preferredGame: gameTitle,
-            inGameId: player.gamer_tag,
-            teamName: espTeamName.trim(),
-          });
-          rosterTickets.push({
-            name: player.player_name,
-            tag: player.gamer_tag,
-            ticket: playerTicket,
-          });
-        }
-        setSquadRosterTickets(rosterTickets);
-
-        // Email rule: Do not send email immediately! Send only after admin approves.
+        // Strictly NO ticket issuance until esports confirmation succeeds
         setEmailNotice(
-          "Your esports squad registration has been logged for tournament bracket verification. Once an administrator approves your team, the captain will receive an email confirmation with full squad entry credentials."
+          "Your esports squad registration has been submitted for verification. Your official team pass and QR ticket will be issued and unlocked for download only after confirmation is completed."
         );
         setSubmitSuccess(true);
       } else if (selectedType === "participation") {
         let partRef = "";
 
-        // Attempt RPC first
         const { data, error } = await supabase.rpc("submit_participation_registration", {
           p_full_name: partContactPerson.trim(),
           p_email: partEmail.trim().toLowerCase(),
@@ -569,7 +555,6 @@ export const RegisterPage: React.FC = () => {
         if (!error && data) {
           partRef = typeof data === "string" ? data : String(data);
         } else {
-          // Direct fallback insert if RPC not present in schema cache
           partRef = generateTicketReference("SN3-26");
           const { error: insertErr } = await supabase.from("participation_registrations").insert({
             registration_ref: partRef,
@@ -592,21 +577,9 @@ export const RegisterPage: React.FC = () => {
 
         setRegisteredRef(partRef);
 
-        // Auto-create/link visitor record for participant (deduplicated)
-        const partLink = await unifyAndLinkVisitor({
-          name: partContactPerson.trim(),
-          email: partEmail.trim().toLowerCase(),
-          phone: partPhone.trim(),
-          institution: partInstitution.trim(),
-          source: "participation",
-          linkedRef: partRef,
-          category: "Project Participant",
-        });
-        setLinkedVisitorTicket(partLink.ticketRef);
-
-        // Email rule: Do not send email immediately! Send only after admin approves.
+        // Strictly NO ticket issuance until administrator approval succeeds
         setEmailNotice(
-          "Your project exhibit application has been submitted to the screening committee. Your official entry pass and confirmation email will be issued once approved by the event administrators."
+          "Your participation application is pending administrator approval. Once approved, return here and use \"Retrieve Official Pass\" with your application code, email, and phone to view and download your PDF ticket."
         );
         setSubmitSuccess(true);
       }
@@ -645,11 +618,24 @@ export const RegisterPage: React.FC = () => {
       </div>
 
       <div className="max-w-5xl mx-auto px-6 sm:px-8 pt-12">
-        {/* Step 1: Choose Option */}
-        <div className="text-center mb-8">
-          <label className="text-base sm:text-lg font-bold text-[#191936]">
-            {content.chooseLabel}
-          </label>
+        {/* Step 1: Choose Option + Existing Pass Lookup CTA */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+          <div className="text-center sm:text-left">
+            <label className="text-base sm:text-lg font-bold text-[#191936] block">
+              {content.chooseLabel}
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setLookupResult(null);
+              setLookupOpen(true);
+            }}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border-2 border-[#191936] bg-white hover:bg-[#D5F542] text-xs font-mono font-bold text-[#191936] shadow-[3px_3px_0px_#191936] transition-all cursor-pointer"
+          >
+            <Ticket className="w-4 h-4 text-[#4549D8]" />
+            <span>Already Registered? View / Download Official Pass</span>
+          </button>
         </div>
 
         {/* Three Cards (3 columns, 24px gaps, stacked on mobile) */}
@@ -719,128 +705,183 @@ export const RegisterPage: React.FC = () => {
               </div>
 
               {submitSuccess ? (
-                <div className="text-center py-8 space-y-5">
-                  <div className="w-16 h-16 rounded-full bg-[#D5F542] border-2 border-[#191936] mx-auto flex items-center justify-center text-[#191936]">
-                    <CheckCircle2 className="w-8 h-8" />
+                <div className="text-center py-6 space-y-5">
+                  <div
+                    className={`w-16 h-16 rounded-full border-2 border-[#191936] mx-auto flex items-center justify-center text-[#191936] ${
+                      selectedType === "visitor" ? "bg-[#D5F542]" : "bg-[#FFF3CD]"
+                    }`}
+                  >
+                    {selectedType === "visitor" ? (
+                      <CheckCircle2 className="w-8 h-8" />
+                    ) : (
+                      <Clock className="w-8 h-8" />
+                    )}
                   </div>
                   <div>
                     <h3 className="font-heading text-2xl sm:text-3xl font-black text-[#191936] uppercase tracking-tight">
-                      {selectedType === "visitor" ? "Visitor Pass Issued" : "Registration Received"}
+                      {selectedType === "visitor"
+                        ? "Registration Successful — Official Pass Issued"
+                        : selectedType === "esports"
+                        ? "Esports Registration Submitted"
+                        : "Participation Application Submitted"}
                     </h3>
                     <p className="text-xs sm:text-sm text-[#191936]/80 max-w-md mx-auto mt-1">
                       {selectedType === "visitor"
-                        ? "Your entry badge credentials have been generated and dispatched."
-                        : "Thank you for registering for Supernova 3.0 at The National College, Basavanagudi."}
+                        ? "Your visitor pass is active immediately. View or download your PDF QR ticket below."
+                        : "Your registration is currently pending confirmation. Your official pass will be issued once approved."}
                     </p>
                   </div>
 
-                  {/* Primary Registration Reference */}
+                  {/* Primary Registration / Ticket Reference */}
                   {registeredRef && (
-                    <div className="bg-[#F8F7FC] border-2 border-[#191936] rounded-2xl p-4 sm:p-5 max-w-lg mx-auto text-left shadow-[4px_4px_0px_#191936]">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-[11px] font-mono uppercase tracking-wider text-[#52527A] font-bold">
+                    <div className="bg-[#0B1120] text-white border-2 border-[#191936] rounded-2xl p-5 sm:p-6 max-w-xl mx-auto text-left shadow-[6px_6px_0px_#4549D8] space-y-4">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-[11px] font-mono uppercase tracking-wider text-slate-300 font-bold">
                           {selectedType === "visitor"
-                            ? "Visitor Ticket Number"
+                            ? "Unique Ticket Reference"
                             : selectedType === "esports"
-                            ? "Esports Squad Application Code"
-                            : "Project Application Code"}
+                            ? "Esports Application Reference"
+                            : "Participation Application Reference"}
                         </span>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-[#D5F542] text-[#191936] uppercase">
-                          {selectedType === "visitor" ? "Confirmed Pass" : "Logged for Review"}
+                        <span
+                          className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase ${
+                            selectedType === "visitor"
+                              ? "bg-[#D5F542] text-[#0B1120]"
+                              : "bg-amber-400/20 text-amber-300 border border-amber-400/40"
+                          }`}
+                        >
+                          {selectedType === "visitor"
+                            ? "Confirmed · Active Pass"
+                            : "Pending Approval — No Ticket Yet"}
                         </span>
                       </div>
+
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-xl sm:text-2xl font-black text-[#4549D8] tracking-wider select-all">
+                        <span className="font-mono text-xl sm:text-2xl font-black text-[#D5F542] tracking-wider select-all">
                           {registeredRef}
                         </span>
                         <button
                           type="button"
                           onClick={copyRefToClipboard}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#191936] bg-white text-xs font-mono font-bold text-[#191936] hover:bg-[#D5F542] transition-colors cursor-pointer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-600 bg-slate-800 text-xs font-mono font-bold text-white hover:bg-slate-700 transition-colors cursor-pointer"
                         >
                           <Copy className="w-3.5 h-3.5" />
                           {copiedRef ? "Copied!" : "Copy"}
                         </button>
                       </div>
 
-                      {/* Linked Visitor Pass if participation */}
-                      {selectedType === "participation" && linkedVisitorTicket && (
-                        <div className="mt-3 pt-3 border-t border-[#EAEAF2] flex items-center justify-between text-xs">
-                          <span className="text-[#52527A] font-medium">Auto-Linked Visitor Entry Pass:</span>
-                          <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                            {linkedVisitorTicket}
-                          </span>
+                      {/* Immediate Visitor QR Preview + View Ticket + Download PDF */}
+                      {selectedType === "visitor" && (
+                        <div className="pt-4 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-[1fr_152px] gap-4 items-center">
+                          <div className="space-y-3">
+                            <div className="text-xs text-slate-300 space-y-1">
+                              <p className="font-bold text-white m-0">
+                                {visName.trim() || "Visitor"} · {visCategory}
+                              </p>
+                              <p className="text-slate-400 m-0">
+                                Attendance: {visDays} · 20–21 November 2026
+                              </p>
+                              <p className="text-cyan-300 text-[11px] m-0">
+                                Present this QR pass (digital or printed PDF) with valid photo ID at the venue entrance.
+                              </p>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setPassModalOpen(true)}
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-mono font-bold text-white cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-cyan-300" />
+                                <span>View Ticket</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  downloadTicketPdfFile({
+                                    ticketRef: issuedVisitorTicket?.ticket_ref || registeredRef,
+                                    qrToken: issuedVisitorTicket?.qr_token,
+                                    recipientName: visName.trim() || "Visitor",
+                                    category: visCategory,
+                                    email: visEmail.trim(),
+                                    phone: visPhone.trim(),
+                                    institution:
+                                      visCategory === "Student" || visCategory === "Faculty / Staff"
+                                        ? visInstitutionSelect === "Other"
+                                          ? visInstitutionOther.trim()
+                                          : visInstitutionSelect.trim()
+                                        : visOrg.trim() || "General Visitor",
+                                    registrationType: "visitor",
+                                    daysAttending: visDays,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#D5F542] hover:bg-[#c6e830] text-xs font-mono font-black text-[#0B1120] cursor-pointer"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Download PDF</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Inline QR Preview */}
+                          <div className="bg-white rounded-2xl p-2.5 text-center border-2 border-cyan-400/70 mx-auto w-[152px]">
+                            {visitorQrPreviewUrl ? (
+                              <img
+                                src={visitorQrPreviewUrl}
+                                alt={`Visitor QR Code ${registeredRef}`}
+                                className="w-32 h-32 mx-auto block"
+                              />
+                            ) : (
+                              <div className="w-32 h-32 mx-auto flex items-center justify-center text-[11px] font-mono text-slate-500">
+                                Loading QR...
+                              </div>
+                            )}
+                            <span className="block mt-1 text-[10px] font-mono font-bold text-[#0B1120] uppercase">
+                              QR Preview
+                            </span>
+                          </div>
                         </div>
                       )}
 
-                      {/* Download Ticket PDF button for direct visitors */}
-                      {selectedType === "visitor" && (
-                        <div className="mt-4 pt-3 border-t border-[#EAEAF2] flex items-center justify-between">
-                          <span className="text-xs text-[#52527A]">Download official entry pass:</span>
+                      {/* Pending approval instructions for Participation & Esports */}
+                      {selectedType !== "visitor" && (
+                        <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <span className="text-xs text-slate-300">
+                            Save your reference code to check approval status & download your PDF pass later.
+                          </span>
                           <button
                             type="button"
-                            onClick={() =>
-                              downloadTicketPdfFile({
-                                ticketRef: registeredRef,
-                                recipientName: visName.trim() || "Visitor",
-                                category: visCategory,
-                                email: visEmail.trim(),
-                                phone: visPhone.trim(),
-                                institution:
-                                  visCategory === "Student" || visCategory === "Faculty / Staff"
-                                    ? (visInstitutionSelect === "Other" ? visInstitutionOther.trim() : visInstitutionSelect.trim())
-                                    : (visOrg.trim() || "General Visitor"),
-                                registrationType: "visitor",
-                                daysAttending: visDays,
-                              })
-                            }
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border-2 border-[#191936] bg-[#D5F542] text-xs font-mono font-bold text-[#191936] hover:bg-[#befc15] shadow-[2px_2px_0px_#191936] transition-transform active:translate-y-0.5 cursor-pointer"
+                            onClick={() => {
+                              setLookupRef(registeredRef);
+                              setLookupEmail(selectedType === "esports" ? espEmail : partEmail);
+                              setLookupPhone(selectedType === "esports" ? espPhone : partPhone);
+                              setLookupResult(null);
+                              setLookupOpen(true);
+                            }}
+                            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-mono font-bold text-cyan-300 cursor-pointer"
                           >
-                            <Download className="w-3.5 h-3.5" />
-                            Download Ticket PDF
+                            <Search className="w-3.5 h-3.5" />
+                            <span>Check Pass Status</span>
                           </button>
                         </div>
                       )}
 
-                      {/* Notice */}
                       {emailNotice && (
-                        <p className="text-[11px] text-[#52527A] mt-3 leading-relaxed border-t border-[#EAEAF2] pt-2.5">
+                        <p className="text-[11px] text-slate-300 leading-relaxed border-t border-slate-800 pt-3 m-0">
                           {emailNotice}
                         </p>
                       )}
                     </div>
                   )}
 
-                  {/* Esports Squad Passes */}
-                  {selectedType === "esports" && squadRosterTickets.length > 0 && (
-                    <div className="bg-white border-2 border-[#191936] rounded-2xl p-4 max-w-lg mx-auto text-left shadow-[4px_4px_0px_#191936]">
-                      <div className="text-[11px] font-mono uppercase tracking-wider text-[#191936] font-bold mb-2">
-                        Roster Visitor Tickets (Active upon Approval)
-                      </div>
-                      <div className="space-y-1.5 text-xs">
-                        {squadRosterTickets.map((r, i) => (
-                          <div
-                            key={i}
-                            className="flex items-center justify-between p-2 rounded-lg bg-[#F8F7FC] border border-[#EAEAF2]"
-                          >
-                            <span className="font-semibold text-slate-800">
-                              {i + 1}. {r.name} {r.tag ? `(${r.tag})` : ""}
-                            </span>
-                            <span className="font-mono text-xs font-bold text-[#4549D8] bg-white px-2 py-0.5 rounded border border-slate-200">
-                              {r.ticket}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
                   {/* Event Details Card */}
-                  <div className="p-3.5 rounded-xl bg-[#F0F2FD] border border-[#4549D8]/30 max-w-lg mx-auto text-left text-xs text-[#191936]">
+                  <div className="p-3.5 rounded-xl bg-[#F0F2FD] border border-[#4549D8]/30 max-w-xl mx-auto text-left text-xs text-[#191936]">
                     <div className="font-bold uppercase tracking-wider text-[11px] text-[#4549D8] mb-1">
-                      Event Schedule & Venue
+                      Confirmed Venue & Dates
                     </div>
-                    <div>20–21 November 2026 · The National College, Basavanagudi, Bengaluru – 560004</div>
+                    <div>
+                      20–21 November 2026 · The National College, Basavanagudi, Bengaluru – 04 · Schedule: TBA
+                    </div>
                   </div>
 
                   <button
@@ -848,8 +889,8 @@ export const RegisterPage: React.FC = () => {
                     onClick={() => {
                       setSubmitSuccess(false);
                       setRegisteredRef(null);
-                      setLinkedVisitorTicket(null);
-                      setSquadRosterTickets([]);
+                      setIssuedVisitorTicket(null);
+                      setVisitorQrPreviewUrl("");
                       setEmailNotice(null);
                     }}
                     className="btn-secondary mt-2 cursor-pointer"
@@ -1625,6 +1666,218 @@ export const RegisterPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* View Ticket Modal for Fresh Visitor Pass */}
+      {registeredRef && (
+        <TicketPassModal
+          isOpen={passModalOpen}
+          onClose={() => setPassModalOpen(false)}
+          ticketRef={issuedVisitorTicket?.ticket_ref || registeredRef}
+          qrToken={issuedVisitorTicket?.qr_token}
+          registrationCategory="visitor"
+          displayName={visName.trim() || "Visitor"}
+          subtitle={visCategory}
+          institution={
+            visCategory === "Student" || visCategory === "Faculty / Staff"
+              ? visInstitutionSelect === "Other"
+                ? visInstitutionOther.trim()
+                : visInstitutionSelect.trim()
+              : visOrg.trim() || "General Visitor"
+          }
+          email={visEmail.trim()}
+          phone={visPhone.trim()}
+          daysAttending={visDays}
+          issuedAt={issuedVisitorTicket?.issued_at}
+          checkedInAt={issuedVisitorTicket?.checked_in_at}
+        />
+      )}
+
+      {/* Anti-IDOR Official Pass Lookup & Re-Download Modal */}
+      {lookupOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sn3-pass-lookup-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
+          onClick={() => setLookupOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg bg-white rounded-3xl border-2 border-[#191936] shadow-[8px_8px_0px_#191936] overflow-hidden"
+          >
+            <div className="px-6 py-4 bg-[#0B1120] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <QrCode className="w-5 h-5 text-[#D5F542]" />
+                <div>
+                  <h2 id="sn3-pass-lookup-title" className="text-base font-display font-black uppercase text-white m-0">
+                    Retrieve Official Pass
+                  </h2>
+                  <p className="text-[11px] font-mono text-cyan-300 m-0">
+                    Reference + Email + Mobile verification required
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLookupOpen(false)}
+                aria-label="Close pass lookup"
+                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <form onSubmit={handleLookupPass} className="space-y-3.5">
+                <div>
+                  <label className="form-label">Registration / Ticket Reference *</label>
+                  <input
+                    type="text"
+                    required
+                    value={lookupRef}
+                    onChange={(e) => setLookupRef(e.target.value.toUpperCase())}
+                    placeholder="e.g. SN3-26-481209"
+                    className="form-input font-mono uppercase"
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="form-label">Registered Email *</label>
+                    <input
+                      type="email"
+                      required
+                      value={lookupEmail}
+                      onChange={(e) => setLookupEmail(e.target.value)}
+                      placeholder="name@example.com"
+                      className="form-input"
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">Registered Phone *</label>
+                    <input
+                      type="tel"
+                      required
+                      value={lookupPhone}
+                      onChange={(e) => setLookupPhone(e.target.value)}
+                      placeholder="10-digit mobile number"
+                      className="form-input font-mono"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={lookupLoading}
+                  className="btn-primary w-full justify-center cursor-pointer"
+                >
+                  {lookupLoading ? "Checking..." : "Verify & Retrieve Pass"}
+                </button>
+              </form>
+
+              {lookupResult && (
+                <div className="pt-2">
+                  {lookupResult.ok && lookupResult.ticket ? (
+                    <div className="p-4 rounded-2xl bg-[#0B1120] text-white border border-slate-700 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <span className="text-[10px] font-mono uppercase text-slate-400 block">
+                            Verified Pass Ready
+                          </span>
+                          <strong className="font-mono text-lg text-[#D5F542]">
+                            {lookupResult.ticket.ticket_ref}
+                          </strong>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-full bg-[#D5F542] text-[#0B1120] font-mono text-[10px] font-black uppercase">
+                          {lookupResult.ticket.checked_in_at ? "Checked In" : "Active Pass"}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-300">
+                        <strong className="text-white block">{lookupResult.ticket.display_name}</strong>
+                        <span>{lookupResult.ticket.subtitle || lookupResult.ticket.registration_category}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setLookupPassModalOpen(true)}
+                          className="flex-1 min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono font-bold text-white cursor-pointer"
+                        >
+                          <Eye size={14} />
+                          <span>View Pass & QR</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            downloadTicketPdfFile({
+                              ticketRef: lookupResult.ticket!.ticket_ref,
+                              qrToken: lookupResult.ticket!.qr_token,
+                              recipientName: lookupResult.ticket!.display_name,
+                              category:
+                                lookupResult.ticket!.subtitle ||
+                                lookupResult.ticket!.registration_category,
+                              email: lookupEmail.trim(),
+                              phone: lookupPhone.trim(),
+                              institution: lookupResult.ticket!.institution || undefined,
+                              registrationType:
+                                lookupResult.ticket!.registration_category === "esports"
+                                  ? "esports_team"
+                                  : lookupResult.ticket!.registration_category === "participation"
+                                  ? "participation"
+                                  : "visitor",
+                            })
+                          }
+                          className="flex-1 min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 rounded-xl bg-[#D5F542] hover:bg-[#c6e830] text-xs font-mono font-black text-[#0B1120] cursor-pointer"
+                        >
+                          <Download size={14} />
+                          <span>Download PDF</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+                        lookupResult.status === "pending_approval"
+                          ? "bg-amber-50 border-amber-300 text-amber-900"
+                          : "bg-rose-50 border-rose-200 text-rose-900"
+                      }`}
+                    >
+                      {lookupResult.status === "pending_approval" ? (
+                        <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      )}
+                      <div>
+                        <strong className="block mb-0.5">
+                          {lookupResult.status === "pending_approval"
+                            ? "Pending Confirmation — Pass Not Yet Issued"
+                            : "Unable to Retrieve Pass"}
+                        </strong>
+                        <span>{lookupResult.error}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full Ticket Pass Preview Modal for Looked-up Pass */}
+      {lookupResult?.ok && lookupResult.ticket && (
+        <TicketPassModal
+          isOpen={lookupPassModalOpen}
+          onClose={() => setLookupPassModalOpen(false)}
+          ticketRef={lookupResult.ticket.ticket_ref}
+          qrToken={lookupResult.ticket.qr_token}
+          registrationCategory={lookupResult.ticket.registration_category}
+          displayName={lookupResult.ticket.display_name}
+          subtitle={lookupResult.ticket.subtitle}
+          institution={lookupResult.ticket.institution}
+          email={lookupEmail.trim()}
+          phone={lookupPhone.trim()}
+          issuedAt={lookupResult.ticket.issued_at}
+          checkedInAt={lookupResult.ticket.checked_in_at}
+        />
+      )}
     </div>
   );
 };

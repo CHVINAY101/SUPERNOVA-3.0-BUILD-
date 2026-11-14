@@ -48,7 +48,7 @@ const navSections: NavSection[] = [
     title: "Today",
     items: [
       { to: "/admin", label: "Dashboard", icon: LayoutDashboard },
-      { to: "/admin/checkin", label: "Entry & Check-in", icon: UserCheck },
+      { to: "/admin/checkin", label: "Ticket Verification / Gate Entry", icon: UserCheck },
       { to: "/admin/esports-control", label: "Esports Control", icon: Gamepad2 },
       { to: "/admin/conductor-matches", label: "Match Console", icon: Trophy },
     ],

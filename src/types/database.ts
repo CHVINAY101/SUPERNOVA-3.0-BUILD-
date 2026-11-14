@@ -495,3 +495,45 @@ export interface CrmEmail {
   created_at: string;
   sent_at?: string | null;
 }
+
+export type TicketCategory = "visitor" | "participation" | "esports";
+export type TicketRecordStatus = "active" | "cancelled" | "revoked";
+export type GateVerdict = "VALID" | "ALREADY USED" | "INVALID";
+
+export interface TicketRecord {
+  id: string;
+  ticket_ref: string;
+  qr_token: string;
+  registration_id: string;
+  registration_category: TicketCategory;
+  registration_ref: string;
+  display_name: string;
+  subtitle?: string | null;
+  institution?: string | null;
+  metadata?: Record<string, unknown> | null;
+  status: TicketRecordStatus | string;
+  registration_status?: string | null;
+  issued_at: string;
+  checked_in_at?: string | null;
+  checked_in_by?: string | null;
+  checked_in_by_email?: string | null;
+}
+
+export interface GateVerificationResult {
+  ok: boolean;
+  verdict: GateVerdict;
+  can_check_in: boolean;
+  reason?: string;
+  error?: string;
+  ticket?: Omit<TicketRecord, "qr_token"> & { qr_token?: string };
+}
+
+export interface PublicTicketLookupResult {
+  ok: boolean;
+  status: "issued" | "pending_approval" | "not_eligible" | "not_found" | "invalid_input" | "error";
+  registration_category?: TicketCategory;
+  registration_status?: string;
+  error?: string;
+  ticket?: TicketRecord;
+}
+

@@ -15,11 +15,14 @@ import {
 import type {
   CheckIn,
   EventDaySession,
+  GateVerificationResult,
   RegistrationStatus,
   TournamentSelectionStatus,
   WristbandCategory,
   WristbandIssuance,
 } from "@/types/database";
+import { parseSecureQrPayload } from "@/lib/ticketing";
+import { checkinGateTicket, verifyGateTicket } from "@/lib/ticketClient";
 import {
   Search,
   CheckCircle,
@@ -97,6 +100,10 @@ export default function AdminCheckin() {
 
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [rawQrInput, setRawQrInput] = useState("");
+  const [gateVerification, setGateVerification] = useState<GateVerificationResult | null>(null);
+  const [verifyingGate, setVerifyingGate] = useState(false);
+  const [checkingInGate, setCheckingInGate] = useState(false);
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -140,6 +147,70 @@ export default function AdminCheckin() {
   const [walkInSubmitting, setWalkInSubmitting] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const handleVerifyGateInput = useCallback(async (rawOrQuery: string) => {
+    const trimmed = rawOrQuery.trim();
+    if (!trimmed) {
+      setGateVerification(null);
+      return;
+    }
+    setRawQrInput(trimmed);
+    setVerifyingGate(true);
+    setStatusMessage(null);
+    try {
+      const parsed = parseSecureQrPayload(trimmed);
+      const res = await verifyGateTicket(trimmed);
+      setGateVerification(res);
+      const displayRef = parsed.ticketRef || res.ticket?.ticket_ref || trimmed;
+      setSearchQuery(displayRef);
+    } catch (err: any) {
+      setGateVerification({
+        ok: false,
+        verdict: "INVALID",
+        can_check_in: false,
+        error: err?.message || "Gate verification request failed.",
+      });
+    } finally {
+      setVerifyingGate(false);
+    }
+  }, []);
+
+  const handleAuthoritativeGateCheckIn = async () => {
+    if (!gateVerification?.ticket?.ticket_ref) return;
+    setCheckingInGate(true);
+    setStatusMessage(null);
+    try {
+      const parsed = parseSecureQrPayload(rawQrInput);
+      const tkt = gateVerification.ticket;
+      const defaultBand =
+        tkt.registration_category === "esports"
+          ? wristbandCategories.find((c) => c.slug === "esports-participant")?.name || "Esports Participant"
+          : wristbandCategories.find((c) => c.slug === "general-visitor")?.name || "General Visitor";
+
+      const res = await checkinGateTicket({
+        ticketRef: tkt.ticket_ref,
+        qrToken: parsed.qrToken,
+        eventDay,
+        wristbandCategory: canIssueWristband ? defaultBand : null,
+      });
+
+      setGateVerification(res);
+      if (res.ok && res.verdict === "VALID") {
+        setStatusMessage({
+          type: "success",
+          text: `Gate Entry Approved & Checked In: ${tkt.display_name} (${tkt.ticket_ref}) on ${eventDay}.`,
+        });
+        await fetchEntryData();
+      } else {
+        setStatusMessage({
+          type: "error",
+          text: res.error || res.reason || `Entry blocked: ${res.verdict}`,
+        });
+      }
+    } finally {
+      setCheckingInGate(false);
+    }
+  };
 
   const fetchEntryData = useCallback(async () => {
     try {
@@ -668,13 +739,13 @@ export default function AdminCheckin() {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-3 border-b border-slate-200">
         <div>
           <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-200 inline-block">
-            Event Entry & Verification Centre
+            Ticket Verification / Gate Entry
           </span>
           <h1 className="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight mt-1 mb-1">
-            Gate Check-in & Wristband Verification
+            Ticket Verification / Gate Entry
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 m-0">
-            Scan QR passes or search Ticket IDs to verify visitor/esports eligibility, prevent duplicate entries, and issue wristbands.
+            Scan QR codes or search ticket numbers to verify authenticity (VALID / ALREADY USED / INVALID), prevent duplicate entry, and issue wristbands.
           </p>
         </div>
 
@@ -842,28 +913,134 @@ export default function AdminCheckin() {
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative">
-        <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-        <input
-          ref={searchInputRef}
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Scan QR or enter Ticket Code (SN3-VIS-..., SN3-ESP-...-P1), Name, Team, or Phone..."
-          className="w-full h-14 pl-12 pr-12 text-sm sm:text-base font-medium bg-white border-2 border-slate-200 focus:border-blue-600 rounded-2xl shadow-2xs text-slate-900 placeholder-slate-400 focus:outline-hidden"
-        />
-        {searchQuery && (
-          <button
-            type="button"
-            onClick={() => setSearchQuery("")}
-            aria-label="Clear search"
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-slate-700 cursor-pointer"
-          >
-            <X size={18} />
-          </button>
-        )}
-      </div>
+      {/* Search & DB Ticket Verification Bar */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleVerifyGateInput(searchQuery);
+        }}
+        className="flex flex-col sm:flex-row gap-2.5"
+      >
+        <div className="relative flex-1">
+          <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              if (!e.target.value.trim()) {
+                setGateVerification(null);
+              }
+            }}
+            placeholder="Scan QR or enter Ticket Reference (SN3-VIS-..., SN3-26-...), Name, Team, or Phone..."
+            className="w-full h-14 pl-12 pr-12 text-sm sm:text-base font-medium bg-white border-2 border-slate-200 focus:border-blue-600 rounded-2xl shadow-2xs text-slate-900 placeholder-slate-400 focus:outline-hidden"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery("");
+                setRawQrInput("");
+                setGateVerification(null);
+              }}
+              aria-label="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-slate-700 cursor-pointer"
+            >
+              <X size={18} />
+            </button>
+          )}
+        </div>
+
+        <button
+          type="submit"
+          disabled={verifyingGate || !searchQuery.trim()}
+          className="h-14 px-5 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer shrink-0"
+        >
+          <ShieldCheck size={16} />
+          <span>{verifyingGate ? "Verifying..." : "Verify Ticket"}</span>
+        </button>
+      </form>
+
+      {/* Authoritative DB Ticket Verification Verdict Card */}
+      {gateVerification && (
+        <div
+          className={`rounded-2xl border-2 p-5 shadow-xs space-y-3 ${
+            gateVerification.verdict === "VALID"
+              ? "bg-emerald-50 border-emerald-400"
+              : gateVerification.verdict === "ALREADY USED"
+              ? "bg-amber-50 border-amber-400"
+              : "bg-rose-50 border-rose-400"
+          }`}
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span
+                className={`px-3 py-1 rounded-lg font-mono text-xs font-black uppercase tracking-wider ${
+                  gateVerification.verdict === "VALID"
+                    ? "bg-emerald-700 text-white"
+                    : gateVerification.verdict === "ALREADY USED"
+                    ? "bg-amber-700 text-white"
+                    : "bg-rose-700 text-white"
+                }`}
+              >
+                {gateVerification.verdict}
+              </span>
+              {gateVerification.ticket && (
+                <>
+                  <span className="font-mono text-base font-black text-slate-900">
+                    {gateVerification.ticket.ticket_ref}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-white/80 border border-slate-300 font-mono text-[10px] font-bold uppercase text-slate-700">
+                    {gateVerification.ticket.registration_category}
+                  </span>
+                </>
+              )}
+            </div>
+
+            {gateVerification.can_check_in && gateVerification.ticket && (
+              <button
+                type="button"
+                disabled={checkingInGate}
+                onClick={handleAuthoritativeGateCheckIn}
+                className="min-h-[44px] px-5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <CheckCircle size={16} />
+                <span>{checkingInGate ? "Checking In..." : `Check In Ticket (${eventDay.slice(-2)} Nov)`}</span>
+              </button>
+            )}
+          </div>
+
+          {gateVerification.ticket ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-800 pt-2 border-t border-black/10">
+              <div>
+                <span className="text-[10px] font-mono uppercase text-slate-500 block">Holder / Team</span>
+                <strong className="text-sm text-slate-900">{gateVerification.ticket.display_name}</strong>
+                {gateVerification.ticket.subtitle && (
+                  <span className="block text-slate-600">{gateVerification.ticket.subtitle}</span>
+                )}
+              </div>
+              <div>
+                <span className="text-[10px] font-mono uppercase text-slate-500 block">Institution</span>
+                <span className="font-semibold">{gateVerification.ticket.institution || "General"}</span>
+              </div>
+              <div>
+                <span className="text-[10px] font-mono uppercase text-slate-500 block">Verification Detail</span>
+                <span className="font-semibold block">{gateVerification.reason || gateVerification.error}</span>
+                {gateVerification.ticket.checked_in_by_email && (
+                  <span className="text-[11px] font-mono text-slate-600 block">
+                    Checked in by: {gateVerification.ticket.checked_in_by_email}
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs sm:text-sm font-semibold text-rose-900 m-0">
+              {gateVerification.reason || gateVerification.error}
+            </p>
+          )}
+        </div>
+      )}
 
       {statusMessage && (
         <div
@@ -1189,7 +1366,9 @@ export default function AdminCheckin() {
       <QrTicketScannerModal
         isOpen={qrModalOpen}
         onClose={() => setQrModalOpen(false)}
-        onScanSuccess={(ref) => setSearchQuery(ref)}
+        onScanSuccess={(rawPayloadOrRef) => {
+          void handleVerifyGateInput(rawPayloadOrRef);
+        }}
         title={
           canScanEsports && !canScanVisitor
             ? "Scan Esports Player QR"

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { 
   Search, 
   X, 
@@ -12,8 +12,9 @@ import {
   Building2, 
 } from "lucide-react";
 import { searchTicketOrReference, type UniversalLookupResult } from "@/lib/registrationOperations";
-import { supabase } from "@/lib/supabase";
+import { checkinGateTicket, verifyGateTicket } from "@/lib/ticketClient";
 import { useAuth } from "@/lib/auth";
+import type { GateVerificationResult } from "@/types/database";
 
 interface TicketVerificationModalProps {
   isOpen: boolean;
@@ -29,11 +30,21 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
   const [query, setQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [results, setResults] = useState<UniversalLookupResult[]>([]);
+  const [gateVerification, setGateVerification] = useState<GateVerificationResult | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<UniversalLookupResult | null>(null);
   const [checkinMsg, setCheckinMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -49,16 +60,23 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
     return hasPermission(["esports:edit", "entry:checkin_esports"]);
   };
 
-  const handleSearch = async (e?: React.FormEvent) => {
+  const handleSearch = async (e?: React.FormEvent, customQuery?: string) => {
     if (e) e.preventDefault();
-    if (!query.trim()) return;
+    const targetQuery = (customQuery ?? query).trim();
+    if (!targetQuery) return;
 
     setIsSearching(true);
     setCheckinMsg(null);
+    setGateVerification(null);
     try {
-      const found = (await searchTicketOrReference(query.trim())).filter((rec) =>
-        isStreamAllowed(rec.type)
-      );
+      const [gateRes, foundRaw] = await Promise.all([
+        verifyGateTicket(targetQuery),
+        searchTicketOrReference(targetQuery),
+      ]);
+      if (gateRes && (gateRes.ok || gateRes.verdict)) {
+        setGateVerification(gateRes);
+      }
+      const found = foundRaw.filter((rec) => isStreamAllowed(rec.type));
       setResults(found);
       setHasSearched(true);
       if (found.length === 1) {
@@ -73,6 +91,31 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
     }
   };
 
+  const handleAuthoritativeGateCheckIn = async (ticketRef: string) => {
+    setIsCheckingIn(true);
+    setCheckinMsg(null);
+    try {
+      const res = await checkinGateTicket({
+        ticketRef,
+        eventDay: "2026-11-20",
+      });
+      setGateVerification(res);
+      if (res.ok && res.verdict === "VALID") {
+        setCheckinMsg({
+          type: "success",
+          text: `Checked in atomically: ${res.ticket?.display_name || ticketRef} (${ticketRef}).`,
+        });
+      } else {
+        setCheckinMsg({
+          type: "error",
+          text: res.error || res.reason || `Gate verdict: ${res.verdict}`,
+        });
+      }
+    } finally {
+      setIsCheckingIn(false);
+    }
+  };
+
   const handleQuickCheckin = async (rec: UniversalLookupResult) => {
     if (!canCheckInRecord(rec)) {
       setCheckinMsg({
@@ -81,37 +124,14 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
       });
       return;
     }
-    setIsCheckingIn(true);
-    setCheckinMsg(null);
-    try {
-      const nowIso = new Date().toISOString();
-      const { data: userData } = await supabase.auth.getUser();
-
-      // Record check-in
-      const { error } = await supabase.from("check_ins").insert({
-        registration_id: rec.id,
-        badge_type: rec.type === "visitor" ? "visitor" : rec.type === "esports" ? "esports_player" : "exhibitor",
-        scanned_by: userData?.user?.id || null,
-        scanned_at: nowIso,
-        notes: `Universal Verification Check-in for ${rec.reference} (${rec.titleOrName})`,
-      });
-
-      if (error && error.code !== "23505") { // Ignore unique constraint if already checked in
-        console.warn("Check-in insert warning:", error);
-      }
-
-      setCheckinMsg({
-        type: "success",
-        text: `Checked in successfully: ${rec.titleOrName} (${rec.ticketRef || rec.reference}) on Day 1/2.`,
-      });
-    } catch (err: any) {
+    if (rec.status !== "confirmed" || rec.isArchived) {
       setCheckinMsg({
         type: "error",
-        text: `Check-in recorded locally: ${err.message}`,
+        text: `INVALID — Registration status is "${rec.status}". Only confirmed passes may check in.`,
       });
-    } finally {
-      setIsCheckingIn(false);
+      return;
     }
+    await handleAuthoritativeGateCheckIn(rec.ticketRef || rec.reference);
   };
 
   const copyTicket = (text: string) => {
@@ -222,12 +242,68 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
             </div>
           )}
 
-          {hasSearched && results.length === 0 && (
+          {gateVerification && gateVerification.ticket && (
+            <div
+              className={`p-4 rounded-2xl border-2 space-y-2 ${
+                gateVerification.verdict === "VALID"
+                  ? "bg-emerald-50 border-emerald-400"
+                  : gateVerification.verdict === "ALREADY USED"
+                  ? "bg-amber-50 border-amber-400"
+                  : "bg-rose-50 border-rose-400"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`px-2.5 py-1 rounded-lg font-mono text-xs font-black uppercase ${
+                      gateVerification.verdict === "VALID"
+                        ? "bg-emerald-700 text-white"
+                        : gateVerification.verdict === "ALREADY USED"
+                        ? "bg-amber-700 text-white"
+                        : "bg-rose-700 text-white"
+                    }`}
+                  >
+                    {gateVerification.verdict}
+                  </span>
+                  <span className="font-mono text-sm font-black text-slate-900">
+                    {gateVerification.ticket.ticket_ref}
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono uppercase text-slate-600 font-bold">
+                  {gateVerification.ticket.registration_category}
+                </span>
+              </div>
+              <div className="text-xs text-slate-800">
+                <strong className="block text-sm">{gateVerification.ticket.display_name}</strong>
+                {gateVerification.ticket.subtitle && (
+                  <span className="block text-slate-600">{gateVerification.ticket.subtitle}</span>
+                )}
+                <p className="mt-1 mb-0 font-medium">{gateVerification.reason || gateVerification.error}</p>
+              </div>
+              {gateVerification.can_check_in && (
+                <button
+                  type="button"
+                  disabled={isCheckingIn}
+                  onClick={() => handleAuthoritativeGateCheckIn(gateVerification.ticket!.ticket_ref)}
+                  className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <CheckCircle2 size={14} />
+                  <span>{isCheckingIn ? "Checking in..." : "Check In Ticket Now"}</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {hasSearched && results.length === 0 && !gateVerification?.ticket && (
             <div className="py-12 text-center text-slate-500 space-y-2">
               <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto" />
-              <p className="font-semibold text-slate-800 text-sm">No ticket or attendee found matching "{query}"</p>
+              <p className="font-semibold text-slate-800 text-sm">
+                INVALID — No ticket or attendee found matching "{query}"
+              </p>
               <p className="text-xs text-slate-500">
-                Check for typos or ask the attendee for their 6-character registration suffix or registered email address.
+                {gateVerification?.reason ||
+                  gateVerification?.error ||
+                  "Check for typos or ask the attendee for their ticket reference or registered email."}
               </p>
             </div>
           )}
