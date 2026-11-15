@@ -42,10 +42,6 @@ test("generates standard audit-compliant filenames", () => {
     "SUPERNOVA_3.0_Visitor_Registrations_2026-11-20.xlsx"
   );
   assert.equal(
-    generateExportFilename("participation", "csv", mockDate),
-    "SUPERNOVA_3.0_Participation_Registrations_2026-11-20.csv"
-  );
-  assert.equal(
     generateExportFilename("esports_teams", "xlsx", mockDate),
     "SUPERNOVA_3.0_Esports_Team_Registrations_2026-11-20.xlsx"
   );

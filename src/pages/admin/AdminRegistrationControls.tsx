@@ -11,15 +11,10 @@ interface FormMeta {
 }
 
 const META_MAP: Record<string, FormMeta> = {
-  participation: {
-    title: "Project & Exhibit Registration",
-    badgeLabel: "Science Expo & Stalls",
-    description: "For student innovators, research stalls, school inventors, and animators.",
-  },
   visitor: {
     title: "General Visitor Registration",
     badgeLabel: "Visitor Passes",
-    description: "Free campus admission passes for students, educators, families, and visitors.",
+    description: "Free campus admission passes for students, educators, and visitors.",
   },
   esports: {
     title: "Esports Squad Registration",
@@ -48,7 +43,7 @@ export default function AdminRegistrationControls() {
       if (error) {
         setStatusMsg({ type: "error", text: error.message || "Could not load registration controls." });
       } else {
-        setControls((data as RegistrationControl[]) || []);
+        setControls(((data as any[]) || []).filter((c) => c.form_type !== "participation") as RegistrationControl[]);
       }
     } catch (e: any) {
       setStatusMsg({ type: "error", text: e.message || "Failed to load controls." });

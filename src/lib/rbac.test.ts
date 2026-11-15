@@ -35,7 +35,6 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
 
     assert.equal(canAccessAdminRoute("/admin/esports-registrations", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/esports-control", perms, "active"), false);
-    assert.equal(canAccessAdminRoute("/admin/participation-registrations", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/settings", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/users", perms, "active"), false);
     assert.equal(hasCrmPermission(perms, "entry:override_checkin", "active"), false);
@@ -57,7 +56,6 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
     assert.equal(hasCrmPermission(perms, "tournament:select_teams", "active"), false);
     assert.equal(hasCrmPermission(perms, "tournament:build_bracket", "active"), false);
     assert.equal(canAccessAdminRoute("/admin/visitor-registrations", perms, "active"), false);
-    assert.equal(canAccessAdminRoute("/admin/participation-registrations", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/esports-control", perms, "active"), false);
   });
 
@@ -88,7 +86,6 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
     assert.equal(canAccessAdminRoute("/admin/gallery", perms, "active"), true);
     assert.equal(canAccessAdminRoute("/admin/content", perms, "active"), true);
     assert.equal(canAccessAdminRoute("/admin/visitor-registrations", perms, "active"), false);
-    assert.equal(canAccessAdminRoute("/admin/participation-registrations", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/esports-registrations", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/checkin", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/conductor-matches", perms, "active"), false);
@@ -108,7 +105,6 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
     assert.equal(hasCrmPermission(perms, "tournament:resolve_disputes", "active"), true);
 
     assert.equal(canAccessAdminRoute("/admin/visitor-registrations", perms, "active"), false);
-    assert.equal(canAccessAdminRoute("/admin/participation-registrations", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/settings", perms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/users", perms, "active"), false);
   });
@@ -161,6 +157,7 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
     assert.equal(normalizeRole("event_admin"), "crm_admin");
     assert.equal(normalizeRole("checkin_staff"), "registration_staff");
     assert.equal(normalizeRole("score_operator"), "esports_manager");
+    assert.equal(normalizeRole("participation_manager"), "viewer");
 
     const customStaff = resolveEffectivePermissions("registration_staff", "active", [
       { permission_key: "visitor:export", allowed: true },

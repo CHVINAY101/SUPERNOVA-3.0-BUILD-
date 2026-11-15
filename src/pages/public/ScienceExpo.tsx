@@ -54,11 +54,11 @@ export default function ScienceExpo() {
             </p>
 
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-              <Link to="/register/participation" className="btn btn-primary" style={{ background: "var(--cobalt)", borderColor: "var(--cobalt)" }}>
-                Register Your Science Project <ArrowRight size={16} />
+              <Link to="/register?type=visitor" className="btn btn-primary" style={{ background: "var(--cobalt)", borderColor: "var(--cobalt)" }}>
+                Get Free Visitor Pass <ArrowRight size={16} />
               </Link>
-              <Link to="/register/visitor" className="btn btn-secondary" style={{ background: "#ffffff" }}>
-                Get Free Visitor Pass
+              <Link to="/schedule" className="btn btn-secondary" style={{ background: "#ffffff" }}>
+                View Event Schedule
               </Link>
             </div>
           </div>

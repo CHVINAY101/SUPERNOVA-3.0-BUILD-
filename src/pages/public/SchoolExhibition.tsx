@@ -54,11 +54,11 @@ export default function SchoolExhibition() {
             </p>
 
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-              <Link to="/register/participation" className="btn btn-coral">
-                Register a Student Project <ArrowRight size={16} />
+              <Link to="/register?type=visitor" className="btn btn-coral">
+                Get Free Visitor Pass <ArrowRight size={16} />
               </Link>
-              <Link to="/register/visitor" className="btn btn-secondary" style={{ background: "#ffffff" }}>
-                Get Family Visitor Pass
+              <Link to="/schedule" className="btn btn-secondary" style={{ background: "#ffffff" }}>
+                View Event Schedule
               </Link>
             </div>
           </div>

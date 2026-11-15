@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import type { GeneratedTicketResult, TicketPdfOptions } from "@/lib/ticketPdfService";
 
-export type NasFolderType = "VISITORS" | "PARTICIPATION" | "ESPORTS" | "TEAM_REGISTRATIONS";
+export type NasFolderType = "VISITORS" | "ESPORTS" | "TEAM_REGISTRATIONS";
 
 export interface NasArchiveRecord {
   id: string;
@@ -41,13 +41,11 @@ const LOCAL_NAS_SIMULATED_OFFLINE_KEY = "supernova_nas_simulated_offline";
  * Determine the canonical NAS folder for registration stream
  */
 export function getNasFolderForStream(
-  registrationType: "visitor" | "participation" | "esports_player" | "esports_team"
+  registrationType: "visitor" | "esports_player" | "esports_team"
 ): NasFolderType {
   switch (registrationType) {
     case "visitor":
       return "VISITORS";
-    case "participation":
-      return "PARTICIPATION";
     case "esports_player":
       return "ESPORTS";
     case "esports_team":
@@ -130,7 +128,7 @@ export function getNasConnectionStatus(): NasConnectionStatus {
 /**
  * Archive a generated ticket PDF to the College NAS.
  * Enforces the structured directory:
- *   SUPERNOVA_3.0/REGISTRATIONS/{VISITORS,PARTICIPATION,ESPORTS,TEAM_REGISTRATIONS}/
+ *   SUPERNOVA_3.0/REGISTRATIONS/{VISITORS,ESPORTS,TEAM_REGISTRATIONS}/
  *
  * If NAS is offline: records status 'pending', preserves the master PDF in local registry & Supabase,
  * and queues for automated retry without losing the ticket.

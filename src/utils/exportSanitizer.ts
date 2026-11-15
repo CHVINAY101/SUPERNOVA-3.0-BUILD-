@@ -5,6 +5,8 @@
  * safe CSV escaping, filename formatting, and data transformation helpers.
  */
 
+import { normalizeVisitorCategory } from "../lib/visitorCategories";
+
 /**
  * Characters that trigger spreadsheet formula execution in Microsoft Excel,
  * Google Sheets, LibreOffice Calc, etc.
@@ -64,7 +66,7 @@ export function formatCsvRow(fields: unknown[]): string {
  * Example: SUPERNOVA_3.0_Visitor_Registrations_2026-11-20.xlsx
  */
 export function generateExportFilename(
-  category: "visitor" | "participation" | "esports_teams" | "esports_players" | "esports_complete",
+  category: "visitor" | "esports_teams" | "esports_players" | "esports_complete",
   format: "csv" | "xlsx",
   date: Date = new Date()
 ): string {
@@ -75,7 +77,6 @@ export function generateExportFilename(
 
   const categoryMap: Record<string, string> = {
     visitor: "Visitor_Registrations",
-    participation: "Participation_Registrations",
     esports_teams: "Esports_Team_Registrations",
     esports_players: "Esports_Player_Rosters",
     esports_complete: "Esports_Complete_Workbook",
@@ -109,9 +110,16 @@ export function filterRecords<T extends Record<string, any>>(
       if (item.status !== filters.status) return false;
     }
 
-    // Visitor category check
+    // Visitor category check (canonical + legacy compatible)
     if (filters.visitorCategory && filters.visitorCategory !== "all") {
-      if (item.visitor_category !== filters.visitorCategory) return false;
+      const normalized = normalizeVisitorCategory(
+        item.visitor_category,
+        item.student_class,
+        item.designation
+      );
+      if (normalized !== filters.visitorCategory && item.visitor_category !== filters.visitorCategory) {
+        return false;
+      }
     }
 
     // Game ID check

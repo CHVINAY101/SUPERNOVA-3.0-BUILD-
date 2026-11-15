@@ -11,7 +11,7 @@ export default function AdminFormOptions() {
   const [options, setOptions] = useState<FormOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [selectedForm, setSelectedForm] = useState<"all" | "participation" | "visitor">("all");
+  const [selectedForm, setSelectedForm] = useState<"all" | "visitor">("all");
   
   // New option modal / inline state
   const [editingOption, setEditingOption] = useState<Partial<FormOption> | null>(null);
@@ -30,7 +30,7 @@ export default function AdminFormOptions() {
       if (error) {
         setStatusMsg({ type: "error", text: error.message || "Failed to load form options." });
       } else {
-        setOptions((data as FormOption[]) || []);
+        setOptions(((data as any[]) || []).filter((o) => o.form_type !== "participation") as FormOption[]);
       }
     } catch (e: any) {
       setStatusMsg({ type: "error", text: e.message || "Failed to fetch form options." });
@@ -170,8 +170,8 @@ export default function AdminFormOptions() {
             <button
               onClick={() =>
                 setEditingOption({
-                  form_type: "participation",
-                  field_key: "participant_category",
+                  form_type: "visitor",
+                  field_key: "visitor_category",
                   label: "",
                   value: "",
                   is_active: true,
@@ -218,7 +218,6 @@ export default function AdminFormOptions() {
       <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
         {[
           { id: "all", label: `All Options (${options.length})` },
-          { id: "participation", label: "Project & Participation Options" },
           { id: "visitor", label: "Visitor Categories" },
         ].map((tab) => (
           <button
@@ -401,11 +400,9 @@ export default function AdminFormOptions() {
                   value={editingOption.form_type}
                   onChange={(e) => {
                     const form = e.target.value as any;
-                    const defaultKey = form === "visitor" ? "visitor_category" : "participant_category";
-                    setEditingOption({ ...editingOption, form_type: form, field_key: defaultKey });
+                    setEditingOption({ ...editingOption, form_type: form, field_key: "visitor_category" });
                   }}
                 >
-                  <option value="participation">Project Participation</option>
                   <option value="visitor">Visitor Passes</option>
                 </select>
               </div>
@@ -419,14 +416,7 @@ export default function AdminFormOptions() {
                   value={editingOption.field_key}
                   onChange={(e) => setEditingOption({ ...editingOption, field_key: e.target.value })}
                 >
-                  {editingOption.form_type === "visitor" ? (
-                    <option value="visitor_category">visitor_category</option>
-                  ) : (
-                    <>
-                      <option value="participant_category">participant_category</option>
-                      <option value="participation_area">participation_area</option>
-                    </>
-                  )}
+                  <option value="visitor_category">visitor_category</option>
                 </select>
               </div>
 

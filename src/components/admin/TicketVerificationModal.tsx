@@ -24,7 +24,6 @@ interface TicketVerificationModalProps {
 export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationModalProps) {
   const { hasPermission } = useAuth();
   const canViewVisitors = hasPermission(["visitor:view", "entry:scan_visitor"]);
-  const canViewParticipation = hasPermission("participation:view");
   const canViewEsports = hasPermission(["esports:view", "entry:scan_esports"]);
 
   const [query, setQuery] = useState("");
@@ -50,13 +49,11 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
 
   const isStreamAllowed = (type: UniversalLookupResult["type"]) => {
     if (type === "visitor") return canViewVisitors;
-    if (type === "participation") return canViewParticipation;
     return canViewEsports;
   };
 
   const canCheckInRecord = (rec: UniversalLookupResult) => {
     if (rec.type === "visitor") return hasPermission(["visitor:edit", "entry:checkin_visitor"]);
-    if (rec.type === "participation") return hasPermission("participation:edit");
     return hasPermission(["esports:edit", "entry:checkin_esports"]);
   };
 
@@ -214,7 +211,7 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
               "SN3-26"
             </button>
             <span>·</span>
-            <span>Search works across Visitors, Projects, and Esports squads</span>
+            <span>Search works across Visitors and Esports squads</span>
           </div>
         </div>
 
@@ -365,7 +362,7 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
                         : "Pending Verification"}
                     </span>
                     <span className="text-[11px] font-mono text-slate-500 uppercase">
-                      {selectedRecord.type === "visitor" ? "Visitor Pass" : selectedRecord.type === "esports" ? "Esports Roster" : "Project Exhibit"}
+                      {selectedRecord.type === "visitor" ? "Visitor Pass" : "Esports Roster"}
                     </span>
                   </div>
                   <h3 className="text-lg font-display font-black text-slate-900 m-0">
@@ -405,13 +402,15 @@ export function TicketVerificationModal({ isOpen, onClose }: TicketVerificationM
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                  <Phone size={14} className="text-slate-400 shrink-0" />
-                  <div>
-                    <span className="text-slate-500 block text-[10px] uppercase font-mono">Mobile Number</span>
-                    <span className="font-mono font-semibold text-slate-800">{selectedRecord.phone}</span>
+                {selectedRecord.phone && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <Phone size={14} className="text-slate-400 shrink-0" />
+                    <div>
+                      <span className="text-slate-500 block text-[10px] uppercase font-mono">Mobile Number</span>
+                      <span className="font-mono font-semibold text-slate-800">{selectedRecord.phone}</span>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
                   <Building2 size={14} className="text-slate-400 shrink-0" />

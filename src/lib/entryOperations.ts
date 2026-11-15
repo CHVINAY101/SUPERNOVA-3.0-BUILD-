@@ -1,7 +1,6 @@
 import type {
   CheckIn,
   EventDaySession,
-  ParticipationRegistration,
   Player,
   Registration,
   TournamentSelectionStatus,
@@ -128,7 +127,7 @@ export interface EntryVerificationDecision {
     | "already_checked_in"
     | "denied";
   reason: string;
-  subjectType: "visitor" | "esports_player" | "participation";
+  subjectType: "visitor" | "esports_player";
   ticketRef: string;
   holderName: string;
   categoryLabel: string;
@@ -255,106 +254,6 @@ export function evaluateVisitorEntry(params: {
     ticketRef: visitor.ticket_ref || visitor.registration_ref,
     holderName: visitor.full_name,
     categoryLabel: visitor.visitor_category || "General Visitor",
-    recommendedWristbandSlug: "general-visitor",
-    tournamentEligible: false,
-  };
-}
-
-/**
- * Evaluates a Participation (Science Expo / Exhibitor) pass against authoritative
- * DB records and multi-day check-in logs.
- */
-export function evaluateParticipationEntry(params: {
-  participation: (ParticipationRegistration & { archived_at?: string | null }) | null;
-  checkIns: CheckIn[];
-  eventDay: EventDaySession;
-}): EntryVerificationDecision {
-  const { participation, checkIns, eventDay } = params;
-
-  if (!participation) {
-    return {
-      decision: "denied",
-      reason: "Ticket reference not found in registered participation records.",
-      subjectType: "participation",
-      ticketRef: "",
-      holderName: "Unknown",
-      categoryLabel: "Participation",
-      recommendedWristbandSlug: "general-visitor",
-      tournamentEligible: false,
-    };
-  }
-
-  const canonicalRef = participation.visitor_ticket_ref || participation.registration_ref;
-  const categoryLabel = `${participation.participation_area || "Science Expo"} · ${
-    participation.project_title || "Project"
-  }`;
-
-  if (isRecordArchived(participation)) {
-    return {
-      decision: "denied",
-      reason: "Participation registration has been archived or revoked.",
-      subjectType: "participation",
-      ticketRef: canonicalRef,
-      holderName: participation.full_name,
-      categoryLabel,
-      recommendedWristbandSlug: "general-visitor",
-      tournamentEligible: false,
-    };
-  }
-
-  if (participation.status !== "confirmed") {
-    return {
-      decision: "denied",
-      reason: `Participation registration is "${participation.status}". Only confirmed passes may enter.`,
-      subjectType: "participation",
-      ticketRef: canonicalRef,
-      holderName: participation.full_name,
-      categoryLabel,
-      recommendedWristbandSlug: "general-visitor",
-      tournamentEligible: false,
-    };
-  }
-
-  const partRefs = new Set(
-    [participation.registration_ref, participation.visitor_ticket_ref]
-      .filter(Boolean)
-      .map((r) => String(r).trim().toUpperCase())
-  );
-  const prior = checkIns.find(
-    (c) =>
-      !c.is_override &&
-      ((c.ticket_ref && partRefs.has(c.ticket_ref.trim().toUpperCase())) ||
-        c.participation_registration_id === participation.id) &&
-      (c.event_day || "2026-11-20") === eventDay &&
-      c.subject_type === "participation"
-  );
-
-  if (prior) {
-    return {
-      decision: "already_checked_in",
-      reason: `ALREADY CHECKED IN on ${eventDay}. Supervisor override required for documented re-entry.`,
-      subjectType: "participation",
-      ticketRef: canonicalRef,
-      holderName: participation.full_name,
-      categoryLabel,
-      recommendedWristbandSlug: "general-visitor",
-      tournamentEligible: false,
-      priorCheckIn: {
-        checkedInAt: prior.checked_in_at,
-        checkedInBy: prior.checked_in_by_email || prior.checked_in_by || "Gate Staff",
-        eventDay: (prior.event_day || eventDay) as EventDaySession,
-        wristbandCategory: prior.wristband_category || null,
-      },
-    };
-  }
-
-  return {
-    decision: "eligible",
-    reason: `Valid confirmed participation pass for ${eventDay}.`,
-    subjectType: "participation",
-    ticketRef: canonicalRef,
-    holderName: participation.full_name,
-    categoryLabel,
     recommendedWristbandSlug: "general-visitor",
     tournamentEligible: false,
   };
@@ -688,21 +587,18 @@ export function toUuidOrNull(value: unknown): string | null {
 /**
  * Builds an insert payload for public.check_ins that:
  * 1. Strictly enforces FK integrity: check_ins.registration_id ONLY ever receives
- *    a valid public.registrations(id) UUID (esports registration). Visitor and
- *    participation check-ins store their UUIDs in visitor_registration_id /
- *    participation_registration_id and keep registration_id = null (unless
- *    explicitly linked to an authentic esports registrations row).
+ *    a valid public.registrations(id) UUID (esports registration). Visitor
+ *    check-ins store their UUIDs in visitor_registration_id and keep registration_id = null.
  * 2. Strictly enforces UUID-only values on checked_in_by (never an email string)
  *    and stores the staff email separately in checked_in_by_email.
  */
 export function buildCheckInInsertPayload(params: {
   registrationId?: string | null;
   visitorRegistrationId?: string | null;
-  participationRegistrationId?: string | null;
   playerId?: string | null;
   ticketId?: string | null;
   ticketRef: string;
-  subjectType: "visitor" | "esports_player" | "participation";
+  subjectType: "visitor" | "esports_player";
   eventDay: EventDaySession;
   actorUserId?: string | null;
   actorEmail?: string | null;
@@ -717,18 +613,11 @@ export function buildCheckInInsertPayload(params: {
   const safeActorUuid = toUuidOrNull(params.actorUserId);
   const safeEmail = params.actorEmail?.trim() || null;
 
-  // Never send visitor_registrations.id or participation_registrations.id into
-  // check_ins.registration_id (which references public.registrations(id)).
+  // Never send visitor_registrations.id into check_ins.registration_id
+  // (which references public.registrations(id)).
   const safeEsportsRegistrationId =
     params.subjectType === "esports_player" ? toUuidOrNull(params.registrationId) : null;
-  const safeVisitorRegistrationId =
-    params.subjectType === "visitor"
-      ? toUuidOrNull(params.visitorRegistrationId)
-      : toUuidOrNull(params.visitorRegistrationId);
-  const safeParticipationRegistrationId =
-    params.subjectType === "participation"
-      ? toUuidOrNull(params.participationRegistrationId)
-      : null;
+  const safeVisitorRegistrationId = toUuidOrNull(params.visitorRegistrationId);
   const safePlayerId =
     params.subjectType === "esports_player" ? toUuidOrNull(params.playerId) : null;
 
@@ -753,9 +642,6 @@ export function buildCheckInInsertPayload(params: {
     }
     if (safeVisitorRegistrationId) {
       base.visitor_registration_id = safeVisitorRegistrationId;
-    }
-    if (safeParticipationRegistrationId) {
-      base.participation_registration_id = safeParticipationRegistrationId;
     }
     const safeTicketId = toUuidOrNull(params.ticketId);
     if (safeTicketId) {
@@ -782,17 +668,24 @@ export function buildCheckInInsertPayload(params: {
  */
 export function formatCheckInDatabaseError(err: any): string {
   const msg = String(err?.message || "Database error");
-  const code = String(err?.code || "");
+  const code = String(err?.code || "").toUpperCase();
   const lower = msg.toLowerCase();
+
+  if (
+    code === "PGRST204" ||
+    lower.includes("checked_in_by_email") ||
+    lower.includes("schema cache") ||
+    lower.includes("could not find the '")
+  ) {
+    return "Database schema cache / column sync required: run supabase/migrations/20261118000000_gate_checkin_schema_repair_and_walkin.sql in the Supabase SQL Editor (adds missing check_ins columns including checked_in_by_email and reloads the schema cache).";
+  }
 
   if (
     lower.includes("check_ins_registration_id_fkey") ||
     (code === "23502" && lower.includes("registration_id")) ||
-    (code === "42703" &&
-      (lower.includes("visitor_registration_id") ||
-        lower.includes("participation_registration_id")))
+    (code === "42703" && lower.includes("visitor_registration_id"))
   ) {
-    return "Database migration required: apply supabase/migrations/20261116000000_fix_checkins_fk_registration_mapping.sql in Supabase SQL Editor so visitor/participation check-ins map to their dedicated FK columns without violating check_ins_registration_id_fkey.";
+    return "Database migration required: apply supabase/migrations/20261116000000_fix_checkins_fk_registration_mapping.sql (and 20261118000000_gate_checkin_schema_repair_and_walkin.sql) in Supabase SQL Editor so visitor check-ins map to their dedicated FK column without violating check_ins_registration_id_fkey.";
   }
 
   return msg;

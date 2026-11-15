@@ -2,14 +2,26 @@ import React, { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { SITE_CONTENT } from "../content/site";
-import { CheckCircle2, Copy, GraduationCap, Building2, Users, Download, Eye, QrCode, Search, Clock, AlertCircle, X, Ticket } from "lucide-react";
+import { CheckCircle2, Copy, Download, Eye, QrCode, Search, Clock, AlertCircle, X, Ticket, GraduationCap, Building2, UserCheck } from "lucide-react";
 import QRCode from "qrcode";
 import { supabase } from "../lib/supabase";
 import { getOfficialTeamSize, validateEsportsRoster } from "@/utils/esportsRules";
-import { 
-  generateTicketReference, 
-  sendRegistrationConfirmationEmail 
-} from "@/lib/registrationOperations";
+import { sendRegistrationConfirmationEmail } from "@/lib/registrationOperations";
+import {
+  isValidEmail,
+  isValidInstitution,
+  isValidName,
+  isValidPhone,
+} from "@/lib/validation";
+import {
+  FACULTY_DESIGNATION_OPTIONS,
+  VISITOR_CATEGORY_CARDS,
+  buildVisitorDisplaySubtitle,
+  getDbCategoryFromId,
+  resolveFacultyDesignationValue,
+  validateVisitorFormFields,
+  type VisitorCategoryId,
+} from "@/lib/visitorCategories";
 import {
   buildTicketQrContent,
   generateTicketPdf,
@@ -20,7 +32,7 @@ import { lookupPublicTicket, submitVisitorAndIssueTicket } from "@/lib/ticketCli
 import { TicketPassModal } from "@/components/TicketPassModal";
 import type { PublicTicketLookupResult, TicketRecord } from "@/types/database";
 
-type FormType = "participation" | "visitor" | "esports" | null;
+type FormType = "visitor" | "esports" | null;
 
 interface PlayerRow {
   name: string;
@@ -33,19 +45,36 @@ interface GameOption {
   team_size: number;
 }
 
+const SUGGESTED_INSTITUTIONS = [
+  "The National College, Basavanagudi",
+  "National PU College, Jayanagar",
+  "National PU College, Basavanagudi",
+  "National High School, Basavanagudi",
+  "National English School",
+  "National Degree College, Jayanagar",
+  "DR.HNCE",
+  "Bangalore University",
+];
+
 export const RegisterPage: React.FC = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const content = SITE_CONTENT.registerPage;
   const meta = SITE_CONTENT.meta;
-  const experiences = SITE_CONTENT.experiences.items;
 
-  // Read URL query parameter: ?type=participation|visitor|esports
-  const initialType = searchParams.get("type") as FormType;
+  // Read URL query parameter: ?type=visitor|esports
+  const initialType = searchParams.get("type");
   const [selectedType, setSelectedType] = useState<FormType>(
-    initialType === "participation" || initialType === "visitor" || initialType === "esports"
-      ? initialType
-      : null
+    initialType === "visitor" || initialType === "esports" ? initialType : null
   );
+
+  useEffect(() => {
+    const paramType = searchParams.get("type");
+    if (paramType === "visitor" || paramType === "esports") {
+      setSelectedType(paramType);
+    } else if (paramType === "participation") {
+      setSelectedType(null);
+    }
+  }, [searchParams]);
 
   // Active games from Supabase
   const [activeGames, setActiveGames] = useState<GameOption[]>([]);
@@ -88,42 +117,14 @@ export const RegisterPage: React.FC = () => {
     loadGames();
   }, [searchParams]);
 
-  // Participation Form State
-  const [partInstitution, setPartInstitution] = useState("");
-  const [partContactPerson, setPartContactPerson] = useState("");
-  const [partEmail, setPartEmail] = useState("");
-  const [partPhone, setPartPhone] = useState("");
-  const [partExperience, setPartExperience] = useState(experiences[0]?.title || "");
-  const [partTitle, setPartTitle] = useState("");
-  const [partDesc, setPartDesc] = useState("");
-  const [partCount, setPartCount] = useState("1");
-
-  // Visitor Form State
-  const [visCategory, setVisCategory] = useState<"Student" | "General Visitor" | "Faculty / Staff">("Student");
+  // Three-Category Visitor Form State (No Registration Number / No Mobile)
+  const [visCategoryId, setVisCategoryId] = useState<VisitorCategoryId | null>(null);
   const [visName, setVisName] = useState("");
   const [visEmail, setVisEmail] = useState("");
-  const [visPhone, setVisPhone] = useState("");
-  
-  // Student-specific fields
-  const [visStudentClass, setVisStudentClass] = useState("10th Standard");
-  const [visInstitutionSelect, setVisInstitutionSelect] = useState("The National College, Basavanagudi");
-  const [visInstitutionOther, setVisInstitutionOther] = useState("");
-  const [visStudentId, setVisStudentId] = useState("");
-  const [visEsportsInterest, setVisEsportsInterest] = useState<boolean>(false);
-  const [visPreferredGame, setVisPreferredGame] = useState<"VALORANT" | "BGMI" | "Free Fire">("VALORANT");
-  const [visEsportsIntent, setVisEsportsIntent] = useState<"spectator" | "competing">("spectator");
-  const [visInGameId, setVisInGameId] = useState("");
-  const [visTeamName, setVisTeamName] = useState("");
-  const [visCompetitionNotes, setVisCompetitionNotes] = useState("");
-
-  // Faculty / Staff specific fields
-  const [visDesignation, setVisDesignation] = useState("");
-
-  // General Visitor specific fields
-  const [visOrg, setVisOrg] = useState("");
-
-  // Common visitor attendance
-  const [visDays, setVisDays] = useState("Both");
+  const [visStudentClass, setVisStudentClass] = useState("");
+  const [visDesignationOption, setVisDesignationOption] = useState("");
+  const [visCustomDesignation, setVisCustomDesignation] = useState("");
+  const [visInstitution, setVisInstitution] = useState("");
 
   // Esports Form State
   const [espTeamName, setEspTeamName] = useState("");
@@ -152,6 +153,16 @@ export const RegisterPage: React.FC = () => {
   const [emailNotice, setEmailNotice] = useState<string | null>(null);
   const [copiedRef, setCopiedRef] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  const clearFieldError = (key: string) => {
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
 
   // Anti-IDOR Public Pass Lookup Modal State
   const [lookupOpen, setLookupOpen] = useState(false);
@@ -200,13 +211,21 @@ export const RegisterPage: React.FC = () => {
 
   const handleLookupPass = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!lookupRef.trim() || !isValidEmail(lookupEmail)) {
+      setLookupResult({
+        ok: false,
+        status: "error",
+        error: "Please enter both your Registration / Ticket Reference and a valid Registered Email address.",
+      });
+      return;
+    }
     setLookupLoading(true);
     setLookupResult(null);
     try {
       const res = await lookupPublicTicket({
         reference: lookupRef,
         email: lookupEmail,
-        phone: lookupPhone,
+        phone: lookupPhone.trim() || null,
       });
       setLookupResult(res);
     } finally {
@@ -254,46 +273,26 @@ export const RegisterPage: React.FC = () => {
     });
   };
 
-  // Generate Mailto fallback URL if needed
+  // Generate Mailto fallback url if needed
   const generateMailtoUrl = () => {
     const subject = encodeURIComponent(`SUPERNOVA 3.0 Registration — ${selectedType?.toUpperCase()}`);
     let body = `SUPERNOVA 3.0 REGISTRATION DETAILS\n\nRegistration Type: ${selectedType}\n`;
 
-    if (selectedType === "participation") {
-      body += `Institution: ${partInstitution}\n`;
-      body += `Contact Person: ${partContactPerson}\n`;
-      body += `Email: ${partEmail}\n`;
-      body += `Phone: ${partPhone}\n`;
-      body += `Experience Area: ${partExperience}\n`;
-      body += `Project Title: ${partTitle}\n`;
-      body += `Description: ${partDesc}\n`;
-      body += `Number of Participants: ${partCount}\n`;
-    } else if (selectedType === "visitor") {
+    if (selectedType === "visitor") {
+      const catLabel = visCategoryId ? getDbCategoryFromId(visCategoryId) : "Not Selected";
+      body += `Visitor Category: ${catLabel}\n`;
       body += `Full Name: ${visName}\n`;
       body += `Email: ${visEmail}\n`;
-      body += `Phone: ${visPhone}\n`;
-      body += `Visitor Category: ${visCategory}\n`;
-      if (visCategory === "Student") {
-        body += `Class / Standard: ${visStudentClass}\n`;
-        body += `School/College: ${visInstitutionSelect === "Other" ? visInstitutionOther : visInstitutionSelect}\n`;
-        body += `Student Roll No / ID: ${visStudentId}\n`;
-        body += `Esports Interest: ${visEsportsInterest ? "Yes" : "No"}\n`;
-        if (visEsportsInterest) {
-          body += `Preferred Game: ${visPreferredGame}\n`;
-          body += `Participation Intent: ${visEsportsIntent}\n`;
-          if (visEsportsIntent === "competing") {
-            body += `In-Game ID: ${visInGameId}\n`;
-            if (visTeamName) body += `Team Name: ${visTeamName}\n`;
-            if (visCompetitionNotes) body += `Competition Notes: ${visCompetitionNotes}\n`;
-          }
-        }
-      } else if (visCategory === "Faculty / Staff") {
-        body += `Institution: ${visInstitutionSelect === "Other" ? visInstitutionOther : visInstitutionSelect}\n`;
-        body += `Designation / Department: ${visDesignation}\n`;
-      } else {
-        body += `Organisation / Workplace: ${visOrg || "General"}\n`;
+      if (visCategoryId === "student") {
+        body += `Class / Course: ${visStudentClass}\n`;
+        body += `College / Institution Name: ${visInstitution}\n`;
+      } else if (visCategoryId === "faculty") {
+        const desig = resolveFacultyDesignationValue(visDesignationOption, visCustomDesignation);
+        body += `Designation / Role: ${desig}\n`;
+        body += `College / Institution Name: ${visInstitution}\n`;
+      } else if (visInstitution.trim()) {
+        body += `College / Institution Name: ${visInstitution}\n`;
       }
-      body += `Days Attending: ${visDays}\n`;
     } else if (selectedType === "esports") {
       body += `Team Name: ${espTeamName}\n`;
       body += `Game: ${activeGames.find((g) => g.id === selectedGameId)?.title || selectedGameId}\n`;
@@ -322,60 +321,55 @@ export const RegisterPage: React.FC = () => {
     e.preventDefault();
     if (honeypot) return; // bot detected
 
-    if (!privacyAgreed) {
-      alert("Please agree to the privacy notice before submitting.");
-      return;
-    }
+    const errors: Record<string, string> = {};
 
-    if (selectedType === "esports" && !espRulesAgreed) {
-      alert("Please accept the tournament rules before submitting.");
-      return;
-    }
-
-    // Conditional Validation for Visitor
     if (selectedType === "visitor") {
-      if (!visName.trim() || visName.trim().length < 2) {
-        alert("Please enter your full name.");
-        return;
+      const visValidationErrors = validateVisitorFormFields({
+        categoryId: visCategoryId,
+        fullName: visName,
+        email: visEmail,
+        studentClass: visStudentClass,
+        designationOption: visDesignationOption,
+        customDesignation: visCustomDesignation,
+        institution: visInstitution,
+      });
+      Object.assign(errors, visValidationErrors);
+    } else if (selectedType === "esports") {
+      if (!isValidName(espTeamName, 100)) {
+        errors.espTeamName = "Please enter your team name (at least 2 characters).";
       }
-      if (!visEmail.trim() || !visEmail.includes("@")) {
-        alert("Please enter a valid email address.");
-        return;
+      if (!selectedGameId) {
+        errors.selectedGameId = "Please select a game for esports registration.";
       }
-      if (!visPhone.trim() || visPhone.trim().length < 10) {
-        alert("Please enter a valid 10-digit mobile number.");
-        return;
+      if (!isValidName(espRep, 120)) {
+        errors.espRep = "Please enter the team representative name.";
       }
-
-      if (visCategory === "Student") {
-        if (!visStudentClass) {
-          alert("Please select your class/standard.");
-          return;
-        }
-        if (visInstitutionSelect === "Other" && !visInstitutionOther.trim()) {
-          alert("Please enter your school or college name.");
-          return;
-        }
-        if (!visStudentId.trim()) {
-          alert("Please enter your student roll number or student ID.");
-          return;
-        }
-        if (visEsportsInterest && visEsportsIntent === "competing" && !visInGameId.trim()) {
-          alert("Please enter your in-game player ID for tournament registration.");
-          return;
-        }
-      } else if (visCategory === "Faculty / Staff") {
-        if (visInstitutionSelect === "Other" && !visInstitutionOther.trim()) {
-          alert("Please enter your institution name.");
-          return;
-        }
-        if (!visDesignation.trim()) {
-          alert("Please enter your designation or department.");
-          return;
-        }
+      if (!isValidEmail(espEmail)) {
+        errors.espEmail = "Please enter a valid representative email address.";
+      }
+      if (!isValidPhone(espPhone)) {
+        errors.espPhone = "Please enter a valid 10-digit mobile number.";
+      }
+      if (!isValidInstitution(espInstitution, 150)) {
+        errors.espInstitution = "Please enter your college or institution name.";
+      }
+      if (!espRulesAgreed) {
+        errors.espRulesAgreed = "Please accept the tournament rules before submitting.";
       }
     }
 
+    if (!privacyAgreed) {
+      errors.privacyAgreed = "Please agree to the privacy notice before submitting.";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      const firstMsg = Object.values(errors)[0];
+      setSubmitError(firstMsg || "Please complete all required fields before submitting.");
+      return;
+    }
+
+    setFieldErrors({});
     setIsSubmitting(true);
     setSubmitError(null);
     setIssuedVisitorTicket(null);
@@ -383,37 +377,31 @@ export const RegisterPage: React.FC = () => {
     setEmailNotice(null);
 
     try {
-      if (selectedType === "visitor") {
-        const effectiveInstitution =
-          visCategory === "Student" || visCategory === "Faculty / Staff"
-            ? (visInstitutionSelect === "Other" ? visInstitutionOther.trim() : visInstitutionSelect.trim())
-            : (visOrg.trim() || "General Visitor");
+      if (selectedType === "visitor" && visCategoryId) {
+        const canonicalCategory = getDbCategoryFromId(visCategoryId);
+        const cleanName = visName.trim();
+        const cleanEmail = visEmail.trim().toLowerCase();
+        const cleanClass = visCategoryId === "student" ? visStudentClass.trim() : null;
+        const cleanDesignation =
+          visCategoryId === "faculty"
+            ? resolveFacultyDesignationValue(visDesignationOption, visCustomDesignation)
+            : null;
+        const cleanInstitution = visInstitution.trim() || null;
+        const displaySubtitle = buildVisitorDisplaySubtitle({
+          visitorCategory: canonicalCategory,
+          studentClass: cleanClass,
+          designation: cleanDesignation,
+        });
 
         const submissionRes = await submitVisitorAndIssueTicket({
-          fullName: visName.trim(),
-          email: visEmail.trim().toLowerCase(),
-          phone: visPhone.trim(),
-          institution: effectiveInstitution,
-          visitorCategory: visCategory,
-          studentClass: visCategory === "Student" ? visStudentClass : null,
-          studentId: visCategory === "Student" ? visStudentId.trim() : null,
-          designation: visCategory === "Faculty / Staff" ? visDesignation.trim() : null,
-          esportsInterest: visCategory === "Student" ? visEsportsInterest : false,
-          preferredGame: visCategory === "Student" && visEsportsInterest ? visPreferredGame : null,
-          esportsIntent: visCategory === "Student" && visEsportsInterest ? visEsportsIntent : null,
-          inGameId:
-            visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing"
-              ? visInGameId.trim()
-              : null,
-          teamName:
-            visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing"
-              ? visTeamName.trim()
-              : null,
-          competitionNotes:
-            visCategory === "Student" && visEsportsInterest && visEsportsIntent === "competing"
-              ? visCompetitionNotes.trim()
-              : null,
-          daysAttending: visDays,
+          fullName: cleanName,
+          email: cleanEmail,
+          phone: null,
+          institution: cleanInstitution,
+          visitorCategory: canonicalCategory,
+          studentClass: cleanClass,
+          designation: cleanDesignation,
+          daysAttending: "Both",
         });
 
         const ticketRef = submissionRes.ticket?.ticket_ref || submissionRes.registrationRef;
@@ -427,13 +415,12 @@ export const RegisterPage: React.FC = () => {
           const ticketRes = await generateTicketPdf({
             ticketRef,
             qrToken,
-            recipientName: visName.trim(),
-            category: visCategory,
-            email: visEmail.trim().toLowerCase(),
-            phone: visPhone.trim(),
-            institution: effectiveInstitution,
+            recipientName: cleanName,
+            category: displaySubtitle,
+            email: cleanEmail,
+            institution: cleanInstitution || undefined,
             registrationType: "visitor",
-            daysAttending: visDays,
+            daysAttending: "Both",
           });
 
           ticketPdfAttachments = [
@@ -447,13 +434,12 @@ export const RegisterPage: React.FC = () => {
           await archiveTicketToNas(ticketRes, {
             ticketRef,
             qrToken,
-            recipientName: visName.trim(),
-            category: visCategory,
-            email: visEmail.trim().toLowerCase(),
-            phone: visPhone.trim(),
-            institution: effectiveInstitution,
+            recipientName: cleanName,
+            category: displaySubtitle,
+            email: cleanEmail,
+            institution: cleanInstitution || undefined,
             registrationType: "visitor",
-            daysAttending: visDays,
+            daysAttending: "Both",
           });
         } catch (nasErr) {
           console.warn("NAS archival / PDF creation notice:", nasErr);
@@ -468,13 +454,15 @@ export const RegisterPage: React.FC = () => {
             "visitor",
             false,
             {
-              recipientEmail: visEmail.trim().toLowerCase(),
-              recipientName: visName.trim(),
+              recipientEmail: cleanEmail,
+              recipientName: cleanName,
               registrationRef: ticketRef,
-              institution: effectiveInstitution,
+              institution: cleanInstitution || undefined,
               extraDetails: {
-                category: visCategory,
-                days: visDays,
+                category: canonicalCategory,
+                student_class: cleanClass || undefined,
+                designation: cleanDesignation || undefined,
+                days: "Both",
               },
               attachments: ticketPdfAttachments,
             }
@@ -538,53 +526,6 @@ export const RegisterPage: React.FC = () => {
           "Your esports squad registration has been submitted for verification. Your official team pass and QR ticket will be issued and unlocked for download only after confirmation is completed."
         );
         setSubmitSuccess(true);
-      } else if (selectedType === "participation") {
-        let partRef = "";
-
-        const { data, error } = await supabase.rpc("submit_participation_registration", {
-          p_full_name: partContactPerson.trim(),
-          p_email: partEmail.trim().toLowerCase(),
-          p_phone: partPhone.trim(),
-          p_institution: partInstitution.trim(),
-          p_category: "Innovator",
-          p_area: partExperience,
-          p_project_title: partTitle.trim(),
-          p_project_description: partDesc.trim(),
-          p_team_size: parseInt(partCount, 10) || 1,
-          p_consent: true,
-          p_website: "",
-        });
-
-        if (!error && data) {
-          partRef = typeof data === "string" ? data : String(data);
-        } else {
-          partRef = generateTicketReference("SN3-26");
-          const { error: insertErr } = await supabase.from("participation_registrations").insert({
-            registration_ref: partRef,
-            full_name: partContactPerson.trim(),
-            email: partEmail.trim().toLowerCase(),
-            phone: partPhone.trim(),
-            institution: partInstitution.trim(),
-            participant_category: "Innovator",
-            participation_area: partExperience,
-            project_title: partTitle.trim(),
-            project_description: partDesc.trim(),
-            team_members_count: parseInt(partCount, 10) || 1,
-            status: "pending",
-          });
-
-          if (insertErr) {
-            console.warn("Direct insert warning:", insertErr);
-          }
-        }
-
-        setRegisteredRef(partRef);
-
-        // Strictly NO ticket issuance until administrator approval succeeds
-        setEmailNotice(
-          "Your participation application is pending administrator approval. Once approved, return here and use \"Retrieve Official Pass\" with your application code, email, and phone to view and download your PDF ticket."
-        );
-        setSubmitSuccess(true);
       }
     } catch (err: any) {
       setSubmitError(err.message || "An error occurred during submission.");
@@ -641,8 +582,8 @@ export const RegisterPage: React.FC = () => {
           </button>
         </div>
 
-        {/* Three Cards (3 columns, 24px gaps, stacked on mobile) */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+        {/* Two Registration Cards (Visitor Pass & Esports) */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-12">
           {content.cards.map((card) => {
             const isSelected = selectedType === card.id;
 
@@ -650,7 +591,16 @@ export const RegisterPage: React.FC = () => {
               <button
                 key={card.id}
                 type="button"
-                onClick={() => setSelectedType(card.id)}
+                onClick={() => {
+                  const nextType = card.id as FormType;
+                  setSelectedType(nextType);
+                  if (nextType) {
+                    setSearchParams({ type: nextType });
+                  }
+                  setSubmitSuccess(false);
+                  setSubmitError(null);
+                  setFieldErrors({});
+                }}
                 className={`text-left p-6 rounded-[20px] bg-white transition-all duration-200 relative min-h-[200px] flex flex-col justify-between cursor-pointer ${
                   isSelected
                     ? "border-[3px] border-[#191936] shadow-[6px_6px_0px_#191936] -translate-y-1"
@@ -698,7 +648,6 @@ export const RegisterPage: React.FC = () => {
               {/* Form Title */}
               <div className="mb-8 pb-4 border-b border-[#EAEAF2]">
                 <h2 className="font-heading text-2xl sm:text-3xl font-black uppercase text-[#191936]">
-                  {selectedType === "participation" && "Participation form"}
                   {selectedType === "visitor" && "Visitor form"}
                   {selectedType === "esports" && "Esports team form"}
                 </h2>
@@ -724,9 +673,7 @@ export const RegisterPage: React.FC = () => {
                     <h3 className="font-heading text-2xl sm:text-3xl font-black text-[#191936] uppercase tracking-tight">
                       {selectedType === "visitor"
                         ? "Registration Successful — Official Pass Issued"
-                        : selectedType === "esports"
-                        ? "Esports Registration Submitted"
-                        : "Participation Application Submitted"}
+                        : "Esports Registration Submitted"}
                     </h3>
                     <p className="text-xs sm:text-sm text-[#191936]/80 max-w-md mx-auto mt-1">
                       {selectedType === "visitor"
@@ -742,9 +689,7 @@ export const RegisterPage: React.FC = () => {
                         <span className="text-[11px] font-mono uppercase tracking-wider text-slate-300 font-bold">
                           {selectedType === "visitor"
                             ? "Unique Ticket Reference"
-                            : selectedType === "esports"
-                            ? "Esports Application Reference"
-                            : "Participation Application Reference"}
+                            : "Esports Application Reference"}
                         </span>
                         <span
                           className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase ${
@@ -779,10 +724,24 @@ export const RegisterPage: React.FC = () => {
                           <div className="space-y-3">
                             <div className="text-xs text-slate-300 space-y-1">
                               <p className="font-bold text-white m-0">
-                                {visName.trim() || "Visitor"} · {visCategory}
+                                {visName.trim() || "Visitor"} ·{" "}
+                                {buildVisitorDisplaySubtitle({
+                                  visitorCategory: visCategoryId
+                                    ? getDbCategoryFromId(visCategoryId)
+                                    : "General Visitor",
+                                  studentClass: visCategoryId === "student" ? visStudentClass : null,
+                                  designation:
+                                    visCategoryId === "faculty"
+                                      ? resolveFacultyDesignationValue(
+                                          visDesignationOption,
+                                          visCustomDesignation
+                                        )
+                                      : null,
+                                })}
                               </p>
                               <p className="text-slate-400 m-0">
-                                Attendance: {visDays} · 20–21 November 2026
+                                {visInstitution.trim() ? `${visInstitution.trim()} · ` : ""}
+                                20–21 November 2026
                               </p>
                               <p className="text-cyan-300 text-[11px] m-0">
                                 Present this QR pass (digital or printed PDF) with valid photo ID at the venue entrance.
@@ -805,17 +764,24 @@ export const RegisterPage: React.FC = () => {
                                     ticketRef: issuedVisitorTicket?.ticket_ref || registeredRef,
                                     qrToken: issuedVisitorTicket?.qr_token,
                                     recipientName: visName.trim() || "Visitor",
-                                    category: visCategory,
+                                    category: buildVisitorDisplaySubtitle({
+                                      visitorCategory: visCategoryId
+                                        ? getDbCategoryFromId(visCategoryId)
+                                        : "General Visitor",
+                                      studentClass:
+                                        visCategoryId === "student" ? visStudentClass : null,
+                                      designation:
+                                        visCategoryId === "faculty"
+                                          ? resolveFacultyDesignationValue(
+                                              visDesignationOption,
+                                              visCustomDesignation
+                                            )
+                                          : null,
+                                    }),
                                     email: visEmail.trim(),
-                                    phone: visPhone.trim(),
-                                    institution:
-                                      visCategory === "Student" || visCategory === "Faculty / Staff"
-                                        ? visInstitutionSelect === "Other"
-                                          ? visInstitutionOther.trim()
-                                          : visInstitutionSelect.trim()
-                                        : visOrg.trim() || "General Visitor",
+                                    institution: visInstitution.trim() || undefined,
                                     registrationType: "visitor",
-                                    daysAttending: visDays,
+                                    daysAttending: "Both",
                                   })
                                 }
                                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#D5F542] hover:bg-[#c6e830] text-xs font-mono font-black text-[#0B1120] cursor-pointer"
@@ -846,8 +812,8 @@ export const RegisterPage: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Pending approval instructions for Participation & Esports */}
-                      {selectedType !== "visitor" && (
+                      {/* Pending approval instructions for Esports */}
+                      {selectedType === "esports" && (
                         <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <span className="text-xs text-slate-300">
                             Save your reference code to check approval status & download your PDF pass later.
@@ -856,8 +822,8 @@ export const RegisterPage: React.FC = () => {
                             type="button"
                             onClick={() => {
                               setLookupRef(registeredRef);
-                              setLookupEmail(selectedType === "esports" ? espEmail : partEmail);
-                              setLookupPhone(selectedType === "esports" ? espPhone : partPhone);
+                              setLookupEmail(espEmail);
+                              setLookupPhone(espPhone);
                               setLookupResult(null);
                               setLookupOpen(true);
                             }}
@@ -902,7 +868,7 @@ export const RegisterPage: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                <form onSubmit={handleSubmit} className="space-y-6">
+                <form onSubmit={handleSubmit} noValidate className="space-y-6">
                   {/* Honeypot field (hidden) */}
                   <input
                     type="text"
@@ -914,522 +880,316 @@ export const RegisterPage: React.FC = () => {
                     autoComplete="off"
                   />
 
-                  {/* 1. PARTICIPATION FORM FIELDS */}
-                  {selectedType === "participation" && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                      <div className="md:col-span-2">
-                        <label className="form-label">Institution Name *</label>
-                        <input
-                          type="text"
-                          required
-                          value={partInstitution}
-                          onChange={(e) => setPartInstitution(e.target.value)}
-                          placeholder="e.g. The National College"
-                          className="form-input"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="form-label">Contact Person *</label>
-                        <input
-                          type="text"
-                          required
-                          value={partContactPerson}
-                          onChange={(e) => setPartContactPerson(e.target.value)}
-                          placeholder="Full name"
-                          className="form-input"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="form-label">Email Address *</label>
-                        <input
-                          type="email"
-                          required
-                          value={partEmail}
-                          onChange={(e) => setPartEmail(e.target.value)}
-                          placeholder="name@example.com"
-                          className="form-input"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="form-label">Phone Number *</label>
-                        <input
-                          type="tel"
-                          required
-                          value={partPhone}
-                          onChange={(e) => setPartPhone(e.target.value)}
-                          placeholder="+91 98765 43210"
-                          className="form-input"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="form-label">Experience Area *</label>
-                        <select
-                          value={partExperience}
-                          onChange={(e) => setPartExperience(e.target.value)}
-                          className="form-input"
-                        >
-                          {experiences.map((exp) => (
-                            <option key={exp.id} value={exp.title}>
-                              {exp.num}. {exp.title}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="md:col-span-2">
-                        <label className="form-label">Project or Exhibit Title *</label>
-                        <input
-                          type="text"
-                          required
-                          value={partTitle}
-                          onChange={(e) => setPartTitle(e.target.value)}
-                          placeholder="Title of your project or showcase"
-                          className="form-input"
-                        />
-                      </div>
-
-                      <div className="md:col-span-2">
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="form-label mb-0">Short Description (Max 300 chars) *</label>
-                          <span className="text-xs font-mono text-[#191936]/60">
-                            {partDesc.length}/300
-                          </span>
-                        </div>
-                        <textarea
-                          required
-                          maxLength={300}
-                          rows={3}
-                          value={partDesc}
-                          onChange={(e) => setPartDesc(e.target.value)}
-                          placeholder="Brief summary of your project..."
-                          className="w-full p-4 border-2 border-[#D8D8E5] rounded-xl text-base text-[#191936] outline-none focus:border-[#4549D8]"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="form-label">Number of Participants *</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="20"
-                          required
-                          value={partCount}
-                          onChange={(e) => setPartCount(e.target.value)}
-                          className="form-input"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 2. VISITOR FORM FIELDS (PART A CONDITIONAL IMPLEMENTATION) */}
+                  {/* 1. THREE-CATEGORY VISITOR FORM (STUDENT / FACULTY & DELEGATES / GENERAL) */}
                   {selectedType === "visitor" && (
                     <div className="space-y-6">
-                      {/* Category Selector Tabs */}
+                      {/* Visitor Category Selector Cards */}
                       <div>
-                        <label className="form-label font-bold text-sm text-[#191936] mb-2 block">
+                        <label className="form-label mb-2.5 block">
                           Select Visitor Category *
                         </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          {[
-                            { id: "Student", label: "Student", desc: "School, PUC, or Degree students", icon: GraduationCap },
-                            { id: "General Visitor", label: "General Visitor", desc: "Parents, alumni & public guests", icon: Users },
-                            { id: "Faculty / Staff", label: "Faculty / Staff", desc: "Educators, lecturers & academic staff", icon: Building2 },
-                          ].map((cat) => {
-                            const Icon = cat.icon;
-                            const isSelected = visCategory === cat.id;
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                          {VISITOR_CATEGORY_CARDS.map((card) => {
+                            const isSelected = visCategoryId === card.id;
+                            const IconComp =
+                              card.id === "student"
+                                ? GraduationCap
+                                : card.id === "faculty"
+                                ? Building2
+                                : UserCheck;
                             return (
                               <button
-                                key={cat.id}
+                                key={card.id}
                                 type="button"
-                                onClick={() => setVisCategory(cat.id as any)}
-                                className={`p-4 rounded-2xl text-left border-2 transition-all cursor-pointer flex flex-col justify-between ${
+                                aria-pressed={isSelected}
+                                data-visitor-category-card={card.id}
+                                onClick={() => {
+                                  setVisCategoryId(card.id);
+                                  setSubmitError(null);
+                                  clearFieldError("category");
+                                  clearFieldError("studentClass");
+                                  clearFieldError("designationOption");
+                                  clearFieldError("customDesignation");
+                                  clearFieldError("institution");
+                                }}
+                                className={`text-left p-4 rounded-2xl transition-all duration-150 flex flex-col justify-between min-h-[144px] cursor-pointer ${
                                   isSelected
-                                    ? "bg-[#191936] text-white border-[#191936] shadow-[4px_4px_0px_#4549D8]"
-                                    : "bg-[#F8F7FC] text-[#191936] border-[#D8D8E5] hover:border-[#191936]/50"
+                                    ? "bg-[#F0F2FD] border-2 border-[#191936] shadow-[4px_4px_0px_#191936] -translate-y-0.5"
+                                    : "bg-[#F8F7FC] border border-[#EAEAF2] hover:border-[#191936]/50 hover:bg-white"
                                 }`}
                               >
-                                <div className="flex items-center justify-between mb-2">
-                                  <Icon size={20} className={isSelected ? "text-[#D5F542]" : "text-[#4549D8]"} />
-                                  {isSelected && <span className="w-2 h-2 rounded-full bg-[#D5F542]" />}
+                                <div className="flex items-start justify-between gap-2 mb-3">
+                                  <div
+                                    className={`w-9 h-9 rounded-xl flex items-center justify-center border ${
+                                      isSelected
+                                        ? "bg-[#4549D8] text-white border-[#191936]"
+                                        : "bg-white text-[#4549D8] border-[#EAEAF2]"
+                                    }`}
+                                  >
+                                    <IconComp className="w-4 h-4" />
+                                  </div>
+                                  {isSelected && (
+                                    <CheckCircle2 className="w-5 h-5 text-[#4549D8] shrink-0" />
+                                  )}
                                 </div>
                                 <div>
-                                  <div className="font-heading font-extrabold text-sm uppercase">{cat.label}</div>
-                                  <div className={`text-[11px] mt-0.5 leading-snug ${isSelected ? "text-white/70" : "text-[#191936]/60"}`}>
-                                    {cat.desc}
-                                  </div>
+                                  <h3 className="font-heading text-xs sm:text-[13px] font-black uppercase tracking-tight text-[#191936] mb-1 leading-snug">
+                                    {card.title}
+                                  </h3>
+                                  <p className="text-[11px] text-[#191936]/75 leading-relaxed m-0">
+                                    {card.shortDescription}
+                                  </p>
                                 </div>
                               </button>
                             );
                           })}
                         </div>
+                        {fieldErrors.category && (
+                          <p role="alert" className="text-xs font-medium text-red-600 mt-2">
+                            {fieldErrors.category}
+                          </p>
+                        )}
                       </div>
 
-                      {/* Primary Contact Details (Common to all categories) */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+                      {/* Common Mandatory Fields (Full Name + Email Address) */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                         <div>
-                          <label className="form-label">Full Name *</label>
+                          <label htmlFor="visitor-full-name" className="form-label">
+                            Full Name *
+                          </label>
                           <input
+                            id="visitor-full-name"
+                            name="full_name"
                             type="text"
                             required
+                            maxLength={120}
                             value={visName}
-                            onChange={(e) => setVisName(e.target.value)}
-                            placeholder="Enter your name"
-                            className="form-input"
+                            onChange={(e) => {
+                              setVisName(e.target.value);
+                              clearFieldError("fullName");
+                            }}
+                            placeholder="Enter your full name"
+                            className={`form-input ${fieldErrors.fullName ? "!border-red-500" : ""}`}
                           />
+                          {fieldErrors.fullName && (
+                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              {fieldErrors.fullName}
+                            </p>
+                          )}
                         </div>
 
                         <div>
-                          <label className="form-label">Mobile Number *</label>
+                          <label htmlFor="visitor-email" className="form-label">
+                            Email Address *
+                          </label>
                           <input
-                            type="tel"
-                            required
-                            value={visPhone}
-                            onChange={(e) => setVisPhone(e.target.value)}
-                            placeholder="+91 98765 43210"
-                            className="form-input"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="form-label">Email Address *</label>
-                          <input
+                            id="visitor-email"
+                            name="email"
                             type="email"
                             required
+                            maxLength={254}
                             value={visEmail}
-                            onChange={(e) => setVisEmail(e.target.value)}
+                            onChange={(e) => {
+                              setVisEmail(e.target.value);
+                              clearFieldError("email");
+                            }}
                             placeholder="name@example.com"
-                            className="form-input"
+                            className={`form-input ${fieldErrors.email ? "!border-red-500" : ""}`}
                           />
+                          {fieldErrors.email && (
+                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              {fieldErrors.email}
+                            </p>
+                          )}
                         </div>
-                      </div>
 
-                      {/* CONDITIONAL SUB-SECTION: STUDENT */}
-                      {visCategory === "Student" && (
-                        <div className="p-5 sm:p-6 rounded-2xl bg-[#F0F2FD] border-2 border-[#4549D8]/30 space-y-5 animate-fadeIn">
-                          <div className="flex items-center gap-2 pb-2 border-b border-[#4549D8]/20">
-                            <GraduationCap size={18} className="text-[#4549D8]" />
-                            <h3 className="font-heading font-extrabold text-sm uppercase text-[#191936] tracking-wide">
-                              Student Academic Details
-                            </h3>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {/* Class / Standard Dropdown */}
+                        {/* Conditional: STUDENT VISITOR */}
+                        {visCategoryId === "student" && (
+                          <>
                             <div>
-                              <label className="form-label">Class / Standard *</label>
-                              <select
-                                value={visStudentClass}
-                                onChange={(e) => setVisStudentClass(e.target.value)}
-                                className="form-input bg-white"
-                              >
-                                <option value="8th Standard">8th Standard</option>
-                                <option value="9th Standard">9th Standard</option>
-                                <option value="10th Standard">10th Standard</option>
-                                <option value="PUC First Year">PUC First Year</option>
-                                <option value="PUC Second Year">PUC Second Year</option>
-                                <option value="Degree">Degree</option>
-                                <option value="Other">Other</option>
-                              </select>
-                            </div>
-
-                            {/* Student Roll No / ID */}
-                            <div>
-                              <label className="form-label">Student Roll Number / Student ID *</label>
+                              <label htmlFor="visitor-class-course" className="form-label">
+                                Class / Course *
+                              </label>
                               <input
+                                id="visitor-class-course"
+                                name="student_class"
                                 type="text"
                                 required
-                                value={visStudentId}
-                                onChange={(e) => setVisStudentId(e.target.value)}
-                                placeholder="e.g. 24NCB1042 or Roll 42"
-                                className="form-input bg-white"
+                                maxLength={120}
+                                value={visStudentClass}
+                                onChange={(e) => {
+                                  setVisStudentClass(e.target.value);
+                                  clearFieldError("studentClass");
+                                }}
+                                placeholder="e.g. II PUC Science, B.Sc. Computer Science, 10th Standard"
+                                className={`form-input ${fieldErrors.studentClass ? "!border-red-500" : ""}`}
                               />
+                              {fieldErrors.studentClass && (
+                                <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                  {fieldErrors.studentClass}
+                                </p>
+                              )}
                             </div>
 
-                            {/* School / College Dropdown */}
-                            <div className="sm:col-span-2">
-                              <label className="form-label">School / College Name *</label>
+                            <div>
+                              <label htmlFor="visitor-institution" className="form-label">
+                                College / Institution Name *
+                              </label>
+                              <input
+                                id="visitor-institution"
+                                name="institution"
+                                type="text"
+                                required
+                                maxLength={150}
+                                list="visitor-institutions-list"
+                                value={visInstitution}
+                                onChange={(e) => {
+                                  setVisInstitution(e.target.value);
+                                  clearFieldError("institution");
+                                }}
+                                placeholder="Enter your school, college or institution name"
+                                className={`form-input ${fieldErrors.institution ? "!border-red-500" : ""}`}
+                              />
+                              {fieldErrors.institution && (
+                                <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                  {fieldErrors.institution}
+                                </p>
+                              )}
+                            </div>
+                          </>
+                        )}
+
+                        {/* Conditional: FACULTY & INSTITUTIONAL DELEGATES */}
+                        {visCategoryId === "faculty" && (
+                          <>
+                            <div>
+                              <label htmlFor="visitor-designation" className="form-label">
+                                Designation / Role *
+                              </label>
                               <select
-                                value={visInstitutionSelect}
-                                onChange={(e) => setVisInstitutionSelect(e.target.value)}
-                                className="form-input bg-white"
+                                id="visitor-designation"
+                                name="designation"
+                                required
+                                value={visDesignationOption}
+                                onChange={(e) => {
+                                  setVisDesignationOption(e.target.value);
+                                  clearFieldError("designationOption");
+                                  if (e.target.value !== "Other") {
+                                    clearFieldError("customDesignation");
+                                  }
+                                }}
+                                className={`form-input ${fieldErrors.designationOption ? "!border-red-500" : ""}`}
                               >
-                                <option value="The National College, Basavanagudi">The National College, Basavanagudi</option>
-                                <option value="National PU College, Jayanagar">National PU College, Jayanagar</option>
-                                <option value="National PU College, Basavanagudi">National PU College, Basavanagudi</option>
-                                <option value="National High School, Basavanagudi">National High School, Basavanagudi</option>
-                                <option value="National English School">National English School</option>
-                                <option value="National Degree College, Jayanagar">National Degree College, Jayanagar</option>
-                                <option value="DR.HNCE">DR.HNCE</option>
-                                <option value="Bangalore University">Bangalore University</option>
-                                <option value="Other">Other Institution (Enter name below)</option>
+                                <option value="">Select designation / role...</option>
+                                {FACULTY_DESIGNATION_OPTIONS.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
                               </select>
+                              {fieldErrors.designationOption && (
+                                <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                  {fieldErrors.designationOption}
+                                </p>
+                              )}
                             </div>
 
-                            {/* Custom Institution Input if Other selected */}
-                            {visInstitutionSelect === "Other" && (
-                              <div className="sm:col-span-2 animate-fadeIn">
-                                <label className="form-label">Enter Institution / School Name *</label>
+                            <div>
+                              <label htmlFor="visitor-institution" className="form-label">
+                                College / Institution Name *
+                              </label>
+                              <input
+                                id="visitor-institution"
+                                name="institution"
+                                type="text"
+                                required
+                                maxLength={150}
+                                list="visitor-institutions-list"
+                                value={visInstitution}
+                                onChange={(e) => {
+                                  setVisInstitution(e.target.value);
+                                  clearFieldError("institution");
+                                }}
+                                placeholder="Enter your school, college or institution name"
+                                className={`form-input ${fieldErrors.institution ? "!border-red-500" : ""}`}
+                              />
+                              {fieldErrors.institution && (
+                                <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                  {fieldErrors.institution}
+                                </p>
+                              )}
+                            </div>
+
+                            {visDesignationOption === "Other" && (
+                              <div className="md:col-span-2">
+                                <label htmlFor="visitor-custom-designation" className="form-label">
+                                  Specify Designation / Role *
+                                </label>
                                 <input
+                                  id="visitor-custom-designation"
+                                  name="custom_designation"
                                   type="text"
                                   required
-                                  value={visInstitutionOther}
-                                  onChange={(e) => setVisInstitutionOther(e.target.value)}
-                                  placeholder="Full school or college name"
-                                  className="form-input bg-white"
+                                  maxLength={120}
+                                  value={visCustomDesignation}
+                                  onChange={(e) => {
+                                    setVisCustomDesignation(e.target.value);
+                                    clearFieldError("customDesignation");
+                                  }}
+                                  placeholder="e.g. Research Coordinator, Academic Advisor, Dean"
+                                  className={`form-input ${fieldErrors.customDesignation ? "!border-red-500" : ""}`}
                                 />
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Esports Interest Dynamic Section */}
-                          <div className="pt-3 border-t border-[#4549D8]/20 space-y-4">
-                            <div>
-                              <label className="form-label font-bold text-sm text-[#191936] block mb-1">
-                                Are you interested in the Supernova Esports Arena? *
-                              </label>
-                              <p className="text-xs text-[#191936]/70 mb-3">
-                                Experience official collegiate tournaments for VALORANT, BGMI, and Free Fire.
-                              </p>
-                              <div className="flex items-center gap-3">
-                                <button
-                                  type="button"
-                                  onClick={() => setVisEsportsInterest(true)}
-                                  className={`px-6 py-2.5 rounded-xl font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
-                                    visEsportsInterest
-                                      ? "bg-[#4549D8] text-white shadow-sm"
-                                      : "bg-white text-[#191936] border border-[#D8D8E5] hover:bg-gray-50"
-                                  }`}
-                                >
-                                  Yes, I'm Interested
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setVisEsportsInterest(false)}
-                                  className={`px-6 py-2.5 rounded-xl font-mono text-xs font-bold uppercase transition-all cursor-pointer ${
-                                    !visEsportsInterest
-                                      ? "bg-[#191936] text-white shadow-sm"
-                                      : "bg-white text-[#191936] border border-[#D8D8E5] hover:bg-gray-50"
-                                  }`}
-                                >
-                                  No, Just Visiting
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Conditional Game Selection & Competing Details */}
-                            {visEsportsInterest && (
-                              <div className="p-4 rounded-xl bg-white border border-[#4549D8]/30 space-y-4 animate-fadeIn">
-                                {/* Preferred Game */}
-                                <div>
-                                  <label className="form-label">Preferred Esports Game *</label>
-                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                    {[
-                                      { id: "VALORANT", label: "VALORANT", type: "PC 5v5 Tactical", color: "#FF4655" },
-                                      { id: "BGMI", label: "BGMI", type: "Mobile Battle Royale", color: "#F5A623" },
-                                      { id: "Free Fire", label: "Free Fire", type: "Mobile Survival", color: "#FF6A00" },
-                                    ].map((g) => {
-                                      const isSelected = visPreferredGame === g.id;
-                                      return (
-                                        <button
-                                          key={g.id}
-                                          type="button"
-                                          onClick={() => setVisPreferredGame(g.id as any)}
-                                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                                            isSelected
-                                              ? "border-2 shadow-sm font-bold"
-                                              : "border-gray-200 hover:border-gray-400"
-                                          }`}
-                                          style={{
-                                            borderColor: isSelected ? g.color : undefined,
-                                            backgroundColor: isSelected ? `${g.color}10` : undefined,
-                                          }}
-                                        >
-                                          <div className="font-display text-sm font-extrabold" style={{ color: isSelected ? g.color : "#191936" }}>
-                                            {g.label}
-                                          </div>
-                                          <div className="text-[10px] text-gray-500 font-mono mt-0.5">{g.type}</div>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-
-                                {/* Spectator vs Competitor Intent */}
-                                <div>
-                                  <label className="form-label">How do you plan to participate? *</label>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    <button
-                                      type="button"
-                                      onClick={() => setVisEsportsIntent("spectator")}
-                                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
-                                        visEsportsIntent === "spectator"
-                                          ? "bg-[#191936] text-white border-[#191936] font-bold"
-                                          : "bg-gray-50 text-gray-800 border-gray-200"
-                                      }`}
-                                    >
-                                      <div className="font-heading text-xs uppercase">Spectator / Audience</div>
-                                      <div className="text-[11px] opacity-75 mt-0.5">I want to watch the live championship matches in the arena (no gamer ID required).</div>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setVisEsportsIntent("competing")}
-                                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
-                                        visEsportsIntent === "competing"
-                                          ? "bg-[#4549D8] text-white border-[#4549D8] font-bold"
-                                          : "bg-gray-50 text-gray-800 border-gray-200"
-                                      }`}
-                                    >
-                                      <div className="font-heading text-xs uppercase">Register to Compete</div>
-                                      <div className="text-[11px] opacity-75 mt-0.5">I am registering to play in tournament fixtures (collects In-Game ID & Team).</div>
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {/* Competing Details: In-Game ID & Team */}
-                                {visEsportsIntent === "competing" && (
-                                  <div className="pt-3 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-2 gap-3 animate-fadeIn">
-                                    <div>
-                                      <label className="form-label">
-                                        In-Game Player ID / Gamer Tag *
-                                      </label>
-                                      <input
-                                        type="text"
-                                        required
-                                        value={visInGameId}
-                                        onChange={(e) => setVisInGameId(e.target.value)}
-                                        placeholder={
-                                          visPreferredGame === "VALORANT"
-                                            ? "e.g. Phoenix#1234"
-                                            : "e.g. BGMI UID: 5123456789"
-                                        }
-                                        className="form-input !h-10 text-xs"
-                                      />
-                                    </div>
-
-                                    <div>
-                                      <label className="form-label">Team Name (if applicable)</label>
-                                      <input
-                                        type="text"
-                                        value={visTeamName}
-                                        onChange={(e) => setVisTeamName(e.target.value)}
-                                        placeholder="e.g. Basavanagudi Blasters"
-                                        className="form-input !h-10 text-xs"
-                                      />
-                                    </div>
-
-                                    <div className="sm:col-span-2">
-                                      <label className="form-label">Additional Competition Details (Optional)</label>
-                                      <input
-                                        type="text"
-                                        value={visCompetitionNotes}
-                                        onChange={(e) => setVisCompetitionNotes(e.target.value)}
-                                        placeholder="Device model, preferred role (e.g. Duelist, IGL, Assaulter), or teammate info"
-                                        className="form-input !h-10 text-xs"
-                                      />
-                                    </div>
-                                  </div>
+                                {fieldErrors.customDesignation && (
+                                  <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                    {fieldErrors.customDesignation}
+                                  </p>
                                 )}
                               </div>
                             )}
-                          </div>
-                        </div>
-                      )}
+                          </>
+                        )}
 
-                      {/* CONDITIONAL SUB-SECTION: FACULTY / STAFF */}
-                      {visCategory === "Faculty / Staff" && (
-                        <div className="p-5 sm:p-6 rounded-2xl bg-[#FFF6EE] border-2 border-[#FF873D]/30 space-y-4 animate-fadeIn">
-                          <div className="flex items-center gap-2 pb-2 border-b border-[#FF873D]/20">
-                            <Building2 size={18} className="text-[#FF873D]" />
-                            <h3 className="font-heading font-extrabold text-sm uppercase text-[#191936] tracking-wide">
-                              Institutional & Faculty Details
-                            </h3>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                              <label className="form-label">Institution / College Name *</label>
-                              <select
-                                value={visInstitutionSelect}
-                                onChange={(e) => setVisInstitutionSelect(e.target.value)}
-                                className="form-input bg-white"
-                              >
-                                <option value="The National College, Basavanagudi">The National College, Basavanagudi</option>
-                                <option value="National PU College, Jayanagar">National PU College, Jayanagar</option>
-                                <option value="National PU College, Basavanagudi">National PU College, Basavanagudi</option>
-                                <option value="National High School, Basavanagudi">National High School, Basavanagudi</option>
-                                <option value="National English School">National English School</option>
-                                <option value="National Degree College, Jayanagar">National Degree College, Jayanagar</option>
-                                <option value="DR.HNCE">DR.HNCE</option>
-                                <option value="Bangalore University">Bangalore University</option>
-                                <option value="Other">Other Institution (Enter name below)</option>
-                              </select>
-                            </div>
-
-                            <div>
-                              <label className="form-label">Designation / Department *</label>
-                              <input
-                                type="text"
-                                required
-                                value={visDesignation}
-                                onChange={(e) => setVisDesignation(e.target.value)}
-                                placeholder="e.g. Assistant Professor, Physics / Lecturer"
-                                className="form-input bg-white"
-                              />
-                            </div>
-
-                            {visInstitutionSelect === "Other" && (
-                              <div className="sm:col-span-2 animate-fadeIn">
-                                <label className="form-label">Enter Institution Name *</label>
-                                <input
-                                  type="text"
-                                  required
-                                  value={visInstitutionOther}
-                                  onChange={(e) => setVisInstitutionOther(e.target.value)}
-                                  placeholder="Full institution name"
-                                  className="form-input bg-white"
-                                />
-                              </div>
+                        {/* Conditional: GENERAL VISITOR */}
+                        {visCategoryId === "general" && (
+                          <div className="md:col-span-2">
+                            <label htmlFor="visitor-institution" className="form-label">
+                              College / Institution Name (Optional)
+                            </label>
+                            <input
+                              id="visitor-institution"
+                              name="institution"
+                              type="text"
+                              maxLength={150}
+                              list="visitor-institutions-list"
+                              value={visInstitution}
+                              onChange={(e) => {
+                                setVisInstitution(e.target.value);
+                                clearFieldError("institution");
+                              }}
+                              placeholder="Optional — school, college, organization or community affiliation"
+                              className={`form-input ${fieldErrors.institution ? "!border-red-500" : ""}`}
+                            />
+                            {fieldErrors.institution && (
+                              <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                {fieldErrors.institution}
+                              </p>
                             )}
                           </div>
-                        </div>
-                      )}
-
-                      {/* CONDITIONAL SUB-SECTION: GENERAL VISITOR */}
-                      {visCategory === "General Visitor" && (
-                        <div className="p-5 sm:p-6 rounded-2xl bg-[#F8F7FC] border border-[#EAEAF2] space-y-4 animate-fadeIn">
-                          <div>
-                            <label className="form-label">Organisation / Workplace / Background (Optional)</label>
-                            <input
-                              type="text"
-                              value={visOrg}
-                              onChange={(e) => setVisOrg(e.target.value)}
-                              placeholder="e.g. Parent, Alumni, Independent Guest, Company"
-                              className="form-input bg-white"
-                            />
-                            <p className="text-[11px] text-[#191936]/60 mt-1">
-                              General visitors do not need to provide student roll numbers or school credentials.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Days Attending (Common to all categories) */}
-                      <div>
-                        <label className="form-label">Festival Days Attending *</label>
-                        <select
-                          value={visDays}
-                          onChange={(e) => setVisDays(e.target.value)}
-                          className="form-input"
-                        >
-                          <option value="Both">Both Days (20 & 21 November 2026)</option>
-                          <option value="Day 1">Day 1 Only (20 November 2026)</option>
-                          <option value="Day 2">Day 2 Only (21 November 2026)</option>
-                        </select>
+                        )}
                       </div>
+
+                      {!visCategoryId && (
+                        <div className="p-3.5 rounded-xl bg-[#F8F7FC] border border-[#EAEAF2] text-xs text-[#191936]/75">
+                          Please choose one of the three visitor categories above (<strong>Student Visitor</strong>,{" "}
+                          <strong>Faculty &amp; Institutional Delegates</strong>, or <strong>General Visitor</strong>) to complete your registration details.
+                        </div>
+                      )}
+
+                      <datalist id="visitor-institutions-list">
+                        {SUGGESTED_INSTITUTIONS.map((inst) => (
+                          <option key={inst} value={inst} />
+                        ))}
+                      </datalist>
                     </div>
                   )}
 
@@ -1679,17 +1439,19 @@ export const RegisterPage: React.FC = () => {
           qrToken={issuedVisitorTicket?.qr_token}
           registrationCategory="visitor"
           displayName={visName.trim() || "Visitor"}
-          subtitle={visCategory}
-          institution={
-            visCategory === "Student" || visCategory === "Faculty / Staff"
-              ? visInstitutionSelect === "Other"
-                ? visInstitutionOther.trim()
-                : visInstitutionSelect.trim()
-              : visOrg.trim() || "General Visitor"
-          }
+          subtitle={buildVisitorDisplaySubtitle({
+            visitorCategory: visCategoryId
+              ? getDbCategoryFromId(visCategoryId)
+              : "General Visitor",
+            studentClass: visCategoryId === "student" ? visStudentClass : null,
+            designation:
+              visCategoryId === "faculty"
+                ? resolveFacultyDesignationValue(visDesignationOption, visCustomDesignation)
+                : null,
+          })}
+          institution={visInstitution.trim() || undefined}
           email={visEmail.trim()}
-          phone={visPhone.trim()}
-          daysAttending={visDays}
+          daysAttending="Both"
           issuedAt={issuedVisitorTicket?.issued_at}
           checkedInAt={issuedVisitorTicket?.checked_in_at}
         />
@@ -1716,7 +1478,7 @@ export const RegisterPage: React.FC = () => {
                     Retrieve Official Pass
                   </h2>
                   <p className="text-[11px] font-mono text-cyan-300 m-0">
-                    Reference + Email + Mobile verification required
+                    Visitor passes verify via Reference + Email; Esports passes also require Mobile
                   </p>
                 </div>
               </div>
@@ -1731,7 +1493,7 @@ export const RegisterPage: React.FC = () => {
             </div>
 
             <div className="p-6 space-y-4">
-              <form onSubmit={handleLookupPass} className="space-y-3.5">
+              <form onSubmit={handleLookupPass} noValidate className="space-y-3.5">
                 <div>
                   <label className="form-label">Registration / Ticket Reference *</label>
                   <input
@@ -1756,13 +1518,12 @@ export const RegisterPage: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label className="form-label">Registered Phone *</label>
+                    <label className="form-label">Registered Phone (Esports only)</label>
                     <input
                       type="tel"
-                      required
                       value={lookupPhone}
                       onChange={(e) => setLookupPhone(e.target.value)}
-                      placeholder="10-digit mobile number"
+                      placeholder="Required for Esports squads"
                       className="form-input font-mono"
                     />
                   </div>
@@ -1817,13 +1578,11 @@ export const RegisterPage: React.FC = () => {
                                 lookupResult.ticket!.subtitle ||
                                 lookupResult.ticket!.registration_category,
                               email: lookupEmail.trim(),
-                              phone: lookupPhone.trim(),
+                              phone: lookupPhone.trim() || undefined,
                               institution: lookupResult.ticket!.institution || undefined,
                               registrationType:
                                 lookupResult.ticket!.registration_category === "esports"
                                   ? "esports_team"
-                                  : lookupResult.ticket!.registration_category === "participation"
-                                  ? "participation"
                                   : "visitor",
                             })
                           }

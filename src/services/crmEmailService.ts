@@ -43,7 +43,7 @@ export interface EmailDeliveryStatus {
 export interface RecipientSuggestion {
   email: string;
   name: string;
-  type: "visitor" | "esports" | "participation";
+  type: "visitor" | "esports";
   ref?: string;
 }
 
@@ -397,7 +397,7 @@ export async function getCrmEmailHistory(): Promise<CrmEmail[]> {
 }
 
 /**
- * Fetches registrant emails from registrations, visitor_registrations, and participation_registrations
+ * Fetches registrant emails from registrations and visitor_registrations
  */
 export async function getSuggestedRecipients(): Promise<RecipientSuggestion[]> {
   const suggestions: RecipientSuggestion[] = [];
@@ -439,26 +439,6 @@ export async function getSuggestedRecipients(): Promise<RecipientSuggestion[]> {
             name: `${e.captain_name} (${e.team_name || "Esports"})`,
             type: "esports",
             ref: e.registration_ref,
-          });
-        }
-      }
-    }
-
-    const { data: participants } = await supabase
-      .from("participation_registrations")
-      .select("email, full_name, registration_ref")
-      .not("email", "is", null)
-      .limit(60);
-
-    if (participants) {
-      for (const p of participants) {
-        if (p.email && !seen.has(p.email.toLowerCase())) {
-          seen.add(p.email.toLowerCase());
-          suggestions.push({
-            email: p.email.toLowerCase().trim(),
-            name: p.full_name || "Participant",
-            type: "participation",
-            ref: p.registration_ref,
           });
         }
       }

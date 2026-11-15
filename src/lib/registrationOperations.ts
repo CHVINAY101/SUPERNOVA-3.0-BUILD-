@@ -15,18 +15,17 @@ import {
   type EmailAttachmentInput,
 } from "@/lib/emailPayload";
 
-export type RegistrationTargetType = "visitor" | "esports" | "participation";
+export type RegistrationTargetType = "visitor" | "esports";
 
 export interface UnifiedVisitorLinkParams {
   name: string;
   email: string;
-  phone: string;
+  phone?: string | null;
   institution?: string | null;
-  source: "direct_visitor" | "participation" | "esports_captain" | "esports_player";
+  source: "direct_visitor" | "esports_captain" | "esports_player";
   linkedRef: string;
   category?: string;
   studentClass?: string | null;
-  studentId?: string | null;
   designation?: string | null;
   esportsInterest?: boolean;
   preferredGame?: string | null;
@@ -36,7 +35,7 @@ export interface UnifiedVisitorLinkParams {
 
 export interface UniversalLookupResult {
   id: string;
-  type: "visitor" | "participation" | "esports";
+  type: "visitor" | "esports";
   reference: string;
   ticketRef?: string;
   titleOrName: string;
@@ -100,7 +99,7 @@ export async function unifyAndLinkVisitor(
   try {
     const cleanEmail = params.email.trim().toLowerCase();
     const cleanName = params.name.trim();
-    const cleanPhone = params.phone.trim();
+    const cleanPhone = (params.phone || "").trim();
 
     // 1. Check if visitor already exists with matching email
     const { data: existing, error: searchError } = await supabase
@@ -136,7 +135,7 @@ export async function unifyAndLinkVisitor(
 
     // 2. No existing record found -> Create new visitor record
     // Try submit_visitor_registration RPC first
-    const category = params.category || (params.source === "esports_player" || params.source === "esports_captain" ? "Esports Player" : "Project Participant");
+    const category = params.category || (params.source === "esports_player" || params.source === "esports_captain" ? "Esports Player" : "Visitor");
     const inst = params.institution?.trim() || "Independent";
 
     let createdRef = "";
@@ -145,7 +144,7 @@ export async function unifyAndLinkVisitor(
       const { data: rpcRef, error: rpcError } = await supabase.rpc("submit_visitor_registration", {
         p_full_name: cleanName,
         p_email: cleanEmail,
-        p_phone: cleanPhone || "0000000000",
+        p_phone: cleanPhone || null,
         p_institution: inst,
         p_visitor_category: category,
         p_consent: true,
@@ -167,8 +166,9 @@ export async function unifyAndLinkVisitor(
           registration_ref: createdRef,
           full_name: cleanName,
           email: cleanEmail,
-          phone: cleanPhone || "0000000000",
+          phone: cleanPhone || null,
           institution: inst,
+          student_class: params.studentClass?.trim() || null,
           visitor_category: category,
           status: "confirmed",
           admin_notes: `[AUTO_LINKED_${params.source.toUpperCase()}: ${params.linkedRef}]`,
@@ -189,7 +189,7 @@ export async function unifyAndLinkVisitor(
 
 /**
  * Universal Ticket & Registration Search Lookup
- * Searches across visitor passes, participation projects, and esports squads.
+ * Searches across visitor passes and esports squads.
  */
 export async function searchTicketOrReference(query: string): Promise<UniversalLookupResult[]> {
   const q = query.trim().toLowerCase();
@@ -199,29 +199,37 @@ export async function searchTicketOrReference(query: string): Promise<UniversalL
   const linkedMap = getLocalLinkedTickets();
 
   try {
-    const [visRes, partRes, espRes] = await Promise.all([
+    const [visRes, espRes] = await Promise.all([
       supabase.from("visitor_registrations").select("*").limit(200),
-      supabase.from("participation_registrations").select("*").limit(200),
       supabase.from("registrations").select("*, games(title), players(player_name, gamer_tag)").limit(200),
     ]);
 
     // 1. Visitors
     (visRes.data || []).forEach((v: any) => {
       const ref = (v.registration_ref || "").toLowerCase();
+      const ticketRef = (v.ticket_ref || "").toLowerCase();
       const name = (v.full_name || "").toLowerCase();
       const email = (v.email || "").toLowerCase();
-      const phone = (v.phone || "").toLowerCase();
+      const studentClass = (v.student_class || "").toLowerCase();
+      const institution = (v.institution || "").toLowerCase();
 
-      if (ref.includes(q) || name.includes(q) || email.includes(q) || phone.includes(q)) {
+      if (
+        ref.includes(q) ||
+        ticketRef.includes(q) ||
+        name.includes(q) ||
+        email.includes(q) ||
+        studentClass.includes(q) ||
+        institution.includes(q)
+      ) {
         results.push({
           id: v.id,
           type: "visitor",
           reference: v.registration_ref,
-          ticketRef: v.registration_ref,
+          ticketRef: v.ticket_ref || v.registration_ref,
           titleOrName: v.full_name,
-          subTitle: `Visitor Pass (${v.visitor_category || "General"})`,
+          subTitle: `Visitor Pass${v.student_class ? ` · ${v.student_class}` : ""}`,
           email: v.email,
-          phone: v.phone,
+          phone: v.phone || "",
           institution: v.institution || "Independent",
           status: v.status || "confirmed",
           isArchived: isRegistrationArchived(v),
@@ -230,39 +238,6 @@ export async function searchTicketOrReference(query: string): Promise<UniversalL
           extraDetails: {
             days: v.days_attending,
             studentClass: v.student_class,
-            studentId: v.student_id,
-            designation: v.designation,
-          },
-        });
-      }
-    });
-
-    // 2. Participation
-    (partRes.data || []).forEach((p: any) => {
-      const ref = (p.registration_ref || "").toLowerCase();
-      const name = (p.full_name || "").toLowerCase();
-      const proj = (p.project_title || "").toLowerCase();
-      const email = (p.email || "").toLowerCase();
-      const ticket = (linkedMap[p.registration_ref] || p.visitor_ticket_ref || "").toLowerCase();
-
-      if (ref.includes(q) || name.includes(q) || proj.includes(q) || email.includes(q) || ticket.includes(q)) {
-        results.push({
-          id: p.id,
-          type: "participation",
-          reference: p.registration_ref,
-          ticketRef: p.visitor_ticket_ref || linkedMap[p.registration_ref] || `${p.registration_ref}-VIS`,
-          titleOrName: p.project_title || p.full_name,
-          subTitle: `Project Exhibit · Lead: ${p.full_name} (${p.participation_area || "Expo"})`,
-          email: p.email,
-          phone: p.phone,
-          institution: p.institution || "Independent",
-          status: p.status || "pending",
-          isArchived: isRegistrationArchived(p),
-          emailStatus: p.email_status || "pending",
-          submittedAt: p.submitted_at,
-          extraDetails: {
-            teamSize: p.team_members_count,
-            area: p.participation_area,
           },
         });
       }
@@ -381,7 +356,7 @@ async function probeEdgeFunctionStatus(functionName: string): Promise<{ status?:
 }
 
 /**
- * Dispatch confirmation email with support for visitor, esports, and participation.
+ * Dispatch confirmation email with support for visitor and esports.
  * Strictly checks real provider delivery via Supabase Edge Function — never fabricates a "sent" status.
  */
 export async function sendRegistrationConfirmationEmail(
@@ -420,11 +395,7 @@ export async function sendRegistrationConfirmationEmail(
 
   const runDispatch = async () => {
     const table =
-      registrationType === "visitor"
-        ? "visitor_registrations"
-        : registrationType === "esports"
-        ? "registrations"
-        : "participation_registrations";
+      registrationType === "visitor" ? "visitor_registrations" : "registrations";
 
     const nowIso = new Date().toISOString();
     const officialSender = "animationthenationalcollege@gmail.com";
@@ -844,15 +815,11 @@ export async function archiveRegistrationRecord(
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const table =
-      registrationType === "visitor"
-        ? "visitor_registrations"
-        : registrationType === "esports"
-        ? "registrations"
-        : "participation_registrations";
+      registrationType === "visitor" ? "visitor_registrations" : "registrations";
 
     let dbSucceeded = false;
 
-    if (registrationType === "visitor" || registrationType === "esports" || registrationType === "participation") {
+    if (registrationType === "visitor" || registrationType === "esports") {
       try {
         const { data, error } = await supabase.rpc("archive_registration", {
           p_type: registrationType,
@@ -929,11 +896,7 @@ export async function restoreRegistrationRecord(
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const table =
-      registrationType === "visitor"
-        ? "visitor_registrations"
-        : registrationType === "esports"
-        ? "registrations"
-        : "participation_registrations";
+      registrationType === "visitor" ? "visitor_registrations" : "registrations";
 
     const { error } = await supabase
       .from(table)

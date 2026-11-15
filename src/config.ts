@@ -26,7 +26,6 @@ export interface ConfigType {
   EVENT_END: string;
   DEBUG: boolean;
   FORM_ENDPOINTS: {
-    participation: string;
     visitor: string;
     esports: string;
   };
@@ -63,7 +62,6 @@ export const CONFIG: ConfigType = {
   EVENT_END: "2026-11-21T23:59:59+05:30",
   DEBUG: true,
   FORM_ENDPOINTS: {
-    participation: "",
     visitor: "",
     esports: "",
   },

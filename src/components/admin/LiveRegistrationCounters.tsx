@@ -1,13 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { Users, Gamepad2, Clock, CheckCircle2, Archive, Lightbulb } from "lucide-react";
+import { Users, Gamepad2, Clock, CheckCircle2, Archive } from "lucide-react";
 import { isRegistrationArchived } from "@/lib/registrationOperations";
 
 interface LiveCounts {
   uniqueVisitors: number;
   activeEsportsTeams: number;
-  activeProjects: number;
   pendingTotal: number;
   confirmedTotal: number;
   archivedTotal: number;
@@ -17,12 +16,10 @@ export function LiveRegistrationCounters() {
   const { hasPermission } = useAuth();
   const canViewVisitors = hasPermission("visitor:view");
   const canViewEsports = hasPermission("esports:view");
-  const canViewParticipation = hasPermission("participation:view");
 
   const [counts, setCounts] = useState<LiveCounts>({
     uniqueVisitors: 0,
     activeEsportsTeams: 0,
-    activeProjects: 0,
     pendingTotal: 0,
     confirmedTotal: 0,
     archivedTotal: 0,
@@ -31,21 +28,17 @@ export function LiveRegistrationCounters() {
 
   const fetchCounts = useCallback(async () => {
     try {
-      const [visRes, espRes, partRes] = await Promise.all([
+      const [visRes, espRes] = await Promise.all([
         canViewVisitors
           ? supabase.from("visitor_registrations").select("id, email, status, admin_notes")
           : Promise.resolve({ data: [] as any[] }),
         canViewEsports
           ? supabase.from("registrations").select("id, email, status, admin_notes")
           : Promise.resolve({ data: [] as any[] }),
-        canViewParticipation
-          ? supabase.from("participation_registrations").select("id, email, status, admin_notes")
-          : Promise.resolve({ data: [] as any[] }),
       ]);
 
       const visitors = (visRes.data || []) as any[];
       const esports = (espRes.data || []) as any[];
-      const participation = (partRes.data || []) as any[];
 
       // Deduplicate unique visitors by email and ID across active visitor records
       const uniqueVisitorEmails = new Set<string>();
@@ -66,25 +59,21 @@ export function LiveRegistrationCounters() {
       });
 
       const activeEsportsTeams = esports.filter((r) => !isRegistrationArchived(r)).length;
-      const activeProjects = participation.filter((r) => !isRegistrationArchived(r)).length;
 
       const allActive = [
         ...visitors.filter((r) => !isRegistrationArchived(r)),
         ...esports.filter((r) => !isRegistrationArchived(r)),
-        ...participation.filter((r) => !isRegistrationArchived(r)),
       ];
 
       const pendingTotal = allActive.filter((r) => r.status === "pending").length;
       const confirmedTotal = allActive.filter((r) => r.status === "confirmed").length;
       const archivedTotal =
         visitors.filter((r) => isRegistrationArchived(r)).length +
-        esports.filter((r) => isRegistrationArchived(r)).length +
-        participation.filter((r) => isRegistrationArchived(r)).length;
+        esports.filter((r) => isRegistrationArchived(r)).length;
 
       setCounts({
         uniqueVisitors: visitorCount,
         activeEsportsTeams,
-        activeProjects,
         pendingTotal,
         confirmedTotal,
         archivedTotal,
@@ -94,7 +83,7 @@ export function LiveRegistrationCounters() {
     } finally {
       setLoading(false);
     }
-  }, [canViewVisitors, canViewEsports, canViewParticipation]);
+  }, [canViewVisitors, canViewEsports]);
 
   useEffect(() => {
     fetchCounts();
@@ -105,9 +94,6 @@ export function LiveRegistrationCounters() {
         fetchCounts();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "registrations" }, () => {
-        fetchCounts();
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "participation_registrations" }, () => {
         fetchCounts();
       })
       .subscribe((status) => {
@@ -135,13 +121,6 @@ export function LiveRegistrationCounters() {
       value: counts.activeEsportsTeams,
       icon: Gamepad2,
       badgeColor: "bg-purple-50 text-purple-700 border-purple-200",
-    },
-    {
-      label: "Project Exhibits",
-      sublabel: "Expo & science showcases",
-      value: counts.activeProjects,
-      icon: Lightbulb,
-      badgeColor: "bg-amber-50 text-amber-700 border-amber-200",
     },
     {
       label: "Pending Review",
@@ -176,7 +155,7 @@ export function LiveRegistrationCounters() {
           {loading ? "Syncing..." : "Realtime Active"}
         </span>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
         {cards.map((c) => {
           const Icon = c.icon;
           return (

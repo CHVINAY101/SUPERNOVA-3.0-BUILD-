@@ -15,7 +15,6 @@ const VALID_ROLES = [
   "registration_staff",
   "esports_entry_staff",
   "checkin_staff",
-  "participation_manager",
   "esports_manager",
   "match_conductor",
   "score_operator",

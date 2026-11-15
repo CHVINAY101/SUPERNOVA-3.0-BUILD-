@@ -27,7 +27,6 @@ import AdminDashboard from "./pages/admin/AdminDashboard";
 import AdminCheckin from "./pages/admin/AdminCheckin";
 import AdminEsportsControl from "./pages/admin/AdminEsportsControl";
 import AdminRegistrationControls from "./pages/admin/AdminRegistrationControls";
-import AdminParticipationRegistrations from "./pages/admin/AdminParticipationRegistrations";
 import AdminEsportsRegistrations from "./pages/admin/AdminEsportsRegistrations";
 import AdminVisitorRegistrations from "./pages/admin/AdminVisitorRegistrations";
 import AdminSchedule from "./pages/admin/AdminSchedule";
@@ -65,7 +64,6 @@ export default function App() {
         <Route path="/announcements" element={<Announcements />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/register/esports" element={<Navigate to="/register?type=esports" replace />} />
-        <Route path="/register/participation" element={<Navigate to="/register?type=participation" replace />} />
         <Route path="/register/visitor" element={<Navigate to="/register?type=visitor" replace />} />
         <Route path="/esports/live" element={<EsportsLive />} />
         <Route path="/science-expo" element={<ScienceExpo />} />
@@ -95,7 +93,6 @@ export default function App() {
         <Route path="esports-control" element={<AdminEsportsControl />} />
         <Route path="conductor-matches" element={<AdminConductorMatches />} />
         <Route path="registration-controls" element={<AdminRegistrationControls />} />
-        <Route path="participation-registrations" element={<AdminParticipationRegistrations />} />
         <Route path="esports-registrations" element={<AdminEsportsRegistrations />} />
         <Route path="visitor-registrations" element={<AdminVisitorRegistrations />} />
         <Route path="crm-emails" element={<AdminCrmEmails />} />

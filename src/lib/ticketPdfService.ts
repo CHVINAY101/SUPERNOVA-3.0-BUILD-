@@ -10,7 +10,7 @@ export interface TicketPdfOptions {
   email: string;
   phone?: string;
   institution?: string;
-  registrationType: "visitor" | "participation" | "esports_player" | "esports_team";
+  registrationType: "visitor" | "esports_player" | "esports_team";
   applicationRef?: string;
   teamName?: string;
   projectTitle?: string;
@@ -56,10 +56,6 @@ export function getStandardTicketFileName(options: TicketPdfOptions): string {
 
   if (options.registrationType === "visitor") {
     return `${cleanRef}_Visitor_${cleanName}.pdf`;
-  }
-  if (options.registrationType === "participation") {
-    const cleanProj = sanitize(options.projectTitle || "Exhibit");
-    return `${cleanRef}_Participation_${cleanProj}.pdf`;
   }
   if (options.registrationType === "esports_team") {
     const cleanTeam = sanitize(options.teamName || "Team");
@@ -191,8 +187,6 @@ export async function generateTicketPdf(
   const streamLabel =
     options.registrationType === "visitor"
       ? "VISITOR PASS"
-      : options.registrationType === "participation"
-      ? "PARTICIPATION PASS"
       : "ESPORTS PASS";
   doc.setFillColor(69, 73, 216);
   doc.roundedRect(margin + contentWidth - 50, cardTop + 7.5, 42, 11, 2.5, 2.5, "F");
@@ -235,9 +229,7 @@ export async function generateTicketPdf(
 
   if (options.projectTitle) {
     drawField(
-      options.registrationType === "esports_team" || options.registrationType === "esports_player"
-        ? "TOURNAMENT TITLE"
-        : "PROJECT / EXHIBIT TITLE",
+      "TOURNAMENT TITLE",
       options.projectTitle,
       [213, 245, 66],
       10

@@ -12,7 +12,7 @@ export interface RegistrationRow {
   status: string;
   submitted_at: string;
   email: string;
-  phone: string;
+  phone?: string | null;
   institution: string | null;
   headline: string;
   details: string;
@@ -60,7 +60,7 @@ export function RegistrationManager({ title, table, select, toRow }: Registratio
     return (rows ?? []).filter((row) => {
       if (statusFilter !== "all" && row.status !== statusFilter) return false;
       if (!needle) return true;
-      return [row.registration_ref, row.headline, row.email, row.phone, row.institution ?? ""]
+      return [row.registration_ref, row.headline, row.email, row.phone ?? "", row.institution ?? ""]
         .some((value) => value.toLowerCase().includes(needle));
     });
   }, [rows, query, statusFilter]);
@@ -139,7 +139,15 @@ export function RegistrationManager({ title, table, select, toRow }: Registratio
                   <td style={{ padding: 12, fontWeight: 700, whiteSpace: "nowrap" }}>{row.registration_ref}</td>
                   <td style={{ padding: 12, whiteSpace: "nowrap" }}>{new Date(row.submitted_at).toLocaleString()}</td>
                   <td style={{ padding: 12 }}>{row.headline}</td>
-                  <td style={{ padding: 12, overflowWrap: "anywhere" }}>{row.email}<br />{row.phone}</td>
+                  <td style={{ padding: 12, overflowWrap: "anywhere" }}>
+                    {row.email}
+                    {row.phone ? (
+                      <>
+                        <br />
+                        {row.phone}
+                      </>
+                    ) : null}
+                  </td>
                   <td style={{ padding: 12 }}>{row.details}</td>
                   <td style={{ padding: 12 }}>
                     <select className="input" aria-label={`Status for ${row.registration_ref}`} value={row.status} disabled={savingId === row.id} onChange={(e) => changeStatus(row, e.target.value)} style={{ minWidth: 170 }}>

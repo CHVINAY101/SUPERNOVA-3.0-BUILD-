@@ -11,7 +11,6 @@ import {
   Image,
   HelpCircle,
   Gamepad2,
-  Users,
   UserCheck,
   GraduationCap,
   HardDrive,
@@ -57,7 +56,6 @@ const navSections: NavSection[] = [
     title: "Registrations & CRM",
     items: [
       { to: "/admin/crm-emails", label: "Email Centre", icon: Mail },
-      { to: "/admin/participation-registrations", label: "Participation", icon: Users },
       { to: "/admin/esports-registrations", label: "Esports Teams", icon: Gamepad2 },
       { to: "/admin/visitor-registrations", label: "Visitors", icon: UserCheck },
       { to: "/admin/data-exports", label: "Registration Data Exports", icon: Download },
@@ -103,7 +101,6 @@ export default function AdminLayout() {
 
   const canVerifyTicket = hasPermission([
     "visitor:view",
-    "participation:view",
     "esports:view",
     "entry:scan_visitor",
     "entry:scan_esports",

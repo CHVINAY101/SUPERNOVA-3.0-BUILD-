@@ -13,6 +13,7 @@ import {
   filterRecords,
   type ExportFilterCriteria,
 } from "@/utils/exportSanitizer";
+import { normalizeVisitorCategory } from "@/lib/visitorCategories";
 import {
   Download,
   FileSpreadsheet,
@@ -28,7 +29,7 @@ import {
   Clock
 } from "lucide-react";
 
-type ExportCategory = "visitor" | "participation" | "esports_teams" | "esports_players" | "esports_complete";
+type ExportCategory = "visitor" | "esports_teams" | "esports_players" | "esports_complete";
 
 interface GameRow {
   id: string;
@@ -41,11 +42,9 @@ export default function AdminDataExports() {
   const currentRoleLabel = getRoleLabel(role);
 
   const canViewVisitors = hasPermission("visitor:view");
-  const canViewParticipation = hasPermission("participation:view");
   const canViewEsports = hasPermission("esports:view");
   const canExportGlobal = hasPermission("reports:export");
   const canExportVisitors = canExportGlobal || hasPermission("visitor:export");
-  const canExportParticipation = canExportGlobal || hasPermission("participation:export");
   const canExportEsports = canExportGlobal || hasPermission("esports:export");
 
   // Active Export Module
@@ -55,8 +54,6 @@ export default function AdminDataExports() {
     switch (activeModule) {
       case "visitor":
         return canExportVisitors;
-      case "participation":
-        return canExportParticipation;
       case "esports_teams":
       case "esports_players":
       case "esports_complete":
@@ -64,24 +61,18 @@ export default function AdminDataExports() {
       default:
         return false;
     }
-  }, [activeModule, canExportVisitors, canExportParticipation, canExportEsports]);
+  }, [activeModule, canExportVisitors, canExportEsports]);
 
   useEffect(() => {
     if (activeModule === "visitor" && !canViewVisitors) {
-      if (canViewParticipation) setActiveModule("participation");
-      else if (canViewEsports) setActiveModule("esports_teams");
-    } else if (activeModule === "participation" && !canViewParticipation) {
-      if (canViewVisitors) setActiveModule("visitor");
-      else if (canViewEsports) setActiveModule("esports_teams");
+      if (canViewEsports) setActiveModule("esports_teams");
     } else if (activeModule.startsWith("esports") && !canViewEsports) {
       if (canViewVisitors) setActiveModule("visitor");
-      else if (canViewParticipation) setActiveModule("participation");
     }
-  }, [activeModule, canViewVisitors, canViewParticipation, canViewEsports]);
+  }, [activeModule, canViewVisitors, canViewEsports]);
 
   // Raw Data States
   const [visitorData, setVisitorData] = useState<any[]>([]);
-  const [participationData, setParticipationData] = useState<any[]>([]);
   const [esportsData, setEsportsData] = useState<any[]>([]);
   const [gamesList, setGamesList] = useState<GameRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,17 +135,6 @@ export default function AdminDataExports() {
         setVisitorData([]);
       }
 
-      if (canViewParticipation) {
-        const { data: participations, error: pErr } = await supabase
-          .from("participation_registrations")
-          .select("*")
-          .order("submitted_at", { ascending: false });
-        if (pErr) console.warn("Participation fetch notice:", pErr.message);
-        setParticipationData(participations || []);
-      } else {
-        setParticipationData([]);
-      }
-
       // Load local export audit history
       const savedHistory = localStorage.getItem("supernova_export_audit_history");
       if (savedHistory) {
@@ -165,7 +145,7 @@ export default function AdminDataExports() {
     } finally {
       setLoading(false);
     }
-  }, [canViewVisitors, canViewParticipation, canViewEsports]);
+  }, [canViewVisitors, canViewEsports]);
 
   useEffect(() => {
     fetchData();
@@ -210,8 +190,6 @@ export default function AdminDataExports() {
     switch (activeModule) {
       case "visitor":
         return visitorData;
-      case "participation":
-        return participationData;
       case "esports_teams":
       case "esports_complete":
         return esportsData;
@@ -220,7 +198,7 @@ export default function AdminDataExports() {
       default:
         return [];
     }
-  }, [activeModule, visitorData, participationData, esportsData, esportsPlayersList]);
+  }, [activeModule, visitorData, esportsData, esportsPlayersList]);
 
   // Apply filters
   const filteredRecords = useMemo(() => {
@@ -234,7 +212,17 @@ export default function AdminDataExports() {
       visitorCategory: visitorCategoryFilter,
     };
 
-    let searchFields: string[] = ["registration_ref", "full_name", "email", "phone", "institution"];
+    let searchFields: string[] = [
+      "registration_ref",
+      "ticket_ref",
+      "registration_source",
+      "visitor_category",
+      "full_name",
+      "email",
+      "student_class",
+      "designation",
+      "institution",
+    ];
     if (activeModule === "esports_teams" || activeModule === "esports_complete") {
       searchFields = ["registration_ref", "team_name", "captain_name", "email", "phone", "institution"];
     } else if (activeModule === "esports_players") {
@@ -321,50 +309,44 @@ export default function AdminDataExports() {
       if (activeModule === "visitor") {
         const headers = [
           { key: "registration_ref", label: "Registration Reference" },
+          { key: "registration_source", label: "Source" },
+          { key: "visitor_category", label: "Category" },
           { key: "full_name", label: "Full Name" },
           { key: "email", label: "Email Address" },
-          { key: "phone", label: "Mobile Number" },
-          { key: "visitor_category", label: "Category" },
-          { key: "institution", label: "School / College" },
-          { key: "student_class", label: "Class / Standard" },
-          { key: "student_id", label: "Student Roll / ID" },
-          { key: "designation", label: "Designation" },
-          { key: "esports_interest", label: "Interested in Esports" },
-          { key: "preferred_game", label: "Preferred Game" },
-          { key: "in_game_id", label: "In-Game Player ID" },
-          { key: "team_name", label: "Esports Team Name" },
+          { key: "student_class", label: "Class / Course" },
+          { key: "designation", label: "Designation / Role" },
+          { key: "institution", label: "College / Institution" },
           { key: "days_attending", label: "Days Attending" },
           { key: "status", label: "Registration Status" },
+          { key: "check_in_status", label: "Check-In Status" },
+          { key: "checked_in_at", label: "Checked-In At" },
           { key: "submitted_at", label: "Submission Timestamp" },
           { key: "admin_notes", label: "Administrative Notes" },
         ];
 
-        if (exportFormat === "xlsx") {
-          exportToExcel([{ name: "Visitor Registrations", data: recordsToExport, headers }], filename);
-        } else {
-          exportToCsv(headers, recordsToExport, filename);
-        }
-      } else if (activeModule === "participation") {
-        const headers = [
-          { key: "registration_ref", label: "Registration Reference" },
-          { key: "full_name", label: "Applicant Name" },
-          { key: "email", label: "Email Address" },
-          { key: "phone", label: "Mobile Number" },
-          { key: "institution", label: "Institution" },
-          { key: "participant_category", label: "Participant Category" },
-          { key: "participation_area", label: "Participation Area" },
-          { key: "project_title", label: "Project Title" },
-          { key: "project_description", label: "Project Description" },
-          { key: "team_members_count", label: "Team Size" },
-          { key: "status", label: "Status" },
-          { key: "submitted_at", label: "Submission Timestamp" },
-          { key: "admin_notes", label: "Administrative Notes" },
-        ];
+        const mappedVisitors = recordsToExport.map((v) => ({
+          ...v,
+          visitor_category: normalizeVisitorCategory(
+            v.visitor_category,
+            v.student_class,
+            v.designation
+          ),
+          student_class: v.student_class || "",
+          designation: v.designation || "",
+          institution: v.institution || "",
+          registration_source:
+            v.registration_source === "walk_in" ||
+            String(v.visitor_category || "").toLowerCase().includes("walk") ||
+            String(v.registration_ref || "").toUpperCase().startsWith("SN3-VIS-WALK")
+              ? "Walk-In"
+              : "Public Online",
+          check_in_status: v.check_in_status === "checked_in" ? "Checked In" : "Not Checked In",
+        }));
 
         if (exportFormat === "xlsx") {
-          exportToExcel([{ name: "Participation Exhibits", data: recordsToExport, headers }], filename);
+          exportToExcel([{ name: "Visitor Registrations", data: mappedVisitors, headers }], filename);
         } else {
-          exportToCsv(headers, recordsToExport, filename);
+          exportToCsv(headers, mappedVisitors, filename);
         }
       } else if (activeModule === "esports_teams") {
         const headers = [
@@ -657,35 +639,7 @@ export default function AdminDataExports() {
               Visitor Registrations
             </h3>
             <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
-              Students, faculty, and general public with class, school, roll number, and esports preference.
-            </p>
-          </div>
-        )}
-
-        {/* Module 2: Participation */}
-        {canViewParticipation && (
-          <div
-            onClick={() => setActiveModule("participation")}
-            className="card"
-            style={{
-              padding: "20px 22px",
-              cursor: "pointer",
-              border: activeModule === "participation" ? "2px solid var(--cyan-400)" : "1px solid var(--border-subtle)",
-              background: activeModule === "participation" ? "rgba(34, 211, 238, 0.08)" : "var(--navy-900)",
-              transition: "all var(--transition-fast)",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <span style={{ fontSize: "1.5rem" }}>🔬</span>
-              <span style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--text-primary)" }}>
-                {participationData.length}
-              </span>
-            </div>
-            <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)", marginTop: 12 }}>
-              Project Exhibits
-            </h3>
-            <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 4 }}>
-              Science Expo, robotics, and academic exhibition teams with abstract and team size.
+              Student Visitor, Faculty &amp; Institutional Delegates, and General Visitor passes (Public &amp; Walk-In) with designation, class/course, institution, and gate check-in status.
             </p>
           </div>
         )}
@@ -831,10 +785,10 @@ export default function AdminDataExports() {
                 className="select"
                 style={{ width: "100%", padding: "8px 12px", fontSize: "0.82rem", background: "var(--navy-900)" }}
               >
-                <option value="all">All Visitor Types</option>
-                <option value="Student">Student</option>
+                <option value="all">All Visitor Categories</option>
+                <option value="Student Visitor">Student Visitor</option>
+                <option value="Faculty & Institutional Delegates">Faculty &amp; Institutional Delegates</option>
                 <option value="General Visitor">General Visitor</option>
-                <option value="Faculty / Staff">Faculty / Staff</option>
               </select>
             </div>
           )}
@@ -1087,10 +1041,13 @@ export default function AdminDataExports() {
                       <td style={{ padding: "12px 16px", fontSize: "0.82rem", color: "var(--text-muted)" }}>
                         {record.games?.title ||
                           record.game_title ||
-                          record.visitor_category ||
-                          record.participant_category ||
-                          "General"}
+                          normalizeVisitorCategory(
+                            record.visitor_category,
+                            record.student_class,
+                            record.designation
+                          )}
                         {record.student_class && ` · ${record.student_class}`}
+                        {record.designation && ` · ${record.designation}`}
                         {record.captain_name && ` · Capt: ${record.captain_name}`}
                       </td>
 
@@ -1259,7 +1216,7 @@ export default function AdminDataExports() {
                 marginBottom: 20,
               }}
             >
-              <strong>Data Privacy Warning:</strong> This extract contains participant personal information (full names, mobile numbers, student IDs, and institution emails). You are authorized to extract this data strictly for festival logistics, check-in badges, and esports matchmaking.
+              <strong>Data Privacy Warning:</strong> This extract contains attendee personal information (full names, emails, class/course details, institution names, and esports captain contact details where applicable). You are authorized to extract this data strictly for festival logistics, check-in badges, and esports matchmaking.
             </div>
 
             <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: 24 }}>

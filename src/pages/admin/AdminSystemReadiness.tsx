@@ -76,6 +76,9 @@ export default function AdminSystemReadiness() {
   const [superAdminSignoffName, setSuperAdminSignoffName] = useState("");
   const [superAdminNotes, setSuperAdminNotes] = useState("");
   const [publishConsentGiven, setPublishConsentGiven] = useState(false);
+  const [statusBanner, setStatusBanner] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
 
   // Load checklist on mount
   useEffect(() => {
@@ -171,28 +174,37 @@ export default function AdminSystemReadiness() {
   // Reset checklist to baseline
   const handleResetChecklist = () => {
     if (!canManage) return;
-    if (window.confirm("Reset all verification checks to baseline factory defaults?")) {
-      localStorage.removeItem("supernova_system_readiness_audit");
-      const defaults = loadPersistedChecklist();
-      setItems(defaults);
+    if (!confirmingReset) {
+      setConfirmingReset(true);
+      setTimeout(() => setConfirmingReset(false), 5000);
+      return;
     }
+    localStorage.removeItem("supernova_system_readiness_audit");
+    const defaults = loadPersistedChecklist();
+    setItems(defaults);
+    setConfirmingReset(false);
+    setStatusBanner({
+      type: "success",
+      text: "Verification checklist reset to factory baseline defaults.",
+    });
   };
 
   // Handle Super Admin Publishing Sign-Off
   const handleApprovePublishing = () => {
     if (!isSuperAdmin) return;
+    setApprovalError(null);
     if (summary.hasCriticalFailures) {
-      alert("PUBLISHING BLOCKED: There are critical security or database failures that must be resolved first.");
+      setApprovalError("PUBLISHING BLOCKED: There are critical security or database failures that must be resolved first.");
       return;
     }
 
     if (!superAdminSignoffName.trim()) {
-      alert("Please provide the Super Administrator sign-off name.");
+      setApprovalError("Please provide the Super Administrator sign-off name.");
       return;
     }
 
     if (!publishConsentGiven) {
-      alert("Please confirm the publishing authorization checkbox.");
+      setApprovalError("Please confirm the publishing authorization checkbox.");
       return;
     }
 
@@ -213,11 +225,43 @@ export default function AdminSystemReadiness() {
     setItems(updated);
     persistChecklist(updated);
     setShowPublishApprovalModal(false);
-    alert(`🎉 Supernova 3.0 has been formally approved for publication by ${superAdminSignoffName}!`);
+    setStatusBanner({
+      type: "success",
+      text: `Supernova 3.0 has been formally approved for publication by ${superAdminSignoffName}.`,
+    });
   };
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto" }}>
+      {statusBanner && (
+        <div
+          role="status"
+          style={{
+            marginBottom: 16,
+            padding: "12px 16px",
+            borderRadius: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            background: statusBanner.type === "success" ? "rgba(16, 185, 129, 0.14)" : "rgba(239, 68, 68, 0.14)",
+            border: `1px solid ${statusBanner.type === "success" ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)"}`,
+            color: statusBanner.type === "success" ? "#10b981" : "#ef4444",
+            fontSize: "0.88rem",
+            fontWeight: 600,
+          }}
+        >
+          <span>{statusBanner.text}</span>
+          <button
+            type="button"
+            onClick={() => setStatusBanner(null)}
+            style={{ background: "none", border: "none", color: "inherit", cursor: "pointer" }}
+            aria-label="Dismiss notification"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
       {/* Page Title & Controls */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 28 }}>
         <div>
@@ -271,9 +315,16 @@ export default function AdminSystemReadiness() {
             disabled={!canManage}
             className="btn btn-ghost"
             title={canManage ? "Reset Checklist" : "Requires system_settings:manage permission"}
-            style={{ padding: "10px 12px", opacity: canManage ? 1 : 0.45, cursor: canManage ? "pointer" : "not-allowed" }}
+            style={{
+              padding: "10px 12px",
+              opacity: canManage ? 1 : 0.45,
+              cursor: canManage ? "pointer" : "not-allowed",
+              color: confirmingReset ? "#ef4444" : undefined,
+              borderColor: confirmingReset ? "rgba(239, 68, 68, 0.45)" : undefined,
+            }}
           >
             <RotateCcw size={15} />
+            {confirmingReset && <span style={{ marginLeft: 6, fontSize: "0.78rem", fontWeight: 700 }}>Confirm Reset?</span>}
           </button>
         </div>
       </div>
@@ -1044,8 +1095,32 @@ export default function AdminSystemReadiness() {
               </label>
             </div>
 
+            {approvalError && (
+              <div
+                role="alert"
+                style={{
+                  marginTop: 16,
+                  padding: "10px 14px",
+                  borderRadius: "var(--radius-sm)",
+                  background: "rgba(239, 68, 68, 0.14)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  color: "#ef4444",
+                  fontSize: "0.82rem",
+                  fontWeight: 600,
+                }}
+              >
+                {approvalError}
+              </div>
+            )}
+
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 24 }}>
-              <button onClick={() => setShowPublishApprovalModal(false)} className="btn btn-ghost">
+              <button
+                onClick={() => {
+                  setApprovalError(null);
+                  setShowPublishApprovalModal(false);
+                }}
+                className="btn btn-ghost"
+              >
                 Cancel
               </button>
               <button

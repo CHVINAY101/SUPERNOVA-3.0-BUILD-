@@ -3,7 +3,6 @@ export type CanonicalCrmRole =
   | "crm_admin"
   | "registration_staff"
   | "esports_entry_staff"
-  | "participation_manager"
   | "esports_manager"
   | "match_conductor"
   | "content_manager"
@@ -21,12 +20,6 @@ export type PermissionKey =
   | "visitor:edit"
   | "visitor:delete"
   | "visitor:export"
-  | "participation:view"
-  | "participation:create"
-  | "participation:edit"
-  | "participation:approve"
-  | "participation:reject"
-  | "participation:export"
   | "esports:view"
   | "esports:create"
   | "esports:edit"
@@ -113,19 +106,6 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
       { key: "entry:issue_wristband", label: "Issue Wristbands" },
       { key: "entry:override_checkin", label: "Supervisor Override" },
       { key: "entry:manage_wristbands", label: "Configure Wristbands" },
-    ],
-  },
-  {
-    id: "participation",
-    label: "Participation Applications",
-    description: "Science Expo & exhibit stall project applications",
-    permissions: [
-      { key: "participation:view", label: "View" },
-      { key: "participation:create", label: "Create" },
-      { key: "participation:edit", label: "Edit" },
-      { key: "participation:approve", label: "Approve" },
-      { key: "participation:reject", label: "Reject" },
-      { key: "participation:export", label: "Export" },
     ],
   },
   {
@@ -272,11 +252,6 @@ export const ROLE_METADATA: Record<
     description: "Esports gate verification: scan player passes, verify team eligibility, issue esports wristbands.",
     badgeTone: "bg-indigo-50 text-indigo-700 border-indigo-200",
   },
-  participation_manager: {
-    label: "Participation Manager",
-    description: "Review, approve, reject, and manage participation project applications.",
-    badgeTone: "bg-amber-50 text-amber-800 border-amber-200",
-  },
   esports_manager: {
     label: "Esports Manager",
     description: "Review teams, select tournament squads, configure games, build brackets, and confirm results.",
@@ -313,7 +288,7 @@ export function normalizeRole(role: string | null | undefined): CanonicalCrmRole
     case "esports_entry_staff":
       return "esports_entry_staff";
     case "participation_manager":
-      return "participation_manager";
+      return "viewer";
     case "esports_manager":
     case "score_operator":
       return "esports_manager";
@@ -348,12 +323,6 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "entry:checkin_esports",
     "entry:issue_wristband",
     "entry:override_checkin",
-    "participation:view",
-    "participation:create",
-    "participation:edit",
-    "participation:approve",
-    "participation:reject",
-    "participation:export",
     "esports:view",
     "esports:create",
     "esports:edit",
@@ -409,15 +378,6 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "entry:checkin_esports",
     "entry:issue_wristband",
   ],
-  participation_manager: [
-    "participation:view",
-    "participation:create",
-    "participation:edit",
-    "participation:approve",
-    "participation:reject",
-    "participation:export",
-    "reports:view",
-  ],
   esports_manager: [
     "esports:view",
     "esports:create",
@@ -465,7 +425,6 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
   ],
   viewer: [
     "visitor:view",
-    "participation:view",
     "esports:view",
     "announcements:view",
     "gallery:view",
@@ -565,7 +524,6 @@ export const ROUTE_PERMISSIONS: { prefix: string; exact?: boolean; anyOf: Permis
     anyOf: ["esports:view", "tournament:select_teams"],
     label: "Esports Teams",
   },
-  { prefix: "/admin/participation-registrations", anyOf: ["participation:view"], label: "Participation" },
   { prefix: "/admin/visitor-registrations", anyOf: ["visitor:view"], label: "Visitors" },
   { prefix: "/admin/crm-emails", anyOf: ["email_centre:view"], label: "Email Centre" },
   { prefix: "/admin/data-exports", anyOf: ["reports:view", "reports:export"], label: "Registration Data Exports" },

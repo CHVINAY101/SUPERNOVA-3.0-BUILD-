@@ -67,7 +67,6 @@ export interface SiteContent {
   };
   social: SocialLink[];
   formEndpoints: {
-    participation: string;
     visitor: string;
     esports: string;
   };
@@ -174,7 +173,7 @@ export interface SiteContent {
     datesVenueLine: string;
     chooseLabel: string;
     cards: {
-      id: "participation" | "visitor" | "esports";
+      id: "visitor" | "esports";
       badge: string;
       badgeBg: string;
       title: string;
@@ -217,7 +216,6 @@ export const SITE_CONTENT: SiteContent = {
     },
   ],
   formEndpoints: {
-    participation: "",
     visitor: "",
     esports: "",
   },
@@ -240,7 +238,7 @@ export const SITE_CONTENT: SiteContent = {
     venueLine: "THE NATIONAL COLLEGE · BASAVANAGUDI, BENGALURU – 04",
     exploreButtonText: "EXPLORE THE EVENT",
     registerButtonText: "REGISTER NOW",
-    subLinkText: "Visitor and participant registration is open too →",
+    subLinkText: "Visitor pass registration is open too →",
     countdownMicroLabel: "EVENT STARTS IN",
   },
 
@@ -600,8 +598,8 @@ export const SITE_CONTENT: SiteContent = {
           "SUPERNOVA 3.0 is an Educational Innovation Expo on 20–21 November 2026, organised by The National Education Society of Karnataka.",
       },
       {
-        question: "Event participation",
-        answer: "Registration is open for participants, visitors and esports teams. Use the Register page.",
+        question: "Event registration",
+        answer: "Registration is open for visitors and esports teams. Use the Register page.",
       },
       {
         question: "Esports registration",
@@ -639,13 +637,6 @@ export const SITE_CONTENT: SiteContent = {
     datesVenueLine: "20–21 NOVEMBER 2026 · THE NATIONAL COLLEGE, BASAVANAGUDI, BENGALURU – 04",
     chooseLabel: "Choose how you'd like to take part.",
     cards: [
-      {
-        id: "participation",
-        badge: "PARTICIPATE",
-        badgeBg: "#D5F542",
-        title: "PARTICIPATE",
-        line: "Showcase your project, exhibit or idea.",
-      },
       {
         id: "visitor",
         badge: "VISIT",

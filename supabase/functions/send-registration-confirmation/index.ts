@@ -21,7 +21,7 @@ function jsonResponse(body: unknown, status = 200) {
 interface RequestPayload {
   registrationId?: string;
   registrationRef?: string;
-  registrationType: "visitor" | "esports" | "participation";
+  registrationType: "visitor" | "esports";
   isResend?: boolean;
 }
 
@@ -64,7 +64,7 @@ Deno.serve(async (req) => {
     if (
       (!registrationId && !registrationRef) ||
       (registrationId && (typeof registrationId !== "string" || !UUID_REGEX.test(registrationId))) ||
-      !["visitor", "esports", "participation"].includes(registrationType) ||
+      !["visitor", "esports"].includes(registrationType) ||
       typeof isResend !== "boolean"
     ) {
       return jsonResponse({ ok: false, error: "Invalid confirmation email payload" }, 400);
@@ -111,11 +111,7 @@ Deno.serve(async (req) => {
     if (supabaseUrl && serviceRoleKey) {
       const adminClient = createClient(supabaseUrl, serviceRoleKey);
       const table =
-        registrationType === "visitor"
-          ? "visitor_registrations"
-          : registrationType === "esports"
-          ? "registrations"
-          : "participation_registrations";
+        registrationType === "visitor" ? "visitor_registrations" : "registrations";
 
       let query = adminClient.from(table).select("id, status, archived_at");
       query = registrationId

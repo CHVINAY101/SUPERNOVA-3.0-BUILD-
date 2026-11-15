@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
-import { X, Sparkles, Users, Gamepad2, ArrowRight } from "lucide-react";
+import { X, Users, Gamepad2, ArrowRight } from "lucide-react";
 
 interface RegistrationModalProps {
   isOpen: boolean;
@@ -89,51 +89,7 @@ export function RegistrationModal({ isOpen, onClose }: RegistrationModalProps) {
         </p>
 
         <div style={{ display: "grid", gap: 16 }}>
-          {/* 01 Participation */}
-          <Link
-            to="/register/participation"
-            onClick={onClose}
-            className="reg-choice-card"
-            style={{
-              display: "grid",
-              gridTemplateColumns: "auto 1fr auto",
-              gap: 20,
-              alignItems: "center",
-              padding: "24px",
-              background: "#ffffff",
-              borderRadius: "20px",
-              border: "1.5px solid var(--line)",
-              textDecoration: "none",
-              color: "inherit",
-              transition: "transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease",
-            }}
-          >
-            <div
-              style={{
-                width: 52,
-                height: 52,
-                borderRadius: "16px",
-                background: "var(--pale-blue)",
-                color: "var(--cobalt)",
-                display: "grid",
-                placeItems: "center",
-              }}
-            >
-              <Sparkles size={26} />
-            </div>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: "0.75rem", fontWeight: 700, letterSpacing: "0.1em", color: "var(--cobalt)" }}>01</span>
-                <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>Participation Registration</h3>
-              </div>
-              <p style={{ fontSize: "0.88rem", color: "var(--ink-soft)", marginTop: 4 }}>
-                For student researchers, innovators, school creators, and animation exhibitors showcasing projects.
-              </p>
-            </div>
-            <ArrowRight size={20} color="var(--cobalt)" />
-          </Link>
-
-          {/* 02 Visitor */}
+          {/* 01 Visitor */}
           <Link
             to="/register/visitor"
             onClick={onClose}
@@ -167,17 +123,17 @@ export function RegistrationModal({ isOpen, onClose }: RegistrationModalProps) {
             </div>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: "0.75rem", fontWeight: 700, letterSpacing: "0.1em", color: "#1f754c" }}>02</span>
+                <span style={{ fontSize: "0.75rem", fontWeight: 700, letterSpacing: "0.1em", color: "#1f754c" }}>01</span>
                 <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>Visitor Registration</h3>
               </div>
               <p style={{ fontSize: "0.88rem", color: "var(--ink-soft)", marginTop: 4 }}>
-                Free entry pass for school & college students, teachers, parents, and general public visitors.
+                Free entry pass for students and visitors attending Supernova 3.0.
               </p>
             </div>
             <ArrowRight size={20} color="#1f754c" />
           </Link>
 
-          {/* 03 Esports */}
+          {/* 02 Esports */}
           <Link
             to="/register/esports"
             onClick={onClose}
@@ -211,7 +167,7 @@ export function RegistrationModal({ isOpen, onClose }: RegistrationModalProps) {
             </div>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: "0.75rem", fontWeight: 700, letterSpacing: "0.1em", color: "var(--coral)" }}>03</span>
+                <span style={{ fontSize: "0.75rem", fontWeight: 700, letterSpacing: "0.1em", color: "var(--coral)" }}>02</span>
                 <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>Esports Tournament Roster</h3>
               </div>
               <p style={{ fontSize: "0.88rem", color: "var(--ink-soft)", marginTop: 4 }}>

@@ -23,7 +23,6 @@ import {
 export default function AdminDashboard() {
   const { hasPermission, canAccessRoute } = useAuth();
   const canViewVisitors = hasPermission("visitor:view");
-  const canViewParticipation = hasPermission("participation:view");
   const canViewEsports = hasPermission("esports:view");
   const canViewAuditLogs = hasPermission("system_settings:view");
   const canManageSettings = hasPermission("system_settings:manage");
@@ -43,10 +42,7 @@ export default function AdminDashboard() {
 
   const fetchDashboardData = useCallback(async () => {
     try {
-      const [partsRes, esportsRes, visRes, checkinsRes, matchesRes, logsRes, controlsRes] = await Promise.all([
-        canViewParticipation
-          ? supabase.from("participation_registrations").select("id, status, admin_notes")
-          : Promise.resolve({ data: [] as any[] }),
+      const [esportsRes, visRes, checkinsRes, matchesRes, logsRes, controlsRes] = await Promise.all([
         canViewEsports
           ? supabase.from("registrations").select("id, status, admin_notes")
           : Promise.resolve({ data: [] as any[] }),
@@ -65,22 +61,20 @@ export default function AdminDashboard() {
         supabase.from("registration_controls").select("*").order("form_type"),
       ]);
 
-      const parts = (partsRes.data || []).filter((p: any) => !isRegistrationArchived(p));
       const esports = (esportsRes.data || []).filter((e: any) => !isRegistrationArchived(e));
       const visitors = (visRes.data || []).filter((v: any) => !isRegistrationArchived(v));
       const checkins = checkinsRes.data || [];
       const matches = matchesRes.data || [];
       const logs = logsRes.data || [];
-      const regControls = controlsRes.data || [];
+      const regControls = (controlsRes.data || []).filter((c: any) => c.form_type !== "participation");
 
       // Pending reviews count across all active registrations
-      const pendingParts = parts.filter((p: any) => p.status === "pending").length;
       const pendingEsports = esports.filter((e: any) => e.status === "pending").length;
       const pendingVisitors = visitors.filter((v: any) => v.status === "pending").length;
-      setPendingReviewCount(pendingParts + pendingEsports + pendingVisitors);
+      setPendingReviewCount(pendingEsports + pendingVisitors);
 
       // Today's check-ins
-      const totalAttendeesExpected = parts.length + esports.length * 5 + visitors.length;
+      const totalAttendeesExpected = esports.length * 5 + visitors.length;
       setTodayCheckins({
         checkedIn: checkins.length,
         total: Math.max(totalAttendeesExpected, 50),
@@ -93,22 +87,19 @@ export default function AdminDashboard() {
       setRecentLogs(logs as AuditLog[]);
 
       // Registration controls
-      if (regControls.length > 0) {
-        setControls(regControls as RegistrationControl[]);
-      }
+      setControls(regControls as RegistrationControl[]);
     } catch (err) {
       console.warn("Failed to load dashboard data:", err);
     } finally {
       setLoading(false);
     }
-  }, [canViewParticipation, canViewEsports, canViewVisitors, canViewAuditLogs]);
+  }, [canViewEsports, canViewVisitors, canViewAuditLogs]);
 
   // Multi-table Realtime Subscription for Admin Command Center
   const { connectionState, lastEventTime } = useRealtimeSubscription(
     [
       { table: "registrations", onRefresh: fetchDashboardData },
       { table: "visitor_registrations", onRefresh: fetchDashboardData },
-      { table: "participation_registrations", onRefresh: fetchDashboardData },
       { table: "check_ins", onRefresh: fetchDashboardData },
       { table: "matches", onRefresh: fetchDashboardData },
       { table: "audit_logs", onRefresh: fetchDashboardData },
@@ -156,7 +147,6 @@ export default function AdminDashboard() {
   };
 
   const formLabels: Record<string, string> = {
-    participation: "Project Exhibits",
     esports: "Esports Squads",
     visitor: "Visitor Passes",
   };
@@ -326,15 +316,9 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="mt-3 pt-3 border-t border-slate-100">
-            {(canViewEsports || canViewParticipation || canViewVisitors) ? (
+            {(canViewEsports || canViewVisitors) ? (
               <Link
-                to={
-                  canViewEsports
-                    ? "/admin/esports-registrations"
-                    : canViewParticipation
-                    ? "/admin/participation-registrations"
-                    : "/admin/visitor-registrations"
-                }
+                to={canViewEsports ? "/admin/esports-registrations" : "/admin/visitor-registrations"}
                 className="text-xs font-bold text-blue-700 hover:text-blue-800 inline-flex items-center gap-1 no-underline"
               >
                 <span>Review Submissions</span>
@@ -409,7 +393,7 @@ export default function AdminDashboard() {
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
           {controls.map((ctrl) => {
             const isToggling = togglingType === ctrl.form_type;
 

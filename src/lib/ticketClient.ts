@@ -10,11 +10,10 @@ import type {
 export interface VisitorTicketSubmitPayload {
   fullName: string;
   email: string;
-  phone: string;
-  institution: string;
+  phone?: string | null;
+  institution?: string | null;
   visitorCategory: string;
   studentClass?: string | null;
-  studentId?: string | null;
   designation?: string | null;
   esportsInterest?: boolean;
   preferredGame?: string | null;
@@ -23,6 +22,7 @@ export interface VisitorTicketSubmitPayload {
   teamName?: string | null;
   competitionNotes?: string | null;
   daysAttending?: string;
+  registrationSource?: "public" | "walk_in";
 }
 
 export interface VisitorTicketSubmitResult {
@@ -53,15 +53,20 @@ function isMissingRpcError(err: unknown): boolean {
 export async function submitVisitorAndIssueTicket(
   payload: VisitorTicketSubmitPayload
 ): Promise<VisitorTicketSubmitResult> {
-  const rpcArgs = {
+  const cleanPhone = payload.phone?.trim() || null;
+  const cleanInstitution = payload.institution?.trim() || null;
+  const cleanStudentClass = payload.studentClass?.trim() || null;
+  const cleanDesignation = payload.designation?.trim() || null;
+
+  const baseRpcArgs = {
     p_full_name: payload.fullName.trim(),
     p_email: payload.email.trim().toLowerCase(),
-    p_phone: payload.phone.trim(),
-    p_institution: payload.institution.trim(),
+    p_phone: cleanPhone,
+    p_institution: cleanInstitution,
     p_visitor_category: payload.visitorCategory,
-    p_student_class: payload.studentClass || null,
-    p_student_id: payload.studentId || null,
-    p_designation: payload.designation || null,
+    p_student_class: cleanStudentClass,
+    p_student_id: null,
+    p_designation: cleanDesignation,
     p_esports_interest: Boolean(payload.esportsInterest),
     p_preferred_game: payload.preferredGame || null,
     p_esports_intent: payload.esportsIntent || null,
@@ -72,12 +77,23 @@ export async function submitVisitorAndIssueTicket(
     p_consent: true,
     p_website: "",
   };
+  const rpcArgsWithSource = {
+    ...baseRpcArgs,
+    p_registration_source: payload.registrationSource || "public",
+  };
 
   // 1. Primary unified RPC returning registration_ref + authoritative ticket + qr_token
-  const { data: ticketRpcData, error: ticketRpcErr } = await supabase.rpc(
+  let { data: ticketRpcData, error: ticketRpcErr } = await supabase.rpc(
     "submit_visitor_and_issue_ticket",
-    rpcArgs
+    rpcArgsWithSource
   );
+
+  // Fallback to 17-param signature if 20261118 migration has not been applied yet
+  if (ticketRpcErr && isMissingRpcError(ticketRpcErr)) {
+    const legacyTry = await supabase.rpc("submit_visitor_and_issue_ticket", baseRpcArgs);
+    ticketRpcData = legacyTry.data;
+    ticketRpcErr = legacyTry.error;
+  }
 
   if (!ticketRpcErr && ticketRpcData && (ticketRpcData as any).ok) {
     const res = ticketRpcData as any;
@@ -94,10 +110,15 @@ export async function submitVisitorAndIssueTicket(
   }
 
   // 2. Fallback to submit_visitor_registration_v2
-  const { data: v2Data, error: v2Error } = await supabase.rpc(
+  let { data: v2Data, error: v2Error } = await supabase.rpc(
     "submit_visitor_registration_v2",
-    rpcArgs
+    rpcArgsWithSource
   );
+  if (v2Error && isMissingRpcError(v2Error)) {
+    const legacyV2 = await supabase.rpc("submit_visitor_registration_v2", baseRpcArgs);
+    v2Data = legacyV2.data;
+    v2Error = legacyV2.error;
+  }
 
   if (!v2Error && v2Data) {
     return {
@@ -113,20 +134,21 @@ export async function submitVisitorAndIssueTicket(
 
   // 3. Fallback to legacy submit_visitor_registration
   let fallbackCat = "General visitor";
-  if (payload.visitorCategory === "Student") {
+  const lowerCat = payload.visitorCategory.toLowerCase();
+  if (lowerCat.includes("student")) {
     fallbackCat =
-      payload.studentClass?.includes("PUC") || payload.studentClass?.includes("Degree")
+      cleanStudentClass?.includes("PUC") || cleanStudentClass?.includes("Degree")
         ? "College student"
         : "School student";
-  } else if (payload.visitorCategory === "Faculty / Staff") {
+  } else if (lowerCat.includes("faculty") || lowerCat.includes("delegate")) {
     fallbackCat = "Teacher or educator";
   }
 
   const { data: v1Data, error: v1Error } = await supabase.rpc("submit_visitor_registration", {
     p_full_name: payload.fullName.trim(),
     p_email: payload.email.trim().toLowerCase(),
-    p_phone: payload.phone.trim(),
-    p_institution: payload.institution.trim(),
+    p_phone: cleanPhone,
+    p_institution: cleanInstitution || "",
     p_visitor_category: fallbackCat,
     p_consent: true,
     p_website: "",
@@ -185,17 +207,17 @@ export async function fetchTicketByRegistration(
 
 /**
  * Anti-IDOR public ticket retrieval / status check requiring matching
- * reference + registered email + 10-digit phone number.
+ * reference + registered email (plus 10-digit phone for Esports teams).
  */
 export async function lookupPublicTicket(params: {
   reference: string;
   email: string;
-  phone: string;
+  phone?: string | null;
 }): Promise<PublicTicketLookupResult> {
   const { data, error } = await supabase.rpc("lookup_public_ticket", {
     p_reference: params.reference.trim(),
     p_email: params.email.trim().toLowerCase(),
-    p_phone: params.phone.trim(),
+    p_phone: params.phone?.trim() || null,
   });
 
   if (error) {
@@ -221,15 +243,28 @@ export async function lookupPublicTicket(params: {
  * Authoritative staff-only DB verification of a QR scan or manual ticket code.
  * Never trusts client claims in QR payloads; validates qr_token + registration status on DB.
  */
-export async function verifyGateTicket(rawInput: string): Promise<GateVerificationResult> {
+export async function verifyGateTicket(
+  rawInput: string,
+  eventDay = "2026-11-20"
+): Promise<GateVerificationResult> {
   const parsed = parseSecureQrPayload(rawInput);
   const queryArg = parsed.ticketRef || (parsed.isTokenOnly ? "" : rawInput.trim());
   const tokenArg = parsed.qrToken;
 
-  const { data, error } = await supabase.rpc("verify_gate_ticket", {
+  let { data, error } = await supabase.rpc("verify_gate_ticket", {
     p_query: queryArg,
     p_qr_token: tokenArg,
+    p_event_day: eventDay,
   });
+
+  if (error && isMissingRpcError(error)) {
+    const legacyVerify = await supabase.rpc("verify_gate_ticket", {
+      p_query: queryArg,
+      p_qr_token: tokenArg,
+    });
+    data = legacyVerify.data;
+    error = legacyVerify.error;
+  }
 
   if (error) {
     return {
@@ -237,7 +272,7 @@ export async function verifyGateTicket(rawInput: string): Promise<GateVerificati
       verdict: "INVALID",
       can_check_in: false,
       error: isMissingRpcError(error)
-        ? "Gate verification RPC (verify_gate_ticket) is not yet deployed or schema cache needs reload. Apply migration 20261115000003_fix_gate_verification_uuid_and_schema_cache.sql in Supabase."
+        ? "Gate verification RPC (verify_gate_ticket) is not yet deployed or schema cache needs reload. Apply migration 20261118000000_gate_checkin_schema_repair_and_walkin.sql in Supabase."
         : error.message,
       reason: error.message,
     };

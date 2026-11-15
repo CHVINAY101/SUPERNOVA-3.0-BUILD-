@@ -60,25 +60,21 @@ describe("Supernova 3.0 Ticketing & Gate Verification Domain", () => {
     assert.equal(tokenOnly.qrToken, "b".repeat(64));
   });
 
-  it("enforces category approval gating: pending/declined participation & esports cannot issue tickets", () => {
+  it("enforces category approval gating: pending/declined/archived esports & visitors cannot issue tickets", () => {
     assert.equal(
       isRegistrationEligibleForTicket("visitor", { status: "confirmed" }).eligible,
       true
     );
     assert.equal(
-      isRegistrationEligibleForTicket("participation", { status: "pending" }).eligible,
+      isRegistrationEligibleForTicket("visitor", { status: "pending" }).eligible,
       false
-    );
-    assert.equal(
-      isRegistrationEligibleForTicket("participation", { status: "declined" }).eligible,
-      false
-    );
-    assert.equal(
-      isRegistrationEligibleForTicket("participation", { status: "confirmed" }).eligible,
-      true
     );
     assert.equal(
       isRegistrationEligibleForTicket("esports", { status: "pending" }).eligible,
+      false
+    );
+    assert.equal(
+      isRegistrationEligibleForTicket("esports", { status: "declined" }).eligible,
       false
     );
     assert.equal(
@@ -90,7 +86,7 @@ describe("Supernova 3.0 Ticketing & Gate Verification Domain", () => {
       true
     );
     assert.equal(
-      isRegistrationEligibleForTicket("participation", {
+      isRegistrationEligibleForTicket("esports", {
         status: "confirmed",
         archived_at: "2026-11-15T10:00:00Z",
       }).eligible,
@@ -101,21 +97,21 @@ describe("Supernova 3.0 Ticketing & Gate Verification Domain", () => {
   it("is idempotent: repeated issuance requests return the exact same ticket and never duplicate", () => {
     const store = new InMemoryTicketStore();
     const first = store.issueTicket({
-      registrationId: "part-1",
-      category: "participation",
+      registrationId: "esp-1",
+      category: "esports",
       registrationRef: "SN3-26-000201",
       ticketRef: "SN3-26-000201",
       qrToken: "1".repeat(64),
-      displayName: "Solar Rover Project",
+      displayName: "Solar Squad",
       registration: { status: "confirmed" },
     });
     const second = store.issueTicket({
-      registrationId: "part-1",
-      category: "participation",
+      registrationId: "esp-1",
+      category: "esports",
       registrationRef: "SN3-26-000201",
       ticketRef: "SN3-26-000201",
       qrToken: "2".repeat(64),
-      displayName: "Solar Rover Project",
+      displayName: "Solar Squad",
       registration: { status: "confirmed" },
     });
 
@@ -238,6 +234,28 @@ describe("Supernova 3.0 Ticketing & Gate Verification Domain", () => {
       canAccessTicketDetails(
         { reference: "SN3-26-000101", email: "aarav@example.com", phone: "9999999999" },
         stored
+      ),
+      false
+    );
+
+    const simplifiedVisitor = {
+      ticketRef: "SN3-26-000303",
+      registrationRef: "SN3-26-000303",
+      email: "visitor@example.com",
+      phone: null,
+      category: "visitor" as const,
+    };
+    assert.equal(
+      canAccessTicketDetails(
+        { reference: "SN3-26-000303", email: "visitor@example.com" },
+        simplifiedVisitor
+      ),
+      true
+    );
+    assert.equal(
+      canAccessTicketDetails(
+        { reference: "SN3-26-000303", email: "other@example.com" },
+        simplifiedVisitor
       ),
       false
     );

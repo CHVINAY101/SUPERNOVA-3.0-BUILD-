@@ -15,6 +15,11 @@ import { AdminStatusBadge } from "@/components/admin/AdminBadge";
 import { downloadTicketPdfFile, generateTicketPdf } from "@/lib/ticketPdfService";
 import { getLocalNasArchives } from "@/lib/nasArchivalService";
 import { EMAIL_DELIVERY_ENABLED } from "@/lib/emailPayload";
+import {
+  buildVisitorDisplaySubtitle,
+  normalizeVisitorCategory,
+  type CanonicalVisitorCategory,
+} from "@/lib/visitorCategories";
 import { 
   Gamepad2, 
   Search, 
@@ -32,13 +37,14 @@ import {
 export interface VisitorRegistrationRecord {
   id: string;
   registration_ref: string;
+  ticket_ref?: string | null;
+  registration_source?: "public" | "walk_in" | null;
   full_name: string;
   email: string;
-  phone: string;
+  phone?: string | null;
   institution: string | null;
   visitor_category: string;
   student_class?: string | null;
-  student_id?: string | null;
   designation?: string | null;
   esports_interest?: boolean | null;
   preferred_game?: string | null;
@@ -47,9 +53,11 @@ export interface VisitorRegistrationRecord {
   team_name?: string | null;
   competition_notes?: string | null;
   days_attending?: string | null;
-  visitor_count?: number;
   status: string;
   email_status?: string | null;
+  check_in_status?: string | null;
+  checked_in_at?: string | null;
+  checked_in_by_email?: string | null;
   admin_notes?: string | null;
   submitted_at: string;
   archived_at?: string | null;
@@ -77,6 +85,7 @@ export default function AdminVisitorRegistrations() {
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "public" | "walk_in">("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [esportsFilter, setEsportsFilter] = useState("all");
   const [gameFilter, setGameFilter] = useState("all");
@@ -150,11 +159,14 @@ export default function AdminVisitorRegistrations() {
         if (item) {
           try {
             const ticketPdf = await generateTicketPdf({
-              ticketRef: ref,
+              ticketRef: item.ticket_ref || ref,
               recipientName: item.full_name,
-              category: item.visitor_category || "General Visitor",
+              category: buildVisitorDisplaySubtitle({
+                visitorCategory: item.visitor_category,
+                studentClass: item.student_class,
+                designation: item.designation,
+              }),
               email: item.email,
-              phone: item.phone,
               institution: item.institution || undefined,
               registrationType: "visitor",
               daysAttending: item.days_attending || undefined,
@@ -312,14 +324,13 @@ export default function AdminVisitorRegistrations() {
     }
   };
 
-  // Helper to categorize rows reliably
-  const getParsedCategory = (record: VisitorRegistrationRecord): "Student" | "General Visitor" | "Faculty / Staff" => {
-    const cat = (record.visitor_category || "").toLowerCase();
-    if (cat.includes("student")) return "Student";
-    if (cat.includes("teacher") || cat.includes("educator") || cat.includes("faculty") || cat.includes("staff")) {
-      return "Faculty / Staff";
-    }
-    return "General Visitor";
+  // Helper to categorize rows reliably into the 3 canonical categories
+  const getParsedCategory = (record: VisitorRegistrationRecord): CanonicalVisitorCategory => {
+    return normalizeVisitorCategory(
+      record.visitor_category,
+      record.student_class,
+      record.designation
+    );
   };
 
   const getEsportsInterest = (record: VisitorRegistrationRecord): boolean => {
@@ -338,29 +349,40 @@ export default function AdminVisitorRegistrations() {
     return null;
   };
 
-  const getRegistrationSource = (record: VisitorRegistrationRecord): { label: string; badge: string; linkedRef?: string } => {
+  const getRegistrationSource = (
+    record: VisitorRegistrationRecord
+  ): { label: string; badge: string; isWalkIn: boolean; linkedRef?: string } => {
     const notes = record.admin_notes || "";
     const cat = (record.visitor_category || "").toLowerCase();
+    const ref = (record.registration_ref || "").toUpperCase();
 
-    if (notes.includes("LINKED_PARTICIPATION") || cat.includes("participant")) {
-      const match = notes.match(/LINKED_PARTICIPATION:\s*([A-Za-z0-9-]+)/);
+    if (
+      record.registration_source === "walk_in" ||
+      cat.includes("walk") ||
+      notes.includes("[WALK_IN]") ||
+      ref.startsWith("SN3-VIS-WALK")
+    ) {
       return {
-        label: "Project Participant",
-        badge: "bg-emerald-50 text-emerald-700 border-emerald-200",
-        linkedRef: match ? match[1] : undefined,
+        label: "WALK-IN",
+        badge: "bg-indigo-50 text-indigo-700 border-indigo-200",
+        isWalkIn: true,
       };
     }
+
     if (notes.includes("LINKED_ESPORTS") || cat.includes("esports player")) {
       const match = notes.match(/LINKED_ESPORTS_[A-Z]+:\s*([A-Za-z0-9-]+)/);
       return {
         label: "Esports Player",
         badge: "bg-purple-50 text-purple-700 border-purple-200",
+        isWalkIn: false,
         linkedRef: match ? match[1] : undefined,
       };
     }
+
     return {
-      label: "Direct Visitor",
+      label: "Public Visitor",
       badge: "bg-blue-50 text-blue-700 border-blue-200",
+      isWalkIn: false,
     };
   };
 
@@ -368,16 +390,19 @@ export default function AdminVisitorRegistrations() {
     if (!canResend || savingId === record.id) return;
     setSavingId(record.id);
     setStatusMsg(null);
-    const ticketRef = (record as any).ticket_ref || record.registration_ref;
+    const ticketRef = record.ticket_ref || record.registration_ref;
     try {
       let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
       try {
         const ticketPdf = await generateTicketPdf({
           ticketRef,
           recipientName: record.full_name,
-          category: record.visitor_category || "General Visitor",
+          category: buildVisitorDisplaySubtitle({
+            visitorCategory: record.visitor_category,
+            studentClass: record.student_class,
+            designation: record.designation,
+          }),
           email: record.email,
-          phone: record.phone,
           institution: record.institution || undefined,
           registrationType: "visitor",
           daysAttending: record.days_attending || undefined,
@@ -460,39 +485,43 @@ export default function AdminVisitorRegistrations() {
       if (viewScope === "active" && isArchived) return false;
       if (viewScope === "archived" && !isArchived) return false;
 
-      // 2. Status Filter
-      if (statusFilter !== "all" && item.status !== statusFilter) return false;
-
-      // 3. Category Filter
-      const parsedCat = getParsedCategory(item);
-      if (categoryFilter !== "all") {
-        if (categoryFilter === "Student" && parsedCat !== "Student") return false;
-        if (categoryFilter === "General Visitor" && parsedCat !== "General Visitor") return false;
-        if (categoryFilter === "Faculty / Staff" && parsedCat !== "Faculty / Staff") return false;
+      // 2. Source Filter (Public vs Walk-In)
+      if (sourceFilter !== "all") {
+        const src = getRegistrationSource(item);
+        if (sourceFilter === "walk_in" && !src.isWalkIn) return false;
+        if (sourceFilter === "public" && src.isWalkIn) return false;
       }
 
-      // 4. Esports Interest Filter
+      // 3. Status Filter
+      if (statusFilter !== "all" && item.status !== statusFilter) return false;
+
+      // 4. Category Filter
+      const parsedCat = getParsedCategory(item);
+      if (categoryFilter !== "all" && parsedCat !== categoryFilter) {
+        return false;
+      }
+
+      // 5. Esports Interest Filter
       const isInterestedInEsports = getEsportsInterest(item);
       if (esportsFilter === "yes" && !isInterestedInEsports) return false;
       if (esportsFilter === "no" && isInterestedInEsports) return false;
 
-      // 5. Preferred Game Filter
+      // 6. Preferred Game Filter
       const game = getPreferredGame(item);
       if (gameFilter !== "all") {
         if (!game || !game.toLowerCase().includes(gameFilter.toLowerCase())) return false;
       }
 
-      // 6. Search Query
+      // 7. Search Query
       if (searchQuery.trim()) {
         const needle = searchQuery.toLowerCase().trim();
         const matches = [
           item.registration_ref,
+          item.ticket_ref ?? "",
           item.full_name,
           item.email,
-          item.phone,
           item.institution ?? "",
           item.student_class ?? "",
-          item.student_id ?? "",
           item.designation ?? "",
           item.in_game_id ?? "",
           item.team_name ?? "",
@@ -504,7 +533,7 @@ export default function AdminVisitorRegistrations() {
 
       return true;
     });
-  }, [registrations, viewScope, statusFilter, categoryFilter, esportsFilter, gameFilter, searchQuery]);
+  }, [registrations, viewScope, sourceFilter, statusFilter, categoryFilter, esportsFilter, gameFilter, searchQuery]);
 
   // Metrics
   const metrics = useMemo(() => {
@@ -522,8 +551,8 @@ export default function AdminVisitorRegistrations() {
       } else {
         totalActive++;
         const cat = getParsedCategory(r);
-        if (cat === "Student") students++;
-        else if (cat === "Faculty / Staff") faculty++;
+        if (cat === "Student Visitor") students++;
+        else if (cat === "Faculty & Institutional Delegates") faculty++;
         else general++;
 
         if (getEsportsInterest(r)) esports++;
@@ -545,40 +574,32 @@ export default function AdminVisitorRegistrations() {
 
     const headers = [
       "Reference",
+      "Source",
       "Full Name",
       "Category",
       "Email",
-      "Phone",
-      "Institution",
-      "Class/Standard",
-      "Student ID",
-      "Designation",
-      "Esports Interested",
-      "Preferred Game",
-      "Esports Intent",
-      "In-Game ID",
-      "Team Name",
-      "Status",
+      "Class / Course",
+      "Designation / Role",
+      "College / Institution",
+      "Registration Status",
+      "Check-In Status",
+      "Checked-In At",
       "Archived",
       "Submitted At",
     ];
 
     const rows = filteredRegistrations.map((r) => [
-      sanitizeCsv(r.registration_ref),
+      sanitizeCsv(r.ticket_ref || r.registration_ref),
+      sanitizeCsv(getRegistrationSource(r).label),
       sanitizeCsv(r.full_name),
       sanitizeCsv(getParsedCategory(r)),
       sanitizeCsv(r.email),
-      sanitizeCsv(r.phone),
-      sanitizeCsv(r.institution || "Independent"),
       sanitizeCsv(r.student_class || ""),
-      sanitizeCsv(r.student_id || ""),
       sanitizeCsv(r.designation || ""),
-      sanitizeCsv(getEsportsInterest(r) ? "Yes" : "No"),
-      sanitizeCsv(getPreferredGame(r) || ""),
-      sanitizeCsv(r.esports_intent || ""),
-      sanitizeCsv(r.in_game_id || ""),
-      sanitizeCsv(r.team_name || ""),
+      sanitizeCsv(r.institution || ""),
       sanitizeCsv(r.status),
+      sanitizeCsv(r.check_in_status === "checked_in" ? "Checked In" : "Not Checked In"),
+      sanitizeCsv(r.checked_in_at || ""),
       sanitizeCsv(isRegistrationArchived(r) ? "YES" : "NO"),
       sanitizeCsv(r.submitted_at),
     ]);
@@ -647,12 +668,12 @@ export default function AdminVisitorRegistrations() {
           <p className="text-2xl font-display font-extrabold text-blue-700 mt-1">{metrics.students}</p>
         </div>
         <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
-          <p className="text-[11px] font-mono uppercase text-slate-700 font-semibold">General Public</p>
-          <p className="text-2xl font-display font-extrabold text-slate-800 mt-1">{metrics.general}</p>
+          <p className="text-[11px] font-mono uppercase text-amber-700 font-semibold">Faculty &amp; Delegates</p>
+          <p className="text-2xl font-display font-extrabold text-amber-700 mt-1">{metrics.faculty}</p>
         </div>
         <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
-          <p className="text-[11px] font-mono uppercase text-amber-700 font-semibold">Faculty / Staff</p>
-          <p className="text-2xl font-display font-extrabold text-amber-700 mt-1">{metrics.faculty}</p>
+          <p className="text-[11px] font-mono uppercase text-slate-700 font-semibold">General Visitors</p>
+          <p className="text-2xl font-display font-extrabold text-slate-800 mt-1">{metrics.general}</p>
         </div>
         <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs">
           <p className="text-[11px] font-mono uppercase text-purple-700 font-semibold">Esports Fans</p>
@@ -720,7 +741,7 @@ export default function AdminVisitorRegistrations() {
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-3 border-t border-slate-100">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 pt-3 border-t border-slate-100">
           {/* Search */}
           <div className="relative lg:col-span-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
@@ -728,10 +749,21 @@ export default function AdminVisitorRegistrations() {
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search name, ref, email, roll no..."
+              placeholder="Search name, ref, email, class, college..."
               className="w-full h-9 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-hidden focus:border-blue-500 transition-colors"
             />
           </div>
+
+          {/* Source Filter */}
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value as "all" | "public" | "walk_in")}
+            className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:bg-white focus:outline-hidden focus:border-blue-500"
+          >
+            <option value="all">All Sources</option>
+            <option value="public">Public Online</option>
+            <option value="walk_in">Walk-In (Gate Desk)</option>
+          </select>
 
           {/* Category */}
           <select
@@ -740,9 +772,9 @@ export default function AdminVisitorRegistrations() {
             className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:bg-white focus:outline-hidden focus:border-blue-500"
           >
             <option value="all">All Categories</option>
-            <option value="Student">Student Cohorts</option>
-            <option value="General Visitor">General Visitors</option>
-            <option value="Faculty / Staff">Faculty / Staff</option>
+            <option value="Student Visitor">Student Visitor</option>
+            <option value="Faculty & Institutional Delegates">Faculty &amp; Institutional Delegates</option>
+            <option value="General Visitor">General Visitor</option>
           </select>
 
           {/* Esports Interest */}
@@ -848,12 +880,12 @@ export default function AdminVisitorRegistrations() {
                         <strong className="text-slate-900 block group-hover:text-blue-700 transition-colors">
                           {row.full_name}
                         </strong>
-                        <div className="flex items-center gap-1.5 mt-0.5">
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           <span
                             className={`inline-block px-2 py-0.5 rounded-full font-mono text-[10px] font-bold uppercase tracking-wider ${
-                              parsedCategory === "Student"
+                              parsedCategory === "Student Visitor"
                                 ? "bg-blue-50 text-blue-700 border border-blue-200"
-                                : parsedCategory === "Faculty / Staff"
+                                : parsedCategory === "Faculty & Institutional Delegates"
                                 ? "bg-amber-50 text-amber-700 border border-amber-200"
                                 : "bg-slate-100 text-slate-700 border border-slate-200"
                             }`}
@@ -870,18 +902,17 @@ export default function AdminVisitorRegistrations() {
 
                       {/* Academic / Organization */}
                       <td className="py-3.5 px-4">
-                        <span className="text-slate-800 font-medium block truncate max-w-[200px]">
-                          {row.institution || "Independent Visitor"}
+                        <span className="text-slate-800 font-medium block truncate max-w-[210px]">
+                          {row.institution || "—"}
                         </span>
-                        {parsedCategory === "Student" && (
+                        {row.student_class && (
                           <div className="text-[11px] text-slate-500 mt-0.5 font-mono">
-                            {row.student_class && <span>Class: {row.student_class}</span>}
-                            {row.student_id && <span> · Roll: {row.student_id}</span>}
+                            Class / Course: {row.student_class}
                           </div>
                         )}
-                        {parsedCategory === "Faculty / Staff" && row.designation && (
-                          <div className="text-[11px] text-slate-500 mt-0.5 font-mono">
-                            Desig: {row.designation}
+                        {parsedCategory === "Faculty & Institutional Delegates" && row.designation && (
+                          <div className="text-[11px] text-amber-800 mt-0.5 font-mono">
+                            Designation: {row.designation}
                           </div>
                         )}
                       </td>
@@ -898,16 +929,31 @@ export default function AdminVisitorRegistrations() {
                         )}
                       </td>
 
-                      {/* Contact */}
+                      {/* Email */}
                       <td className="py-3.5 px-4 font-mono text-xs">
-                        <span className="block text-slate-800 truncate max-w-[170px]">{row.email}</span>
-                        <span className="text-slate-500 text-[11px]">{row.phone}</span>
+                        <span className="block text-slate-800 truncate max-w-[200px]">{row.email}</span>
                       </td>
 
-                      {/* Status */}
+                      {/* Status & Gate Check-In */}
                       <td className="py-3.5 px-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         <div className="space-y-1">
                           <AdminStatusBadge status={row.status} isArchived={isArchived} />
+                          {row.check_in_status === "checked_in" && (
+                            <div>
+                              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 size={10} />
+                                <span>
+                                  Checked In
+                                  {row.checked_in_at
+                                    ? ` · ${new Date(row.checked_in_at).toLocaleTimeString("en-IN", {
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })}`
+                                    : ""}
+                                </span>
+                              </span>
+                            </div>
+                          )}
                           {row.status === "confirmed" && (
                             <div>
                               <span
@@ -1163,11 +1209,14 @@ export default function AdminVisitorRegistrations() {
                     type="button"
                     onClick={() => {
                       downloadTicketPdfFile({
-                        ticketRef: inspectedRecord.registration_ref,
+                        ticketRef: inspectedRecord.ticket_ref || inspectedRecord.registration_ref,
                         recipientName: inspectedRecord.full_name,
-                        category: inspectedRecord.visitor_category || "General Visitor",
+                        category: buildVisitorDisplaySubtitle({
+                          visitorCategory: inspectedRecord.visitor_category,
+                          studentClass: inspectedRecord.student_class,
+                          designation: inspectedRecord.designation,
+                        }),
                         email: inspectedRecord.email,
-                        phone: inspectedRecord.phone,
                         institution: inspectedRecord.institution || undefined,
                         registrationType: "visitor",
                         daysAttending: inspectedRecord.days_attending || undefined,
@@ -1193,11 +1242,15 @@ export default function AdminVisitorRegistrations() {
                 </div>
               </div>
 
-              {/* General Contact Details */}
+              {/* Visitor Details */}
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2 text-xs">
                 <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                  Contact Information
+                  Visitor Information
                 </h3>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Visitor Category:</span>
+                  <strong className="text-slate-900">{getParsedCategory(inspectedRecord)}</strong>
+                </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Full Name:</span>
                   <strong className="text-slate-900">{inspectedRecord.full_name}</strong>
@@ -1208,15 +1261,43 @@ export default function AdminVisitorRegistrations() {
                     {inspectedRecord.email}
                   </a>
                 </div>
+                {(getParsedCategory(inspectedRecord) === "Student Visitor" || Boolean(inspectedRecord.student_class)) && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Class / Course:</span>
+                    <span className="font-medium text-slate-900 font-mono">
+                      {inspectedRecord.student_class || "Not specified"}
+                    </span>
+                  </div>
+                )}
+                {(getParsedCategory(inspectedRecord) === "Faculty & Institutional Delegates" || Boolean(inspectedRecord.designation)) && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Designation / Role:</span>
+                    <span className="font-medium text-slate-900">
+                      {inspectedRecord.designation || "Not specified"}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Phone Number:</span>
-                  <a href={`tel:${inspectedRecord.phone}`} className="text-blue-700 font-mono hover:underline">
-                    {inspectedRecord.phone}
-                  </a>
+                  <span className="text-slate-500">College / Institution Name:</span>
+                  <span className="font-medium text-slate-900">{inspectedRecord.institution || "Not provided"}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Institution:</span>
-                  <span className="font-medium text-slate-900">{inspectedRecord.institution || "Not specified"}</span>
+                  <span className="text-slate-500">Registration Source:</span>
+                  <span className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold border ${getRegistrationSource(inspectedRecord).badge}`}>
+                    {getRegistrationSource(inspectedRecord).label}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Gate Check-In Status:</span>
+                  <span className="font-semibold text-slate-900">
+                    {inspectedRecord.check_in_status === "checked_in"
+                      ? `Checked In${
+                          inspectedRecord.checked_in_at
+                            ? ` (${new Date(inspectedRecord.checked_in_at).toLocaleString("en-IN")})`
+                            : ""
+                        }`
+                      : "Not Checked In"}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Days Attending:</span>
@@ -1224,32 +1305,19 @@ export default function AdminVisitorRegistrations() {
                 </div>
               </div>
 
-              {/* Student Academic Details (Conditional) */}
-              {getParsedCategory(inspectedRecord) === "Student" && (
-                <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200/80 space-y-2 text-xs">
-                  <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-blue-900 mb-2">
-                    Student Academic Information
-                  </h3>
-                  <div className="flex justify-between">
-                    <span className="text-blue-800">Class / Standard:</span>
-                    <strong className="text-blue-950 font-mono">{inspectedRecord.student_class || "N/A"}</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-blue-800">Student Roll No / ID:</span>
-                    <strong className="text-blue-950 font-mono">{inspectedRecord.student_id || "N/A"}</strong>
-                  </div>
-                </div>
-              )}
-
-              {/* Faculty / Staff Details (Conditional) */}
-              {getParsedCategory(inspectedRecord) === "Faculty / Staff" && (
+              {/* Faculty & Institutional Delegate Details (Conditional) */}
+              {getParsedCategory(inspectedRecord) === "Faculty & Institutional Delegates" && (
                 <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-2 text-xs">
                   <h3 className="font-mono text-xs font-bold uppercase tracking-wider text-amber-900 mb-2">
-                    Faculty Details
+                    Faculty &amp; Delegate Details
                   </h3>
                   <div className="flex justify-between">
                     <span className="text-amber-800">Designation / Role:</span>
-                    <strong className="text-amber-950">{inspectedRecord.designation || "Faculty / Staff"}</strong>
+                    <strong className="text-amber-950">{inspectedRecord.designation || "Faculty & Institutional Delegate"}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-amber-800">Institution:</span>
+                    <span className="text-amber-950 font-medium">{inspectedRecord.institution || "Not specified"}</span>
                   </div>
                 </div>
               )}

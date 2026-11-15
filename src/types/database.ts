@@ -44,7 +44,6 @@ export type AdminRole =
   | "crm_admin"
   | "registration_staff"
   | "esports_entry_staff"
-  | "participation_manager"
   | "esports_manager"
   | "match_conductor"
   | "content_manager"
@@ -200,24 +199,6 @@ export interface Registration {
   updated_at: string;
 }
 
-export interface ParticipationRegistration {
-  id: string;
-  registration_ref: string;
-  visitor_ticket_ref?: string | null;
-  full_name: string;
-  email: string;
-  phone: string;
-  institution: string | null;
-  participant_category: string;
-  participation_area: string;
-  project_title: string | null;
-  project_description: string | null;
-  team_members_count: number;
-  status: RegistrationStatus;
-  admin_notes: string | null;
-  submitted_at: string;
-}
-
 export interface VisitorRegistration {
   id: string;
   registration_ref: string;
@@ -225,14 +206,20 @@ export interface VisitorRegistration {
   linked_registration_ref?: string | null;
   full_name: string;
   email: string;
-  phone: string;
+  phone: string | null;
   institution: string | null;
+  student_class?: string | null;
+  student_id?: string | null;
+  designation?: string | null;
+  days_attending?: string | null;
   visitor_category: string;
   visitor_count: number;
+  registration_source?: "public" | "walk_in" | null;
   status: RegistrationStatus;
   check_in_status?: CheckInStatus;
   checked_in_at?: string | null;
   checked_in_by?: string | null;
+  checked_in_by_email?: string | null;
   admin_notes: string | null;
   submitted_at: string;
 }
@@ -249,7 +236,7 @@ export interface InstitutionItem {
 }
 
 export interface RegistrationControl {
-  form_type: "esports" | "participation" | "visitor";
+  form_type: "esports" | "visitor";
   is_open: boolean;
   closed_message: string | null;
   opens_at: string | null;
@@ -262,7 +249,7 @@ export interface RegistrationControl {
 
 export interface FormOption {
   id: string;
-  form_type: "esports" | "participation" | "visitor";
+  form_type: "esports" | "visitor";
   field_key: string;
   label: string;
   value: string;
@@ -436,11 +423,10 @@ export interface CheckIn {
   id: string;
   registration_id: string | null;
   visitor_registration_id?: string | null;
-  participation_registration_id?: string | null;
   player_id: string | null;
   ticket_id?: string | null;
   ticket_ref?: string | null;
-  subject_type?: "visitor" | "esports_player" | "esports_team" | "participation";
+  subject_type?: "visitor" | "esports_player" | "esports_team";
   event_day?: EventDaySession;
   check_in_type: "team" | "individual";
   checked_in_by: string | null;
@@ -502,7 +488,7 @@ export interface CrmEmail {
   sent_at?: string | null;
 }
 
-export type TicketCategory = "visitor" | "participation" | "esports";
+export type TicketCategory = "visitor" | "esports";
 export type TicketRecordStatus = "active" | "cancelled" | "revoked";
 export type GateVerdict = "VALID" | "ALREADY USED" | "INVALID";
 

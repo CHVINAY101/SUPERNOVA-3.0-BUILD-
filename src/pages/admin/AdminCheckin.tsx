@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
@@ -10,11 +11,9 @@ import {
   buildRegistrationCheckInPatch,
   computeEntryStatistics,
   evaluateEsportsPlayerEntry,
-  evaluateParticipationEntry,
   evaluateVisitorEntry,
   formatCheckInDatabaseError,
   isAutoLinkedEsportsVisitorRecord,
-  toUuidOrNull,
   validateWristbandIssuance,
 } from "@/lib/entryOperations";
 import type {
@@ -27,10 +26,28 @@ import type {
   WristbandIssuance,
 } from "@/types/database";
 import { parseSecureQrPayload } from "@/lib/ticketing";
-import { checkinGateTicket, verifyGateTicket } from "@/lib/ticketClient";
+import {
+  checkinGateTicket,
+  issueTicketForRegistration,
+  submitVisitorAndIssueTicket,
+  verifyGateTicket,
+} from "@/lib/ticketClient";
+import { buildTicketQrContent, downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import {
+  FACULTY_DESIGNATION_OPTIONS,
+  VISITOR_CATEGORY_CARDS,
+  buildVisitorDisplaySubtitle,
+  getDbCategoryFromId,
+  normalizeVisitorCategory,
+  resolveFacultyDesignationValue,
+  validateVisitorFormFields,
+  type CanonicalVisitorCategory,
+  type VisitorCategoryId,
+} from "@/lib/visitorCategories";
 import {
   Search,
   CheckCircle,
+  CheckCircle2,
   XCircle,
   Gamepad2,
   UserPlus,
@@ -47,25 +64,44 @@ import {
   Repeat,
   ShieldCheck,
   Camera,
+  Download,
+  Mail,
+  GraduationCap,
+  UserCheck,
+  Briefcase,
 } from "lucide-react";
+
+const SUGGESTED_INSTITUTIONS = [
+  "The National College, Basavanagudi",
+  "National PU College, Jayanagar",
+  "National PU College, Basavanagudi",
+  "National High School, Basavanagudi",
+  "National English School",
+  "National Degree College, Jayanagar",
+  "DR.HNCE",
+  "Bangalore University",
+];
 
 interface EntrySubject {
   key: string;
   id: string;
-  /** ONLY populated for Esports entries referencing public.registrations(id). Null for Visitor/Participation. */
+  /** ONLY populated for Esports entries referencing public.registrations(id). Null for Visitor. */
   registrationId: string | null;
   visitorRegistrationId?: string | null;
-  participationRegistrationId?: string | null;
   playerId?: string | null;
   ticketRef: string;
   altTicketRef?: string;
   teamRef?: string;
   name: string;
   gamerTag?: string | null;
-  phone: string;
+  phone?: string;
   email: string;
   institution: string;
-  subjectType: "visitor" | "esports_player" | "participation";
+  studentClass?: string | null;
+  designation?: string | null;
+  normalizedCategory?: CanonicalVisitorCategory;
+  registrationSource?: "public" | "walk_in";
+  subjectType: "visitor" | "esports_player";
   categoryOrGame: string;
   count: number;
   status: RegistrationStatus | string;
@@ -73,6 +109,24 @@ interface EntrySubject {
   rosterRole?: string;
   isAutoLinked?: boolean;
   adminNotes?: string | null;
+}
+
+interface WalkInIssuedPass {
+  registrationId?: string;
+  registrationRef: string;
+  ticketRef: string;
+  qrToken?: string;
+  qrDataUrl: string;
+  fullName: string;
+  email: string;
+  visitorCategory: CanonicalVisitorCategory;
+  displaySubtitle: string;
+  studentClass: string | null;
+  designation: string | null;
+  institution: string | null;
+  checkedInDays: Partial<
+    Record<EventDaySession, { at: string; by: string; wristband?: string | null }>
+  >;
 }
 
 function isMissingRpcError(err: any): boolean {
@@ -97,18 +151,15 @@ export default function AdminCheckin() {
   const canOverrideCheckin = hasPermission("entry:override_checkin");
   const canManageWristbands = hasPermission("entry:manage_wristbands");
   const canCreateWalkIn = hasPermission("visitor:create");
-  const canViewParticipation = hasPermission("participation:view");
-  const canCheckInParticipation = hasPermission("participation:edit");
-  const canUseGateScanner = canScanVisitor || canScanEsports || canViewParticipation;
+  const canUseGateScanner = canScanVisitor || canScanEsports;
 
   const canCheckInGateCategory = useCallback(
     (category?: string | null) => {
       if (category === "visitor") return canCheckInVisitor;
       if (category === "esports") return canCheckInEsports;
-      if (category === "participation") return canCheckInParticipation;
       return false;
     },
-    [canCheckInVisitor, canCheckInEsports, canCheckInParticipation]
+    [canCheckInVisitor, canCheckInEsports]
   );
 
   const [eventDay, setEventDay] = useState<EventDaySession>("2026-11-20");
@@ -124,7 +175,6 @@ export default function AdminCheckin() {
   const [visitorsRaw, setVisitorsRaw] = useState<any[]>([]);
   const [esportsTeamsRaw, setEsportsTeamsRaw] = useState<any[]>([]);
   const [esportsPlayersRaw, setEsportsPlayersRaw] = useState<any[]>([]);
-  const [participationsRaw, setParticipationsRaw] = useState<any[]>([]);
   const [checkins, setCheckins] = useState<CheckIn[]>([]);
   const [wristbandCategories, setWristbandCategories] = useState<WristbandCategory[]>(
     DEFAULT_WRISTBAND_CATEGORIES
@@ -170,43 +220,81 @@ export default function AdminCheckin() {
   const [newBandDesc, setNewBandDesc] = useState("");
   const [savingBand, setSavingBand] = useState(false);
 
-  // Walk-in Modal
+  // Walk-in Modal (Uses the 3 Visitor Categories & Shared Conditional Rules)
   const [walkInOpen, setWalkInOpen] = useState(false);
+  const [walkInCategoryId, setWalkInCategoryId] = useState<VisitorCategoryId | null>(null);
   const [walkInName, setWalkInName] = useState("");
-  const [walkInPhone, setWalkInPhone] = useState("");
   const [walkInEmail, setWalkInEmail] = useState("");
+  const [walkInStudentClass, setWalkInStudentClass] = useState("");
+  const [walkInDesignationOption, setWalkInDesignationOption] = useState("");
+  const [walkInCustomDesignation, setWalkInCustomDesignation] = useState("");
   const [walkInInstitution, setWalkInInstitution] = useState("");
-  const [walkInCount, setWalkInCount] = useState(1);
+  const [walkInErrors, setWalkInErrors] = useState<Record<string, string>>({});
+  const [walkInSubmitError, setWalkInSubmitError] = useState<string | null>(null);
   const [walkInSubmitting, setWalkInSubmitting] = useState(false);
+  const [walkInIssued, setWalkInIssued] = useState<WalkInIssuedPass | null>(null);
+  const [walkInBandCategory, setWalkInBandCategory] = useState<string>("");
+  const [walkInBandCode, setWalkInBandCode] = useState("");
+  const [walkInCheckingIn, setWalkInCheckingIn] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const handleVerifyGateInput = useCallback(async (rawOrQuery: string) => {
-    const trimmed = rawOrQuery.trim();
-    if (!trimmed) {
-      setGateVerification(null);
-      return;
+  const openWalkInModal = (prefillName = "") => {
+    setWalkInCategoryId(null);
+    setWalkInName(prefillName);
+    setWalkInEmail("");
+    setWalkInStudentClass("");
+    setWalkInDesignationOption("");
+    setWalkInCustomDesignation("");
+    setWalkInInstitution("");
+    setWalkInErrors({});
+    setWalkInSubmitError(null);
+    setWalkInIssued(null);
+    setWalkInBandCode("");
+    setWalkInBandCategory(
+      wristbandCategories.find((c) => c.slug === "general-visitor" && c.is_active)?.name ||
+        wristbandCategories.find((c) => c.is_active)?.name ||
+        "General Visitor"
+    );
+    setWalkInOpen(true);
+  };
+
+  const handleVerifyGateInput = useCallback(
+    async (rawOrQuery: string, targetDay: EventDaySession = eventDay) => {
+      const trimmed = rawOrQuery.trim();
+      if (!trimmed) {
+        setGateVerification(null);
+        return;
+      }
+      setRawQrInput(trimmed);
+      setVerifyingGate(true);
+      setStatusMessage(null);
+      try {
+        const parsed = parseSecureQrPayload(trimmed);
+        const res = await verifyGateTicket(trimmed, targetDay);
+        setGateVerification(res);
+        const displayRef = parsed.ticketRef || res.ticket?.ticket_ref || trimmed;
+        setSearchQuery(displayRef);
+      } catch (err: any) {
+        setGateVerification({
+          ok: false,
+          verdict: "INVALID",
+          can_check_in: false,
+          error: err?.message || "Gate verification request failed.",
+        });
+      } finally {
+        setVerifyingGate(false);
+      }
+    },
+    [eventDay]
+  );
+
+  const handleSelectEventDay = (day: EventDaySession) => {
+    setEventDay(day);
+    if (rawQrInput.trim() && gateVerification) {
+      void handleVerifyGateInput(rawQrInput, day);
     }
-    setRawQrInput(trimmed);
-    setVerifyingGate(true);
-    setStatusMessage(null);
-    try {
-      const parsed = parseSecureQrPayload(trimmed);
-      const res = await verifyGateTicket(trimmed);
-      setGateVerification(res);
-      const displayRef = parsed.ticketRef || res.ticket?.ticket_ref || trimmed;
-      setSearchQuery(displayRef);
-    } catch (err: any) {
-      setGateVerification({
-        ok: false,
-        verdict: "INVALID",
-        can_check_in: false,
-        error: err?.message || "Gate verification request failed.",
-      });
-    } finally {
-      setVerifyingGate(false);
-    }
-  }, []);
+  };
 
   const handleAuthoritativeGateCheckIn = async () => {
     if (!gateVerification?.ticket?.ticket_ref) return;
@@ -279,12 +367,9 @@ export default function AdminCheckin() {
 
   const fetchEntryData = useCallback(async () => {
     try {
-      const [visRes, partRes, espRes, playersRes, ciRes, wbCatRes, wbIssRes] = await Promise.all([
+      const [visRes, espRes, playersRes, ciRes, wbCatRes, wbIssRes] = await Promise.all([
         canScanVisitor
           ? supabase.from("visitor_registrations").select("*").order("submitted_at", { ascending: false })
-          : Promise.resolve({ data: [] as any[] }),
-        canViewParticipation
-          ? supabase.from("participation_registrations").select("*").order("submitted_at", { ascending: false })
           : Promise.resolve({ data: [] as any[] }),
         canScanEsports
           ? supabase
@@ -301,7 +386,6 @@ export default function AdminCheckin() {
       ]);
 
       setVisitorsRaw(visRes.data || []);
-      setParticipationsRaw(partRes.data || []);
       setEsportsTeamsRaw(espRes.data || []);
       setEsportsPlayersRaw(playersRes.data || []);
       setCheckins((ciRes.data as CheckIn[]) || []);
@@ -317,7 +401,7 @@ export default function AdminCheckin() {
     } finally {
       setLoading(false);
     }
-  }, [canScanVisitor, canViewParticipation, canScanEsports]);
+  }, [canScanVisitor, canScanEsports]);
 
   const { connectionState, lastEventTime } = useRealtimeSubscription(
     [
@@ -346,23 +430,38 @@ export default function AdminCheckin() {
           v.registration_ref && v.ticket_ref && v.registration_ref !== v.ticket_ref
             ? v.registration_ref
             : undefined;
-        // Only surface true visitors under Visitor Gate unless specifically searched by ref
+        const isWalkIn =
+          v.registration_source === "walk_in" ||
+          String(v.visitor_category || "").toLowerCase().includes("walk") ||
+          String(v.admin_notes || "").includes("[WALK_IN]") ||
+          String(v.registration_ref || "").toUpperCase().startsWith("SN3-VIS-WALK");
+        const normalizedCategory = normalizeVisitorCategory(
+          v.visitor_category,
+          v.student_class,
+          v.designation
+        );
         list.push({
           key: `vis-${v.id}`,
           id: v.id,
           registrationId: null,
           visitorRegistrationId: v.id,
-          participationRegistrationId: null,
           playerId: null,
           ticketRef: primaryRef,
           altTicketRef: altRef,
           name: v.full_name,
-          phone: v.phone || "",
           email: v.email || "",
-          institution: v.institution || "General Visitor",
+          institution: v.institution || "",
+          studentClass: v.student_class || null,
+          designation: v.designation || null,
+          normalizedCategory,
+          registrationSource: isWalkIn ? "walk_in" : "public",
           subjectType: "visitor",
-          categoryOrGame: v.visitor_category || "General Visitor",
-          count: v.visitor_count || 1,
+          categoryOrGame: buildVisitorDisplaySubtitle({
+            visitorCategory: v.visitor_category,
+            studentClass: v.student_class,
+            designation: v.designation,
+          }),
+          count: 1,
           status: v.status || "pending",
           isAutoLinked: autoLinked,
           adminNotes: v.admin_notes,
@@ -393,7 +492,6 @@ export default function AdminCheckin() {
             id: team.id,
             registrationId: team.id,
             visitorRegistrationId: null,
-            participationRegistrationId: null,
             playerId: null,
             ticketRef: team.captain_ticket_ref || team.registration_ref,
             altTicketRef:
@@ -420,7 +518,6 @@ export default function AdminCheckin() {
               id: p.id,
               registrationId: team.id,
               visitorRegistrationId: null,
-              participationRegistrationId: null,
               playerId: p.id,
               ticketRef: pTicket,
               teamRef: team.registration_ref,
@@ -441,37 +538,8 @@ export default function AdminCheckin() {
       }
     }
 
-    if (canViewParticipation) {
-      for (const p of participationsRaw) {
-        const primaryRef = p.visitor_ticket_ref || p.registration_ref;
-        const altRef =
-          p.registration_ref && p.visitor_ticket_ref && p.registration_ref !== p.visitor_ticket_ref
-            ? p.registration_ref
-            : undefined;
-        list.push({
-          key: `part-${p.id}`,
-          id: p.id,
-          registrationId: null,
-          visitorRegistrationId: p.visitor_id || null,
-          participationRegistrationId: p.id,
-          playerId: null,
-          ticketRef: primaryRef,
-          altTicketRef: altRef,
-          name: p.full_name,
-          phone: p.phone || "",
-          email: p.email || "",
-          institution: p.institution || "Exhibitor",
-          subjectType: "participation",
-          categoryOrGame: `${p.participation_area || "Science Expo"} · ${p.project_title || "Project"}`,
-          count: p.team_members_count || 1,
-          status: p.status || "pending",
-          adminNotes: p.admin_notes,
-        });
-      }
-    }
-
     return list;
-  }, [visitorsRaw, esportsTeamsRaw, esportsPlayersRaw, participationsRaw, canScanVisitor, canScanEsports, canViewParticipation]);
+  }, [visitorsRaw, esportsTeamsRaw, esportsPlayersRaw, canScanVisitor, canScanEsports]);
 
   const stats = useMemo(
     () =>
@@ -503,7 +571,10 @@ export default function AdminCheckin() {
         refMatches ||
         s.name.toLowerCase().includes(q) ||
         (s.gamerTag && s.gamerTag.toLowerCase().includes(q)) ||
-        s.phone.toLowerCase().includes(q) ||
+        (s.phone && s.phone.toLowerCase().includes(q)) ||
+        (s.studentClass && s.studentClass.toLowerCase().includes(q)) ||
+        (s.designation && s.designation.toLowerCase().includes(q)) ||
+        (s.normalizedCategory && s.normalizedCategory.toLowerCase().includes(q)) ||
         s.email.toLowerCase().includes(q) ||
         s.institution.toLowerCase().includes(q)
       );
@@ -522,9 +593,6 @@ export default function AdminCheckin() {
       }
       if (subject.subjectType === "visitor") {
         return c.visitor_registration_id === subject.id || c.registration_id === subject.id;
-      }
-      if (subject.subjectType === "participation") {
-        return c.participation_registration_id === subject.id;
       }
       if (subject.playerId && c.player_id) {
         return c.player_id === subject.playerId;
@@ -584,7 +652,7 @@ export default function AdminCheckin() {
     try {
       // Try atomic SECURITY DEFINER RPC first.
       // Only pass p_registration_id for esports entries (public.registrations.id);
-      // visitor and participation entries resolve via p_ticket_ref on the server
+      // visitor entries resolve via p_ticket_ref / visitor_registration_id on the server
       // so check_ins.registration_id never receives a wrong-table UUID.
       const { data: rpcRes, error: rpcErr } = await supabase.rpc("perform_event_checkin", {
         p_ticket_ref: subject.ticketRef,
@@ -616,7 +684,6 @@ export default function AdminCheckin() {
         const fullPayload = buildCheckInInsertPayload({
           registrationId: subject.registrationId,
           visitorRegistrationId: subject.visitorRegistrationId,
-          participationRegistrationId: subject.participationRegistrationId,
           playerId: subject.playerId,
           ticketRef: subject.ticketRef,
           subjectType: subject.subjectType,
@@ -697,32 +764,6 @@ export default function AdminCheckin() {
               .eq("id", subject.registrationId);
           }
         }
-      } else if (subject.subjectType === "participation") {
-        const patch = buildRegistrationCheckInPatch({
-          checkedIn: true,
-          actorUserId: user?.id,
-          actorEmail,
-          checkedInAt: nowIso,
-          includeEmailColumn: true,
-        });
-        const { error: partErr } = await supabase
-          .from("participation_registrations")
-          .update(patch)
-          .eq("id", subject.id);
-        if (partErr && (partErr.code === "42703" || String(partErr.message || "").includes("checked_in_by_email"))) {
-          await supabase
-            .from("participation_registrations")
-            .update(
-              buildRegistrationCheckInPatch({
-                checkedIn: true,
-                actorUserId: user?.id,
-                actorEmail,
-                checkedInAt: nowIso,
-                includeEmailColumn: false,
-              })
-            )
-            .eq("id", subject.id);
-        }
       }
 
       setStatusMessage({
@@ -772,7 +813,6 @@ export default function AdminCheckin() {
         ticket_ref: replaceTarget.subject.ticketRef,
         registration_id:
           replaceTarget.subject.visitorRegistrationId ||
-          replaceTarget.subject.participationRegistrationId ||
           replaceTarget.subject.registrationId ||
           replaceTarget.subject.id,
         subject_type: replaceTarget.subject.subjectType,
@@ -859,71 +899,237 @@ export default function AdminCheckin() {
     await fetchEntryData();
   };
 
+  const clearWalkInFieldError = (key: string) => {
+    setWalkInErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
   const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canCreateWalkIn || !walkInName.trim()) return;
+    if (!canCreateWalkIn || walkInSubmitting) return;
+
+    const errors = validateVisitorFormFields({
+      categoryId: walkInCategoryId,
+      fullName: walkInName,
+      email: walkInEmail,
+      studentClass: walkInStudentClass,
+      designationOption: walkInDesignationOption,
+      customDesignation: walkInCustomDesignation,
+      institution: walkInInstitution,
+    });
+
+    if (Object.keys(errors).length > 0 || !walkInCategoryId) {
+      setWalkInErrors(errors);
+      setWalkInSubmitError(Object.values(errors)[0] || "Please complete all required fields.");
+      return;
+    }
+
+    setWalkInErrors({});
+    setWalkInSubmitError(null);
     setWalkInSubmitting(true);
-    setStatusMessage(null);
+
     try {
-      const ref = `SN3-VIS-WALK-${Math.floor(100000 + Math.random() * 900000)}`;
-      const nowIso = new Date().toISOString();
-      const actor = user?.email || "gate-staff@supernova.edu";
+      const canonicalCategory = getDbCategoryFromId(walkInCategoryId);
+      const cleanName = walkInName.trim();
+      const cleanEmail = walkInEmail.trim().toLowerCase();
+      const cleanClass = walkInCategoryId === "student" ? walkInStudentClass.trim() : null;
+      const cleanDesignation =
+        walkInCategoryId === "faculty"
+          ? resolveFacultyDesignationValue(walkInDesignationOption, walkInCustomDesignation)
+          : null;
+      const cleanInstitution = walkInInstitution.trim() || null;
+      const displaySubtitle = buildVisitorDisplaySubtitle({
+        visitorCategory: canonicalCategory,
+        studentClass: cleanClass,
+        designation: cleanDesignation,
+      });
 
-      const { data: inserted, error } = await supabase
-        .from("visitor_registrations")
-        .insert({
-          registration_ref: ref,
-          full_name: walkInName.trim(),
-          phone: walkInPhone.trim() || "+91 00000 00000",
-          email: walkInEmail.trim() || "walkin@supernova.org",
-          institution: walkInInstitution.trim() || "Walk-in Guest",
-          visitor_category: "General visitor",
-          visitor_count: walkInCount,
-          status: "confirmed",
-          admin_notes: `On-the-spot walk-in at Gate Desk by ${actor}`,
-          check_in_status: "checked_in",
-          checked_in_at: nowIso,
-          checked_in_by: toUuidOrNull(user?.id),
-          submitted_at: nowIso,
-        })
-        .select();
+      const submissionRes = await submitVisitorAndIssueTicket({
+        fullName: cleanName,
+        email: cleanEmail,
+        phone: null,
+        institution: cleanInstitution,
+        visitorCategory: canonicalCategory,
+        studentClass: cleanClass,
+        designation: cleanDesignation,
+        daysAttending: "Both",
+        registrationSource: "walk_in",
+      });
 
-      if (error) throw error;
-      const newId = Array.isArray(inserted) ? inserted[0]?.id : (inserted as any)?.id;
+      let ticket = submissionRes.ticket || null;
+      if (!ticket && submissionRes.registrationId) {
+        const issued = await issueTicketForRegistration("visitor", submissionRes.registrationId);
+        if (issued.ok && issued.ticket) {
+          ticket = issued.ticket;
+        }
+      }
 
-      await executeCheckIn(
-        {
-          key: `vis-${newId}`,
-          id: newId,
-          registrationId: null,
-          visitorRegistrationId: newId,
-          participationRegistrationId: null,
-          playerId: null,
-          ticketRef: ref,
-          name: walkInName.trim(),
-          phone: walkInPhone.trim(),
-          email: walkInEmail.trim(),
-          institution: walkInInstitution.trim() || "Walk-in Guest",
-          subjectType: "visitor",
-          categoryOrGame: "Walk-in Visitor",
-          count: walkInCount,
-          status: "confirmed",
-        },
-        false,
-        ""
-      );
+      const ticketRef = ticket?.ticket_ref || submissionRes.registrationRef;
+      const qrToken = ticket?.qr_token;
+      const qrPayload = buildTicketQrContent(ticketRef, qrToken);
+      const qrDataUrl = await QRCode.toDataURL(qrPayload, {
+        errorCorrectionLevel: "H",
+        margin: 1,
+        width: 240,
+        color: { dark: "#0B1120", light: "#FFFFFF" },
+      });
 
-      setSearchQuery(ref);
-      setWalkInName("");
-      setWalkInPhone("");
-      setWalkInEmail("");
-      setWalkInInstitution("");
-      setWalkInCount(1);
-      setWalkInOpen(false);
+      setWalkInIssued({
+        registrationId: submissionRes.registrationId,
+        registrationRef: submissionRes.registrationRef,
+        ticketRef,
+        qrToken,
+        qrDataUrl,
+        fullName: cleanName,
+        email: cleanEmail,
+        visitorCategory: canonicalCategory,
+        displaySubtitle,
+        studentClass: cleanClass,
+        designation: cleanDesignation,
+        institution: cleanInstitution,
+        checkedInDays: {},
+      });
+
+      setSearchQuery(ticketRef);
+      setStatusMessage({
+        type: "success",
+        text: `Walk-in visitor pass issued for ${cleanName} (${canonicalCategory} · ${ticketRef}). Ready for PDF download or gate check-in.`,
+      });
+      await fetchEntryData();
     } catch (err: any) {
-      setStatusMessage({ type: "error", text: `Walk-in failed: ${err?.message || "Error"}` });
+      setWalkInSubmitError(formatCheckInDatabaseError(err) || err?.message || "Walk-in registration failed.");
     } finally {
       setWalkInSubmitting(false);
+    }
+  };
+
+  const handleWalkInImmediateCheckIn = async () => {
+    if (!walkInIssued || !canCheckInVisitor || walkInCheckingIn) return;
+    if (walkInIssued.checkedInDays[eventDay]) return;
+
+    setWalkInCheckingIn(true);
+    setWalkInSubmitError(null);
+    const bandCategory = canIssueWristband
+      ? walkInBandCategory ||
+        wristbandCategories.find((c) => c.slug === "general-visitor" && c.is_active)?.name ||
+        "General Visitor"
+      : null;
+    const bandCode = canIssueWristband ? walkInBandCode.trim() || null : null;
+
+    try {
+      const res = await checkinGateTicket({
+        ticketRef: walkInIssued.ticketRef,
+        qrToken: walkInIssued.qrToken || null,
+        eventDay,
+        wristbandCategory: bandCategory,
+        wristbandCode: bandCode,
+        notes: "Walk-in gate entry check-in",
+      });
+
+      if (res.ok && res.verdict === "VALID") {
+        const checkedAt = res.checked_in_at || new Date().toISOString();
+        const checkedBy = res.checked_in_by || user?.email || "Gate Staff";
+        setWalkInIssued((prev) =>
+          prev
+            ? {
+                ...prev,
+                checkedInDays: {
+                  ...prev.checkedInDays,
+                  [eventDay]: { at: checkedAt, by: checkedBy, wristband: bandCategory },
+                },
+              }
+            : null
+        );
+        setStatusMessage({
+          type: "success",
+          text: `Walk-in Visitor Checked In: ${walkInIssued.fullName} (${walkInIssued.ticketRef}) on ${eventDay}.`,
+        });
+        await fetchEntryData();
+        return;
+      }
+
+      if (res.duplicate && res.checked_in_at) {
+        const checkedBy = res.checked_in_by || user?.email || "Gate Staff";
+        setWalkInIssued((prev) =>
+          prev
+            ? {
+                ...prev,
+                checkedInDays: {
+                  ...prev.checkedInDays,
+                  [eventDay]: {
+                    at: res.checked_in_at!,
+                    by: checkedBy,
+                    wristband: bandCategory,
+                  },
+                },
+              }
+            : null
+        );
+        setWalkInSubmitError(`ALREADY CHECKED IN on ${eventDay} by ${checkedBy}.`);
+        return;
+      }
+
+      // Legacy fallback only when checkin_gate_ticket RPC is not yet deployed
+      const errLower = String(res.error || "").toLowerCase();
+      if (errLower.includes("not yet deployed") || errLower.includes("does not exist")) {
+        const matchedVisitor = visitorsRaw.find(
+          (v) =>
+            v.id === walkInIssued.registrationId ||
+            v.registration_ref === walkInIssued.registrationRef ||
+            v.ticket_ref === walkInIssued.ticketRef
+        );
+        if (matchedVisitor?.id) {
+          await executeCheckIn(
+            {
+              key: `vis-${matchedVisitor.id}`,
+              id: matchedVisitor.id,
+              registrationId: null,
+              visitorRegistrationId: matchedVisitor.id,
+              playerId: null,
+              ticketRef: walkInIssued.ticketRef,
+              name: walkInIssued.fullName,
+              email: walkInIssued.email,
+              institution: walkInIssued.institution || "",
+              studentClass: walkInIssued.studentClass,
+              designation: walkInIssued.designation,
+              normalizedCategory: walkInIssued.visitorCategory,
+              registrationSource: "walk_in",
+              subjectType: "visitor",
+              categoryOrGame: walkInIssued.displaySubtitle,
+              count: 1,
+              status: "confirmed",
+            },
+            false,
+            ""
+          );
+          setWalkInIssued((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  checkedInDays: {
+                    ...prev.checkedInDays,
+                    [eventDay]: {
+                      at: new Date().toISOString(),
+                      by: user?.email || "Gate Staff",
+                      wristband: bandCategory,
+                    },
+                  },
+                }
+              : null
+          );
+          return;
+        }
+      }
+
+      setWalkInSubmitError(res.error || res.reason || "Unable to complete walk-in gate check-in.");
+    } catch (err: any) {
+      setWalkInSubmitError(formatCheckInDatabaseError(err));
+    } finally {
+      setWalkInCheckingIn(false);
     }
   };
 
@@ -960,11 +1166,11 @@ export default function AdminCheckin() {
           {canCreateWalkIn && (
             <button
               type="button"
-              onClick={() => setWalkInOpen(true)}
-              className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+              onClick={() => openWalkInModal()}
+              className="min-h-[44px] inline-flex items-center gap-2 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-mono font-bold uppercase tracking-wide cursor-pointer shadow-xs"
             >
-              <UserPlus size={14} />
-              <span>Walk-in Pass</span>
+              <UserPlus size={15} />
+              <span>WALK-IN VISITOR REGISTRATION</span>
             </button>
           )}
 
@@ -1005,7 +1211,7 @@ export default function AdminCheckin() {
             <button
               key={day}
               type="button"
-              onClick={() => setEventDay(day)}
+              onClick={() => handleSelectEventDay(day)}
               className={`min-h-[40px] px-3.5 rounded-xl text-xs font-bold font-mono cursor-pointer transition-colors ${
                 eventDay === day
                   ? "bg-slate-900 text-white"
@@ -1336,14 +1542,11 @@ export default function AdminCheckin() {
           {canCreateWalkIn && (
             <button
               type="button"
-              onClick={() => {
-                setWalkInName(searchQuery);
-                setWalkInOpen(true);
-              }}
-              className="min-h-[44px] inline-flex items-center gap-1.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+              onClick={() => openWalkInModal(searchQuery.trim())}
+              className="min-h-[44px] inline-flex items-center gap-2 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-mono font-bold uppercase tracking-wide cursor-pointer"
             >
               <UserPlus size={14} />
-              <span>Issue Walk-in Visitor Pass</span>
+              <span>WALK-IN VISITOR REGISTRATION</span>
             </button>
           )}
         </div>
@@ -1368,29 +1571,17 @@ export default function AdminCheckin() {
                   allowApprovedUnselectedEntryOnly: allowUnselectedEntry,
                 });
               }
-              if (subject.subjectType === "visitor") {
-                const visitorRow = visitorsRaw.find((v) => v.id === subject.id) || null;
-                return evaluateVisitorEntry({
-                  visitor: visitorRow,
-                  checkIns: checkins,
-                  eventDay,
-                  requestedTrack: trackFilter === "esports_player" ? "esports" : "visitor",
-                });
-              }
-              const partRow = participationsRaw.find((p) => p.id === subject.id) || null;
-              return evaluateParticipationEntry({
-                participation: partRow,
+              const visitorRow = visitorsRaw.find((v) => v.id === subject.id) || null;
+              return evaluateVisitorEntry({
+                visitor: visitorRow,
                 checkIns: checkins,
                 eventDay,
+                requestedTrack: trackFilter === "esports_player" ? "esports" : "visitor",
               });
             })();
 
             const canAct =
-              subject.subjectType === "visitor"
-                ? canCheckInVisitor
-                : subject.subjectType === "esports_player"
-                ? canCheckInEsports
-                : canCheckInParticipation;
+              subject.subjectType === "visitor" ? canCheckInVisitor : canCheckInEsports;
 
             const isDenied = verdict.decision === "denied";
             const isDuplicate = verdict.decision === "already_checked_in";
@@ -1421,17 +1612,23 @@ export default function AdminCheckin() {
                       className={`text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-full border ${
                         subject.subjectType === "visitor"
                           ? "bg-blue-50 text-blue-700 border-blue-200"
-                          : subject.subjectType === "esports_player"
-                          ? "bg-purple-50 text-purple-700 border-purple-200"
-                          : "bg-amber-50 text-amber-800 border-amber-200"
+                          : "bg-purple-50 text-purple-700 border-purple-200"
                       }`}
                     >
-                      {subject.subjectType === "visitor"
-                        ? "Visitor Pass"
-                        : subject.subjectType === "esports_player"
-                        ? "Esports Player"
-                        : "Project Exhibitor"}
+                      {subject.subjectType === "visitor" ? "Visitor Pass" : "Esports Player"}
                     </span>
+
+                    {subject.subjectType === "visitor" && subject.normalizedCategory && (
+                      <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                        {subject.normalizedCategory}
+                      </span>
+                    )}
+
+                    {subject.subjectType === "visitor" && subject.registrationSource === "walk_in" && (
+                      <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        WALK-IN
+                      </span>
+                    )}
 
                     <span className="font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
                       {subject.ticketRef}
@@ -1474,17 +1671,36 @@ export default function AdminCheckin() {
                   </h3>
 
                   <div className="flex items-center gap-4 flex-wrap text-xs text-slate-600">
-                    <span className="inline-flex items-center gap-1">
-                      <Building2 size={12} /> {subject.institution}
-                    </span>
-                    {subject.phone && (
+                    {subject.institution && (
+                      <span className="inline-flex items-center gap-1">
+                        <Building2 size={12} /> {subject.institution}
+                      </span>
+                    )}
+                    {subject.studentClass && (
+                      <span className="inline-flex items-center gap-1 font-mono">
+                        <GraduationCap size={12} /> {subject.studentClass}
+                      </span>
+                    )}
+                    {subject.designation && (
+                      <span className="inline-flex items-center gap-1 font-mono text-amber-800">
+                        <Briefcase size={12} /> {subject.designation}
+                      </span>
+                    )}
+                    {subject.email && (
+                      <span className="inline-flex items-center gap-1 font-mono">
+                        <Mail size={12} /> {subject.email}
+                      </span>
+                    )}
+                    {subject.subjectType === "esports_player" && subject.phone && (
                       <span className="inline-flex items-center gap-1 font-mono">
                         <Phone size={12} /> {subject.phone}
                       </span>
                     )}
-                    <span className="inline-flex items-center gap-1 font-mono">
-                      <Gamepad2 size={12} /> {subject.categoryOrGame}
-                    </span>
+                    {subject.subjectType === "esports_player" && (
+                      <span className="inline-flex items-center gap-1 font-mono">
+                        <Gamepad2 size={12} /> {subject.categoryOrGame}
+                      </span>
+                    )}
                   </div>
 
                   <p className="text-xs text-slate-600 m-0">{verdict.reason}</p>
@@ -1812,87 +2028,537 @@ export default function AdminCheckin() {
         </div>
       )}
 
-      {/* Walk-in Modal */}
+      {/* Walk-In Visitor Registration Modal (Existing Three-Category Visitor System + Ticket + Gate Check-In) */}
       {walkInOpen && (
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs"
+          aria-labelledby="walkin-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
           onClick={() => setWalkInOpen(false)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 text-slate-900"
+            className="w-full max-w-2xl bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 text-slate-900 max-h-[92vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-              <h3 className="text-base font-bold text-slate-900 m-0">Issue Walk-in Visitor Pass</h3>
-              <button type="button" onClick={() => setWalkInOpen(false)} className="p-1.5 cursor-pointer">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono text-[10px] font-bold uppercase">
+                    Gate Desk · Walk-In
+                  </span>
+                </div>
+                <h3 id="walkin-modal-title" className="text-base sm:text-lg font-black text-slate-900 m-0 uppercase tracking-tight">
+                  WALK-IN VISITOR REGISTRATION
+                </h3>
+              </div>
+              <button
+                type="button"
+                aria-label="Close walk-in modal"
+                onClick={() => setWalkInOpen(false)}
+                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer"
+              >
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleWalkInSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Full Name *</label>
-                <input
-                  type="text"
-                  required
-                  value={walkInName}
-                  onChange={(e) => setWalkInName(e.target.value)}
-                  placeholder="e.g. Ramesh Kumar"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm"
-                />
+            {walkInSubmitError && (
+              <div
+                role="alert"
+                className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-start gap-2"
+              >
+                <AlertTriangle size={15} className="shrink-0 mt-0.5 text-rose-600" />
+                <span>{walkInSubmitError}</span>
               </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Phone Number</label>
-                <input
-                  type="tel"
-                  value={walkInPhone}
-                  onChange={(e) => setWalkInPhone(e.target.value)}
-                  placeholder="10-digit mobile number"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
+            )}
+
+            {!walkInIssued ? (
+              <form onSubmit={handleWalkInSubmit} noValidate className="space-y-4">
+                <p className="text-xs text-slate-600 m-0">
+                  Registers the walk-in visitor directly into the Visitor CRM with a unique verifiable QR ticket pass using the same category rules as public Visitor Registration.
+                </p>
+
+                {/* 3 Visitor Category Selector Cards */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Party Size</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={walkInCount}
-                    onChange={(e) => setWalkInCount(Number(e.target.value) || 1)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono"
-                  />
+                  <label className="block text-xs font-bold text-slate-700 mb-2">
+                    Select Visitor Category *
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {VISITOR_CATEGORY_CARDS.map((card) => {
+                      const isSelected = walkInCategoryId === card.id;
+                      const IconComp =
+                        card.id === "student"
+                          ? GraduationCap
+                          : card.id === "faculty"
+                          ? Building2
+                          : UserCheck;
+                      return (
+                        <button
+                          key={card.id}
+                          type="button"
+                          aria-pressed={isSelected}
+                          data-walkin-category-card={card.id}
+                          onClick={() => {
+                            setWalkInCategoryId(card.id);
+                            setWalkInSubmitError(null);
+                            clearWalkInFieldError("category");
+                            clearWalkInFieldError("studentClass");
+                            clearWalkInFieldError("designationOption");
+                            clearWalkInFieldError("customDesignation");
+                            clearWalkInFieldError("institution");
+                          }}
+                          className={`text-left p-3 rounded-xl transition-all flex flex-col justify-between min-h-[112px] cursor-pointer border ${
+                            isSelected
+                              ? "bg-blue-50/80 border-blue-600 ring-2 ring-blue-500/20"
+                              : "bg-slate-50 border-slate-200 hover:border-slate-300 hover:bg-white"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div
+                              className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                                isSelected ? "bg-blue-600 text-white" : "bg-white text-blue-600 border border-slate-200"
+                              }`}
+                            >
+                              <IconComp size={14} />
+                            </div>
+                            {isSelected && <CheckCircle2 size={16} className="text-blue-600 shrink-0" />}
+                          </div>
+                          <div>
+                            <div className="text-[11px] font-black uppercase tracking-tight text-slate-900 leading-snug mb-0.5">
+                              {card.title}
+                            </div>
+                            <p className="text-[10px] text-slate-600 leading-snug m-0">
+                              {card.shortDescription}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {walkInErrors.category && (
+                    <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1.5 m-0">
+                      {walkInErrors.category}
+                    </p>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Institution</label>
-                  <input
-                    type="text"
-                    value={walkInInstitution}
-                    onChange={(e) => setWalkInInstitution(e.target.value)}
-                    placeholder="Optional"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs"
-                  />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="walkin-full-name" className="block text-xs font-bold text-slate-700 mb-1">
+                      Full Name *
+                    </label>
+                    <input
+                      id="walkin-full-name"
+                      type="text"
+                      required
+                      maxLength={120}
+                      value={walkInName}
+                      onChange={(e) => {
+                        setWalkInName(e.target.value);
+                        clearWalkInFieldError("fullName");
+                      }}
+                      placeholder="Enter visitor's full name"
+                      className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
+                        walkInErrors.fullName ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                      }`}
+                    />
+                    {walkInErrors.fullName && (
+                      <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                        {walkInErrors.fullName}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label htmlFor="walkin-email" className="block text-xs font-bold text-slate-700 mb-1">
+                      Email Address *
+                    </label>
+                    <input
+                      id="walkin-email"
+                      type="email"
+                      required
+                      maxLength={254}
+                      value={walkInEmail}
+                      onChange={(e) => {
+                        setWalkInEmail(e.target.value);
+                        clearWalkInFieldError("email");
+                      }}
+                      placeholder="name@example.com"
+                      className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
+                        walkInErrors.email ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                      }`}
+                    />
+                    {walkInErrors.email && (
+                      <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                        {walkInErrors.email}
+                      </p>
+                    )}
+                  </div>
+
+                  {walkInCategoryId === "student" && (
+                    <>
+                      <div>
+                        <label htmlFor="walkin-class-course" className="block text-xs font-bold text-slate-700 mb-1">
+                          Class / Course *
+                        </label>
+                        <input
+                          id="walkin-class-course"
+                          type="text"
+                          required
+                          maxLength={120}
+                          value={walkInStudentClass}
+                          onChange={(e) => {
+                            setWalkInStudentClass(e.target.value);
+                            clearWalkInFieldError("studentClass");
+                          }}
+                          placeholder="e.g. II PUC Science, B.Sc. CS, 10th Standard"
+                          className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
+                            walkInErrors.studentClass ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                          }`}
+                        />
+                        {walkInErrors.studentClass && (
+                          <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                            {walkInErrors.studentClass}
+                          </p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label htmlFor="walkin-institution" className="block text-xs font-bold text-slate-700 mb-1">
+                          College / Institution Name *
+                        </label>
+                        <input
+                          id="walkin-institution"
+                          type="text"
+                          required
+                          maxLength={150}
+                          list="walkin-institutions-list"
+                          value={walkInInstitution}
+                          onChange={(e) => {
+                            setWalkInInstitution(e.target.value);
+                            clearWalkInFieldError("institution");
+                          }}
+                          placeholder="School, college or institution name"
+                          className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
+                            walkInErrors.institution ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                          }`}
+                        />
+                        {walkInErrors.institution && (
+                          <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                            {walkInErrors.institution}
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {walkInCategoryId === "faculty" && (
+                    <>
+                      <div>
+                        <label htmlFor="walkin-designation" className="block text-xs font-bold text-slate-700 mb-1">
+                          Designation / Role *
+                        </label>
+                        <select
+                          id="walkin-designation"
+                          required
+                          value={walkInDesignationOption}
+                          onChange={(e) => {
+                            setWalkInDesignationOption(e.target.value);
+                            clearWalkInFieldError("designationOption");
+                            if (e.target.value !== "Other") {
+                              clearWalkInFieldError("customDesignation");
+                            }
+                          }}
+                          className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm bg-white ${
+                            walkInErrors.designationOption ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                          }`}
+                        >
+                          <option value="">Select designation / role...</option>
+                          {FACULTY_DESIGNATION_OPTIONS.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                        </select>
+                        {walkInErrors.designationOption && (
+                          <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                            {walkInErrors.designationOption}
+                          </p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label htmlFor="walkin-institution" className="block text-xs font-bold text-slate-700 mb-1">
+                          College / Institution Name *
+                        </label>
+                        <input
+                          id="walkin-institution"
+                          type="text"
+                          required
+                          maxLength={150}
+                          list="walkin-institutions-list"
+                          value={walkInInstitution}
+                          onChange={(e) => {
+                            setWalkInInstitution(e.target.value);
+                            clearWalkInFieldError("institution");
+                          }}
+                          placeholder="School, college or institution name"
+                          className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
+                            walkInErrors.institution ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                          }`}
+                        />
+                        {walkInErrors.institution && (
+                          <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                            {walkInErrors.institution}
+                          </p>
+                        )}
+                      </div>
+
+                      {walkInDesignationOption === "Other" && (
+                        <div className="sm:col-span-2">
+                          <label htmlFor="walkin-custom-designation" className="block text-xs font-bold text-slate-700 mb-1">
+                            Specify Designation / Role *
+                          </label>
+                          <input
+                            id="walkin-custom-designation"
+                            type="text"
+                            required
+                            maxLength={120}
+                            value={walkInCustomDesignation}
+                            onChange={(e) => {
+                              setWalkInCustomDesignation(e.target.value);
+                              clearWalkInFieldError("customDesignation");
+                            }}
+                            placeholder="e.g. Research Coordinator, Academic Advisor, Dean"
+                            className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
+                              walkInErrors.customDesignation ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                            }`}
+                          />
+                          {walkInErrors.customDesignation && (
+                            <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                              {walkInErrors.customDesignation}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {walkInCategoryId === "general" && (
+                    <div className="sm:col-span-2">
+                      <label htmlFor="walkin-institution" className="block text-xs font-bold text-slate-700 mb-1">
+                        College / Institution Name (Optional)
+                      </label>
+                      <input
+                        id="walkin-institution"
+                        type="text"
+                        maxLength={150}
+                        list="walkin-institutions-list"
+                        value={walkInInstitution}
+                        onChange={(e) => {
+                          setWalkInInstitution(e.target.value);
+                          clearWalkInFieldError("institution");
+                        }}
+                        placeholder="Optional — school, college or community affiliation"
+                        className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
+                          walkInErrors.institution ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                        }`}
+                      />
+                      {walkInErrors.institution && (
+                        <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                          {walkInErrors.institution}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+
+                <datalist id="walkin-institutions-list">
+                  {SUGGESTED_INSTITUTIONS.map((inst) => (
+                    <option key={inst} value={inst} />
+                  ))}
+                </datalist>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setWalkInOpen(false)}
+                    className="min-h-[42px] px-4 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={walkInSubmitting}
+                    className="min-h-[42px] px-5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold cursor-pointer"
+                  >
+                    {walkInSubmitting ? "Registering & Issuing Pass..." : "Register & Issue Visitor Ticket"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                {/* Issued Walk-In Pass Card */}
+                <div className="bg-[#0B1120] text-white rounded-2xl p-4 sm:p-5 border border-slate-800 grid grid-cols-1 sm:grid-cols-[1fr_140px] gap-4 items-center">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-400/40 font-mono text-[10px] font-bold uppercase">
+                        WALK-IN
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-200 border border-cyan-400/40 font-mono text-[10px] font-bold uppercase">
+                        {walkInIssued.visitorCategory}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-[#D5F542] text-[#0B1120] font-mono text-[10px] font-bold uppercase">
+                        CONFIRMED PASS
+                      </span>
+                    </div>
+                    <div className="font-mono text-lg sm:text-xl font-black text-[#D5F542] tracking-wider select-all">
+                      {walkInIssued.ticketRef}
+                    </div>
+                    <div className="text-xs text-slate-200 space-y-0.5">
+                      <p className="font-bold text-white m-0">{walkInIssued.fullName}</p>
+                      <p className="text-slate-300 font-mono text-[11px] m-0">{walkInIssued.email}</p>
+                      <p className="text-slate-300 text-[11px] m-0">
+                        {walkInIssued.displaySubtitle}
+                        {walkInIssued.institution ? ` · ${walkInIssued.institution}` : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl p-2 text-center border-2 border-cyan-400/70 mx-auto w-[140px]">
+                    <img
+                      src={walkInIssued.qrDataUrl}
+                      alt={`Walk-In QR ${walkInIssued.ticketRef}`}
+                      className="w-28 h-28 mx-auto block"
+                    />
+                    <span className="block mt-1 text-[9px] font-mono font-bold text-[#0B1120] uppercase">
+                      GATE QR PASS
+                    </span>
+                  </div>
+                </div>
+
+                {/* PDF Download Action */}
                 <button
                   type="button"
-                  onClick={() => setWalkInOpen(false)}
-                  className="min-h-[40px] px-4 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 cursor-pointer"
+                  onClick={() =>
+                    downloadTicketPdfFile({
+                      ticketRef: walkInIssued.ticketRef,
+                      qrToken: walkInIssued.qrToken,
+                      recipientName: walkInIssued.fullName,
+                      category: walkInIssued.displaySubtitle,
+                      email: walkInIssued.email,
+                      institution: walkInIssued.institution || undefined,
+                      registrationType: "visitor",
+                      daysAttending: "Both",
+                    })
+                  }
+                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-mono font-bold uppercase tracking-wide cursor-pointer"
                 >
-                  Cancel
+                  <Download size={15} />
+                  <span>Download Official Ticket (PDF)</span>
                 </button>
-                <button
-                  type="submit"
-                  disabled={walkInSubmitting}
-                  className="min-h-[40px] px-4 rounded-xl bg-blue-600 text-white text-xs font-semibold cursor-pointer"
-                >
-                  {walkInSubmitting ? "Issuing..." : "Confirm & Check In"}
-                </button>
+
+                {/* Immediate Gate Verification & Check-In */}
+                {canCheckInVisitor && (
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-xs font-mono font-bold uppercase text-slate-700">
+                        Gate Check-In ({eventDay})
+                      </span>
+                      <div className="inline-flex gap-1">
+                        {(["2026-11-20", "2026-11-21"] as EventDaySession[]).map((day, idx) => (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => setEventDay(day)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold cursor-pointer ${
+                              eventDay === day
+                                ? "bg-slate-900 text-white"
+                                : "bg-white border border-slate-200 text-slate-600"
+                            }`}
+                          >
+                            Day {idx + 1}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {walkInIssued.checkedInDays[eventDay] ? (
+                      <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
+                        <CheckCircle size={16} className="text-emerald-600 shrink-0" />
+                        <span>
+                          CHECKED IN for {eventDay} at{" "}
+                          {new Date(walkInIssued.checkedInDays[eventDay]!.at).toLocaleTimeString("en-IN")} by{" "}
+                          {walkInIssued.checkedInDays[eventDay]!.by}
+                          {walkInIssued.checkedInDays[eventDay]!.wristband
+                            ? ` · Wristband: ${walkInIssued.checkedInDays[eventDay]!.wristband}`
+                            : ""}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {canIssueWristband && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <select
+                              aria-label="Walk-in Wristband Category"
+                              value={walkInBandCategory}
+                              onChange={(e) => setWalkInBandCategory(e.target.value)}
+                              className="h-10 px-3 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800"
+                            >
+                              {wristbandCategories
+                                .filter((c) => c.is_active)
+                                .map((c) => (
+                                  <option key={c.id} value={c.name}>
+                                    {c.name}
+                                  </option>
+                                ))}
+                            </select>
+                            <input
+                              type="text"
+                              placeholder="Band ID (optional)"
+                              value={walkInBandCode}
+                              onChange={(e) => setWalkInBandCode(e.target.value)}
+                              className="h-10 px-3 rounded-xl border border-slate-300 bg-white text-xs font-mono text-slate-900"
+                            />
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          disabled={walkInCheckingIn}
+                          onClick={handleWalkInImmediateCheckIn}
+                          className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold cursor-pointer"
+                        >
+                          <CheckCircle size={16} />
+                          <span>
+                            {walkInCheckingIn
+                              ? "Checking In..."
+                              : `Verify & Complete Gate Check-In (${eventDay.slice(-2)} Nov)`}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => openWalkInModal()}
+                    className="min-h-[40px] px-4 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                  >
+                    Register Another Walk-In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWalkInOpen(false)}
+                    className="min-h-[40px] px-4 rounded-xl bg-slate-900 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
               </div>
-            </form>
+            )}
           </div>
         </div>
       )}

@@ -23,7 +23,6 @@ import {
 import {
   sendRegistrationConfirmationEmail,
   getLocalEmailDispatchLogs,
-  getLocalLinkedTickets,
 } from "@/lib/registrationOperations";
 import {
   getNasConnectionStatus,
@@ -52,7 +51,7 @@ import {
 interface EmailLogItem {
   id: string;
   recipient: string;
-  type: "Visitor Pass" | "Project Exhibit" | "Esports Squad";
+  type: "Visitor Pass" | "Esports Squad";
   ref: string;
   status: string;
   sentAt: string;
@@ -115,7 +114,7 @@ export default function AdminCrmEmails() {
   const [checkingDiagnostics, setCheckingDiagnostics] = useState(false);
 
   const safeSelectRegistrationTable = async (
-    table: "visitor_registrations" | "participation_registrations" | "registrations",
+    table: "visitor_registrations" | "registrations",
     primaryCols: string,
     fallbackCols: string
   ) => {
@@ -128,16 +127,11 @@ export default function AdminCrmEmails() {
   const fetchEmailLogs = useCallback(async () => {
     setLoading(true);
     try {
-      const [visRows, partRows, espRows] = await Promise.all([
+      const [visRows, espRows] = await Promise.all([
         safeSelectRegistrationTable(
           "visitor_registrations",
           "id, registration_ref, full_name, email, institution, visitor_category, status, email_status, email_error, email_sent_at, submitted_at",
           "id, registration_ref, full_name, email, institution, visitor_category, status, submitted_at"
-        ),
-        safeSelectRegistrationTable(
-          "participation_registrations",
-          "id, registration_ref, full_name, email, institution, project_title, status, email_status, email_error, email_sent_at, submitted_at",
-          "id, registration_ref, full_name, email, institution, project_title, status, submitted_at"
         ),
         safeSelectRegistrationTable(
           "registrations",
@@ -173,27 +167,6 @@ export default function AdminCrmEmails() {
           httpStatusCode: audit?.httpStatusCode,
           apiResponse: audit?.apiResponse,
           errorMessage: audit?.errorMessage || v.email_error || undefined,
-        });
-      });
-
-      partRows.forEach((p: any) => {
-        const audit = auditMap.get(p.registration_ref) || auditMap.get(p.id);
-        const realStatus = audit?.status || p.email_status || (p.status === "confirmed" ? "unavailable" : "pending");
-        items.push({
-          id: p.id,
-          recipient: p.email,
-          type: "Project Exhibit",
-          ref: p.registration_ref,
-          status: realStatus,
-          sentAt: audit?.timestamp || p.email_sent_at || p.submitted_at,
-          source: p.full_name,
-          institution: p.institution || undefined,
-          projectTitle: p.project_title || undefined,
-          channel: audit?.channel,
-          sender: audit?.sender || "animationthenationalcollege@gmail.com",
-          httpStatusCode: audit?.httpStatusCode,
-          apiResponse: audit?.apiResponse,
-          errorMessage: audit?.errorMessage || p.email_error || undefined,
         });
       });
 
@@ -345,12 +318,8 @@ export default function AdminCrmEmails() {
     setResendingId(item.id);
     setStatusMsg(null);
     try {
-      const regType =
-        item.type === "Visitor Pass" ? "visitor" : item.type === "Esports Squad" ? "esports" : "participation";
-
-      const linkedRef = getLocalLinkedTickets()[item.ref];
-      const ticketRef =
-        regType === "visitor" ? item.ref : regType === "participation" ? linkedRef || `${item.ref}-VIS` : item.ref;
+      const regType = item.type === "Visitor Pass" ? "visitor" : "esports";
+      const ticketRef = item.ref;
 
       let pdfAttachments: EmailAttachmentInput[] | undefined;
       try {
@@ -745,7 +714,6 @@ export default function AdminCrmEmails() {
               >
                 <option value="all">All Channel Streams</option>
                 <option value="visitor pass">Visitor Passes</option>
-                <option value="project exhibit">Project Exhibits</option>
                 <option value="esports squad">Esports Squads</option>
               </select>
             </div>

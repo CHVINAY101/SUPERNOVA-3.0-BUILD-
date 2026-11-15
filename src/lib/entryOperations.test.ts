@@ -6,7 +6,6 @@ import {
   computeEntryStatistics,
   DEFAULT_WRISTBAND_CATEGORIES,
   evaluateEsportsPlayerEntry,
-  evaluateParticipationEntry,
   evaluateVisitorEntry,
   formatCheckInDatabaseError,
   isUuidString,
@@ -16,7 +15,6 @@ import {
 } from "./entryOperations.ts";
 import type {
   CheckIn,
-  ParticipationRegistration,
   Player,
   Registration,
   VisitorRegistration,
@@ -28,9 +26,10 @@ const makeVisitor = (overrides: Partial<VisitorRegistration> = {}): VisitorRegis
   registration_ref: "SN3-VIS-100001",
   full_name: "Aarav Sharma",
   email: "aarav@college.edu",
-  phone: "9876543210",
+  phone: null,
+  student_class: "B.Sc. Animation — Sem 3",
   institution: "National College",
-  visitor_category: "General Visitor",
+  visitor_category: "Student",
   visitor_count: 1,
   status: "confirmed",
   admin_notes: null,
@@ -400,9 +399,8 @@ describe("Event Entry, QR Verification & Wristband Operations (Scenarios 1–9)"
     assert.equal("checked_in_by_email" in regPatchValidId, false);
   });
 
-  it("Scenario 11 (FK Fix): Visitor & Participation check-ins NEVER write their IDs into check_ins.registration_id", () => {
+  it("Scenario 11 (FK Fix): Visitor check-ins NEVER write their IDs into check_ins.registration_id", () => {
     const visitorUuid = "11111111-1111-4111-8111-111111111111";
-    const partUuid = "22222222-2222-4222-8222-222222222222";
     const esportsTeamUuid = "33333333-3333-4333-8333-333333333333";
     const esportsPlayerUuid = "44444444-4444-4444-8444-444444444444";
     const staffUuid = "55555555-5555-4555-8555-555555555555";
@@ -419,23 +417,8 @@ describe("Event Entry, QR Verification & Wristband Operations (Scenarios 1–9)"
     });
     assert.equal(visitorPayload.registration_id, null);
     assert.equal(visitorPayload.visitor_registration_id, visitorUuid);
-    assert.equal(visitorPayload.participation_registration_id, undefined);
     assert.equal(visitorPayload.player_id, null);
     assert.equal(visitorPayload.ticket_ref, "SN3-26-000051");
-
-    // Participation: registration_id MUST be null; participation_registration_id carries partUuid
-    const partPayload = buildCheckInInsertPayload({
-      registrationId: partUuid,
-      participationRegistrationId: partUuid,
-      ticketRef: "SN3-PART-000012",
-      subjectType: "participation",
-      eventDay: "2026-11-20",
-      actorUserId: staffUuid,
-      actorEmail: "gate@supernova.edu",
-    });
-    assert.equal(partPayload.registration_id, null);
-    assert.equal(partPayload.participation_registration_id, partUuid);
-    assert.equal(partPayload.player_id, null);
 
     // Esports player: registration_id MUST be esportsTeamUuid (public.registrations.id) & player_id = esportsPlayerUuid
     const esportsPayload = buildCheckInInsertPayload({
@@ -452,82 +435,14 @@ describe("Event Entry, QR Verification & Wristband Operations (Scenarios 1–9)"
     assert.equal(esportsPayload.visitor_registration_id, undefined);
   });
 
-  it("Scenario 12: Participation entry evaluation supports valid, unapproved, archived, and Day 1 / Day 2 duplicate guards", () => {
-    const makeParticipation = (
-      overrides: Partial<ParticipationRegistration> = {}
-    ): ParticipationRegistration => ({
-      id: "part-uuid-1",
-      registration_ref: "SN3-PART-000010",
-      visitor_ticket_ref: "SN3-26-000077",
-      full_name: "Ananya Rao",
-      email: "ananya@college.edu",
-      phone: "9876501234",
-      institution: "National College",
-      participant_category: "College Student",
-      participation_area: "Science Expo",
-      project_title: "Autonomous Solar Rover",
-      project_description: "Autonomous rover",
-      team_members_count: 2,
-      status: "confirmed",
-      admin_notes: null,
-      submitted_at: "2026-11-10T10:00:00Z",
-      ...overrides,
-    });
-
-    const validPart = makeParticipation();
-    const d1Eligible = evaluateParticipationEntry({
-      participation: validPart,
-      checkIns: [],
-      eventDay: "2026-11-20",
-    });
-    assert.equal(d1Eligible.decision, "eligible");
-    assert.equal(d1Eligible.ticketRef, "SN3-26-000077");
-
-    // Pending/unapproved participation is denied
-    const pendingPart = evaluateParticipationEntry({
-      participation: makeParticipation({ status: "pending" }),
-      checkIns: [],
-      eventDay: "2026-11-20",
-    });
-    assert.equal(pendingPart.decision, "denied");
-
-    // Duplicate check via participation_registration_id when registration_id is null
-    const d1CheckIn: CheckIn = {
-      id: "ci-part-1",
-      registration_id: null,
-      participation_registration_id: validPart.id,
-      player_id: null,
-      ticket_ref: "SN3-26-000077",
-      subject_type: "participation",
-      event_day: "2026-11-20",
-      check_in_type: "individual",
-      checked_in_by: "staff-1",
-      checked_in_by_email: "gate@supernova.edu",
-      checked_in_at: "2026-11-20T10:00:00Z",
-      notes: null,
-      created_at: "2026-11-20T10:00:00Z",
-    };
-
-    const d1Dup = evaluateParticipationEntry({
-      participation: validPart,
-      checkIns: [d1CheckIn],
-      eventDay: "2026-11-20",
-    });
-    assert.equal(d1Dup.decision, "already_checked_in");
-
-    // Day 2 remains eligible
-    const d2Eligible = evaluateParticipationEntry({
-      participation: validPart,
-      checkIns: [d1CheckIn],
-      eventDay: "2026-11-21",
-    });
-    assert.equal(d2Eligible.decision, "eligible");
-
-    // Visitor duplicate check also works when registration_id is null and visitor_registration_id is set
+  it("Scenario 12: Visitor entry supports simplified visitors without phone and Day 1 / Day 2 duplicate guards", () => {
     const vinay = makeVisitor({
       id: "vinay-uuid",
       registration_ref: "SN3-26-000051",
       full_name: "VINAY",
+      phone: null,
+      student_class: "II PUC Science",
+      institution: "The National College, Basavanagudi",
     });
     const vinayD1CheckIn: CheckIn = {
       id: "ci-vinay-1",
@@ -557,5 +472,14 @@ describe("Event Entry, QR Verification & Wristband Operations (Scenarios 1–9)"
       message: 'insert or update on table "check_ins" violates foreign key constraint "check_ins_registration_id_fkey"',
     });
     assert.match(fkHint, /20261116000000_fix_checkins_fk_registration_mapping\.sql/);
+  });
+
+  it("Scenario 13: PGRST204 / checked_in_by_email schema cache errors return clear 20261118 migration guidance", () => {
+    const schemaCacheHint = formatCheckInDatabaseError({
+      code: "PGRST204",
+      message: "Could not find the 'checked_in_by_email' column of 'check_ins' in the schema cache",
+    });
+    assert.match(schemaCacheHint, /20261118000000_gate_checkin_schema_repair_and_walkin\.sql/);
+    assert.match(schemaCacheHint, /checked_in_by_email/);
   });
 });

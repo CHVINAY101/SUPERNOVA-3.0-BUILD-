@@ -4,18 +4,7 @@ import { CONFIG, getInstagramDisplay } from "@/config";
 import { WaveRibbonDivider } from "@/components/stage1/WaveRibbonDivider";
 import { Check, Plus, Trash2, Mail, AlertCircle, RefreshCw } from "lucide-react";
 
-type RegistrationType = "participation" | "visitor" | "esports";
-
-const EXPERIENCES = [
-  "Science Expo",
-  "Animation & VFX",
-  "Esports Arena",
-  "Ideas in Motion",
-  "School Innovators",
-  "Retro Tech History",
-  "Masterclass Hub",
-  "Industry Connect",
-];
+type RegistrationType = "visitor" | "esports";
 
 interface PlayerRow {
   name: string;
@@ -26,19 +15,21 @@ export default function Register() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlType = searchParams.get("type") as RegistrationType | null;
 
-  // Nothing is preselected unless the URL has ?type=participation|visitor|esports
+  // Nothing is preselected unless the URL has ?type=visitor|esports
   const [selectedType, setSelectedType] = useState<RegistrationType | null>(() => {
-    if (urlType && ["participation", "visitor", "esports"].includes(urlType)) {
+    if (urlType && ["visitor", "esports"].includes(urlType)) {
       return urlType;
     }
     return null;
   });
 
   useEffect(() => {
-    if (urlType && ["participation", "visitor", "esports"].includes(urlType)) {
+    if (urlType && ["visitor", "esports"].includes(urlType)) {
       setSelectedType(urlType);
+    } else if (searchParams.get("type") === "participation") {
+      setSelectedType(null);
     }
-  }, [urlType]);
+  }, [urlType, searchParams]);
 
   const handleSelectCard = (type: RegistrationType) => {
     setSelectedType(type);
@@ -51,24 +42,11 @@ export default function Register() {
   const [submitState, setSubmitState] = useState<"idle" | "submitting" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
 
-  // Participation form state
-  const [partInstitution, setPartInstitution] = useState("");
-  const [partContactPerson, setPartContactPerson] = useState("");
-  const [partEmail, setPartEmail] = useState("");
-  const [partPhone, setPartPhone] = useState("");
-  const [partArea, setPartArea] = useState(EXPERIENCES[0]);
-  const [partProjectTitle, setPartProjectTitle] = useState("");
-  const [partDescription, setPartDescription] = useState("");
-  const [partParticipantsCount, setPartParticipantsCount] = useState("1");
-  const [partPrivacyAgreed, setPartPrivacyAgreed] = useState(false);
-
-  // Visitor form state
+  // Visitor form state (4 mandatory fields)
   const [visFullName, setVisFullName] = useState("");
   const [visEmail, setVisEmail] = useState("");
-  const [visPhone, setVisPhone] = useState("");
-  const [visOrganisation, setVisOrganisation] = useState("");
-  const [visType, setVisType] = useState("Student");
-  const [visDays, setVisDays] = useState("Both");
+  const [visStudentClass, setVisStudentClass] = useState("");
+  const [visInstitution, setVisInstitution] = useState("");
   const [visPrivacyAgreed, setVisPrivacyAgreed] = useState(false);
 
   // Esports form state
@@ -129,12 +107,9 @@ export default function Register() {
     let subject = `[Registration] ${selectedType ? selectedType.toUpperCase() : "General"} Form`;
     let body = `Hello Supernova 3.0 Team,\n\nPlease find my registration details below:\n\n`;
 
-    if (selectedType === "participation") {
-      subject = `[Registration] Participation Form - ${partProjectTitle || partInstitution}`;
-      body += `Institution: ${partInstitution}\nContact Person: ${partContactPerson}\nEmail: ${partEmail}\nPhone: ${partPhone}\nExperience Area: ${partArea}\nProject Title: ${partProjectTitle}\nDescription: ${partDescription}\nNumber of Participants: ${partParticipantsCount}\n`;
-    } else if (selectedType === "visitor") {
+    if (selectedType === "visitor") {
       subject = `[Registration] Visitor Form - ${visFullName}`;
-      body += `Full Name: ${visFullName}\nEmail: ${visEmail}\nPhone: ${visPhone}\nSchool/College/Organisation: ${visOrganisation}\nVisitor Type: ${visType}\nDays Attending: ${visDays}\n`;
+      body += `Full Name: ${visFullName}\nEmail: ${visEmail}\nClass / Course: ${visStudentClass}\nCollege / Institution Name: ${visInstitution}\n`;
     } else if (selectedType === "esports") {
       subject = `[Registration] Esports Team Form - ${espTeamName}`;
       body += `Team Name: ${espTeamName}\nGame: ${espGame || "Games to be announced"}\nTeam Representative: ${espTeamRep}\nEmail: ${espEmail}\nPhone: ${espPhone}\nInstitution: ${espInstitution}\n\nPlayers:\n`;
@@ -150,6 +125,24 @@ export default function Register() {
     e.preventDefault();
     if (!selectedType) return;
 
+    if (selectedType === "visitor") {
+      if (
+        visFullName.trim().length < 2 ||
+        !visEmail.includes("@") ||
+        !visStudentClass.trim() ||
+        visInstitution.trim().length < 2
+      ) {
+        setSubmitState("error");
+        setErrorMessage("Please complete Full Name, Email Address, Class / Course, and College / Institution Name.");
+        return;
+      }
+      if (!visPrivacyAgreed) {
+        setSubmitState("error");
+        setErrorMessage("Please agree to the privacy policy before submitting.");
+        return;
+      }
+    }
+
     if (!isEndpointConfigured) {
       // If endpoint is not connected, user can use the fallback mailto link
       return;
@@ -161,27 +154,13 @@ export default function Register() {
     try {
       let payload: any = { type: selectedType, submitted_at: new Date().toISOString() };
 
-      if (selectedType === "participation") {
+      if (selectedType === "visitor") {
         payload = {
           ...payload,
-          institution: partInstitution,
-          contact_person: partContactPerson,
-          email: partEmail,
-          phone: partPhone,
-          experience_area: partArea,
-          project_title: partProjectTitle,
-          description: partDescription,
-          participants_count: partParticipantsCount,
-        };
-      } else if (selectedType === "visitor") {
-        payload = {
-          ...payload,
-          full_name: visFullName,
-          email: visEmail,
-          phone: visPhone,
-          organisation: visOrganisation,
-          visitor_type: visType,
-          days_attending: visDays,
+          full_name: visFullName.trim(),
+          email: visEmail.trim().toLowerCase(),
+          student_class: visStudentClass.trim(),
+          institution: visInstitution.trim(),
         };
       } else if (selectedType === "esports") {
         payload = {
@@ -254,54 +233,9 @@ export default function Register() {
             </span>
           </div>
 
-          {/* Three cards: 3 columns, 24px gaps, stacked on mobile */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-            {/* Card 1: PARTICIPATE */}
-            <div
-              onClick={() => handleSelectCard("participation")}
-              style={{
-                minHeight: 200,
-                borderRadius: 20,
-                padding: 24,
-                border: selectedType === "participation" ? "3px solid #151535" : "1px solid #EAEAF2",
-                boxShadow: selectedType === "participation" ? "4px 4px 0px #151535" : "none",
-              }}
-              className="relative cursor-pointer transition-all bg-white flex flex-col justify-between select-none"
-            >
-              {/* Badge + Check indicator */}
-              <div className="flex items-center justify-between mb-4">
-                <span
-                  style={{
-                    backgroundColor: "#C8F500",
-                    color: "#151535",
-                    padding: "8px 14px",
-                    lineHeight: 1,
-                    fontSize: 12,
-                    letterSpacing: "0.08em",
-                  }}
-                  className="rounded-full font-bold uppercase inline-block whitespace-nowrap"
-                >
-                  PARTICIPATE
-                </span>
-                {selectedType === "participation" && (
-                  <span className="w-7 h-7 rounded-full bg-[#151535] text-white flex items-center justify-center">
-                    <Check size={16} strokeWidth={3} />
-                  </span>
-                )}
-              </div>
-
-              {/* Title display 28px and ONE line only */}
-              <div>
-                <h2 className="font-heading text-[28px] font-bold text-[#151535] leading-tight mb-2">
-                  PARTICIPATE
-                </h2>
-                <p className="font-body text-sm font-medium text-[#52527A] leading-normal m-0">
-                  Showcase your project, exhibit or idea.
-                </p>
-              </div>
-            </div>
-
-            {/* Card 2: VISIT */}
+          {/* Two cards: VISIT & ESPORTS */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-12">
+            {/* Card 1: VISIT */}
             <div
               onClick={() => handleSelectCard("visitor")}
               style={{
@@ -404,7 +338,6 @@ export default function Register() {
               {/* Form Title */}
               <div className="border-b border-[#EAEAF2] pb-6 mb-8">
                 <h2 className="font-heading text-2xl sm:text-3xl font-bold text-[#151535]">
-                  {selectedType === "participation" && "Participation form"}
                   {selectedType === "visitor" && "Visitor form"}
                   {selectedType === "esports" && "Esports team form"}
                 </h2>
@@ -481,183 +414,13 @@ export default function Register() {
               {/* FORM FIELDS */}
               {submitState !== "success" && (
                 <form onSubmit={handleSubmit}>
-                  {/* PARTICIPATION FORM */}
-                  {selectedType === "participation" && (
-                    <div className="flex flex-col gap-5">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                        {/* Institution Name */}
-                        <div>
-                          <label className="form-label" htmlFor="partInstitution">
-                            Institution name
-                          </label>
-                          <input
-                            id="partInstitution"
-                            type="text"
-                            required
-                            value={partInstitution}
-                            onChange={(e) => setPartInstitution(e.target.value)}
-                            className="form-input text-base"
-                            placeholder="Institution name"
-                          />
-                        </div>
-
-                        {/* Contact Person */}
-                        <div>
-                          <label className="form-label" htmlFor="partContactPerson">
-                            Contact person
-                          </label>
-                          <input
-                            id="partContactPerson"
-                            type="text"
-                            required
-                            value={partContactPerson}
-                            onChange={(e) => setPartContactPerson(e.target.value)}
-                            className="form-input text-base"
-                            placeholder="Contact person"
-                          />
-                        </div>
-
-                        {/* Email */}
-                        <div>
-                          <label className="form-label" htmlFor="partEmail">
-                            Email
-                          </label>
-                          <input
-                            id="partEmail"
-                            type="email"
-                            required
-                            value={partEmail}
-                            onChange={(e) => setPartEmail(e.target.value)}
-                            className="form-input text-base"
-                            placeholder="Email address"
-                          />
-                        </div>
-
-                        {/* Phone */}
-                        <div>
-                          <label className="form-label" htmlFor="partPhone">
-                            Phone
-                          </label>
-                          <input
-                            id="partPhone"
-                            type="tel"
-                            required
-                            value={partPhone}
-                            onChange={(e) => setPartPhone(e.target.value)}
-                            className="form-input text-base"
-                            placeholder="Phone number"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Experience Area */}
-                      <div>
-                        <label className="form-label" htmlFor="partArea">
-                          Experience area
-                        </label>
-                        <select
-                          id="partArea"
-                          value={partArea}
-                          onChange={(e) => setPartArea(e.target.value)}
-                          className="form-input text-base bg-white"
-                        >
-                          {EXPERIENCES.map((exp) => (
-                            <option key={exp} value={exp}>
-                              {exp}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Project or Exhibit Title */}
-                      <div>
-                        <label className="form-label" htmlFor="partProjectTitle">
-                          Project or exhibit title
-                        </label>
-                        <input
-                          id="partProjectTitle"
-                          type="text"
-                          required
-                          value={partProjectTitle}
-                          onChange={(e) => setPartProjectTitle(e.target.value)}
-                          className="form-input text-base"
-                          placeholder="Project or exhibit title"
-                        />
-                      </div>
-
-                      {/* Short Description (300 characters max with counter) */}
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="form-label mb-0" htmlFor="partDescription">
-                            Short description
-                          </label>
-                          <span className="text-xs font-mono text-[#52527A]">
-                            {partDescription.length} / 300
-                          </span>
-                        </div>
-                        <textarea
-                          id="partDescription"
-                          maxLength={300}
-                          rows={3}
-                          value={partDescription}
-                          onChange={(e) => setPartDescription(e.target.value)}
-                          className="w-full p-3 border border-[#EAEAF2] rounded-xl font-body text-base text-[#151535] outline-none focus:border-[#1719C9]"
-                          placeholder="Brief description of your exhibit..."
-                        />
-                      </div>
-
-                      {/* Number of Participants */}
-                      <div>
-                        <label className="form-label" htmlFor="partParticipantsCount">
-                          Number of participants
-                        </label>
-                        <input
-                          id="partParticipantsCount"
-                          type="number"
-                          min={1}
-                          required
-                          value={partParticipantsCount}
-                          onChange={(e) => setPartParticipantsCount(e.target.value)}
-                          className="form-input text-base"
-                        />
-                      </div>
-
-                      {/* Required Privacy Policy Checkbox */}
-                      <div className="pt-2">
-                        <label className="flex items-start gap-2.5 cursor-pointer text-sm font-medium text-[#151535]">
-                          <input
-                            type="checkbox"
-                            required
-                            checked={partPrivacyAgreed}
-                            onChange={(e) => setPartPrivacyAgreed(e.target.checked)}
-                            className="mt-1 w-4 h-4 rounded border-[#EAEAF2]"
-                          />
-                          <span>I agree to the privacy policy [text to be approved]</span>
-                        </label>
-                      </div>
-
-                      {/* Submit */}
-                      <div className="pt-4">
-                        <button
-                          type="submit"
-                          disabled={submitState === "submitting" || !isEndpointConfigured}
-                          className="btn-primary w-full"
-                          style={{ height: 52 }}
-                        >
-                          {submitState === "submitting" ? "Submitting..." : "Submit Registration"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
                   {/* VISITOR FORM */}
                   {selectedType === "visitor" && (
                     <div className="flex flex-col gap-5">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                        {/* Full Name */}
                         <div>
                           <label className="form-label" htmlFor="visFullName">
-                            Full name
+                            Full Name *
                           </label>
                           <input
                             id="visFullName"
@@ -670,10 +433,9 @@ export default function Register() {
                           />
                         </div>
 
-                        {/* Email */}
                         <div>
                           <label className="form-label" htmlFor="visEmail">
-                            Email
+                            Email Address *
                           </label>
                           <input
                             id="visEmail"
@@ -686,71 +448,34 @@ export default function Register() {
                           />
                         </div>
 
-                        {/* Phone */}
                         <div>
-                          <label className="form-label" htmlFor="visPhone">
-                            Phone
+                          <label className="form-label" htmlFor="visStudentClass">
+                            Class / Course *
                           </label>
                           <input
-                            id="visPhone"
-                            type="tel"
-                            required
-                            value={visPhone}
-                            onChange={(e) => setVisPhone(e.target.value)}
-                            className="form-input text-base"
-                            placeholder="Phone number"
-                          />
-                        </div>
-
-                        {/* School, college or organisation */}
-                        <div>
-                          <label className="form-label" htmlFor="visOrganisation">
-                            School, college or organisation
-                          </label>
-                          <input
-                            id="visOrganisation"
+                            id="visStudentClass"
                             type="text"
                             required
-                            value={visOrganisation}
-                            onChange={(e) => setVisOrganisation(e.target.value)}
+                            value={visStudentClass}
+                            onChange={(e) => setVisStudentClass(e.target.value)}
                             className="form-input text-base"
-                            placeholder="School, college or organisation"
+                            placeholder="e.g. II PUC / B.Sc. / 10th Std"
                           />
                         </div>
 
-                        {/* Visitor Type */}
                         <div>
-                          <label className="form-label" htmlFor="visType">
-                            Visitor type
+                          <label className="form-label" htmlFor="visInstitution">
+                            College / Institution Name *
                           </label>
-                          <select
-                            id="visType"
-                            value={visType}
-                            onChange={(e) => setVisType(e.target.value)}
-                            className="form-input text-base bg-white"
-                          >
-                            <option value="Student">Student</option>
-                            <option value="Teacher">Teacher</option>
-                            <option value="Parent">Parent</option>
-                            <option value="Other">Other</option>
-                          </select>
-                        </div>
-
-                        {/* Days Attending */}
-                        <div>
-                          <label className="form-label" htmlFor="visDays">
-                            Days attending
-                          </label>
-                          <select
-                            id="visDays"
-                            value={visDays}
-                            onChange={(e) => setVisDays(e.target.value)}
-                            className="form-input text-base bg-white"
-                          >
-                            <option value="Day 1">Day 1</option>
-                            <option value="Day 2">Day 2</option>
-                            <option value="Both">Both</option>
-                          </select>
+                          <input
+                            id="visInstitution"
+                            type="text"
+                            required
+                            value={visInstitution}
+                            onChange={(e) => setVisInstitution(e.target.value)}
+                            className="form-input text-base"
+                            placeholder="College or institution name"
+                          />
                         </div>
                       </div>
 
@@ -764,7 +489,7 @@ export default function Register() {
                             onChange={(e) => setVisPrivacyAgreed(e.target.checked)}
                             className="mt-1 w-4 h-4 rounded border-[#EAEAF2]"
                           />
-                          <span>I agree to the privacy policy [text to be approved]</span>
+                          <span>I agree to the privacy notice.</span>
                         </label>
                       </div>
 

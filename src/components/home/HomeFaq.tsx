@@ -17,8 +17,8 @@ export const HomeFaq = () => {
     },
     {
       id: "faq-2",
-      question: "Event participation",
-      answer: "Registration is open for participants, visitors and esports teams. Use the Register page.",
+      question: "Event registration",
+      answer: "Registration is open for visitors and esports teams. Use the Register page.",
     },
     {
       id: "faq-3",

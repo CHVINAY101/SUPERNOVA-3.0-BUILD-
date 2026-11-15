@@ -36,7 +36,6 @@ const CANONICAL_ROLES: CanonicalCrmRole[] = [
   "crm_admin",
   "registration_staff",
   "esports_entry_staff",
-  "participation_manager",
   "esports_manager",
   "match_conductor",
   "content_manager",

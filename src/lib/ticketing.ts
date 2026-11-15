@@ -1,4 +1,4 @@
-export type TicketCategory = "visitor" | "participation" | "esports";
+export type TicketCategory = "visitor" | "esports";
 export type TicketRecordStatus = "active" | "cancelled" | "revoked";
 export type GateVerdict = "VALID" | "ALREADY USED" | "INVALID";
 
@@ -238,7 +238,6 @@ export function isRegistrationArchivedState(record: {
 /**
  * Enforces category-specific issuance rules:
  * - Visitor: eligible once confirmed (auto-confirmed on registration submission).
- * - Participation: eligible ONLY after admin approval (status === 'confirmed').
  * - Esports: eligible ONLY after confirmation process succeeds (status === 'confirmed').
  * Pending, declined, correction_requested, withdrawn, or archived records are NEVER eligible.
  */
@@ -254,9 +253,7 @@ export function isRegistrationEligibleForTicket(
   }
   if (registration.status !== "confirmed") {
     const label =
-      category === "participation"
-        ? "administrator approval"
-        : category === "esports"
+      category === "esports"
         ? "esports confirmation"
         : "registration confirmation";
     return {
@@ -358,11 +355,18 @@ export function normalizePhoneDigits(phone: string): string {
 /**
  * Anti-IDOR verification helper: prevents accessing another user's ticket
  * solely by altering a URL parameter or registration reference.
- * Requires matching reference AND registered email + phone number.
+ * Requires matching reference AND registered email; phone is additionally required
+ * when the stored record holds a phone number (e.g. Esports teams).
  */
 export function canAccessTicketDetails(
-  request: { reference: string; email: string; phone: string },
-  stored: { ticketRef?: string | null; registrationRef: string; email: string; phone: string }
+  request: { reference: string; email: string; phone?: string | null },
+  stored: {
+    ticketRef?: string | null;
+    registrationRef: string;
+    email: string;
+    phone?: string | null;
+    category?: TicketCategory;
+  }
 ): boolean {
   const reqRef = String(request.reference || "").trim().toUpperCase();
   const storedTicketRef = String(stored.ticketRef || "").trim().toUpperCase();
@@ -378,8 +382,15 @@ export function canAccessTicketDetails(
     return false;
   }
 
-  const reqDigits = normalizePhoneDigits(request.phone);
-  const storedDigits = normalizePhoneDigits(stored.phone);
+  const storedDigits = normalizePhoneDigits(stored.phone || "");
+  if (stored.category === "visitor" && storedDigits.length < 10) {
+    return true;
+  }
+  if (!stored.category && storedDigits.length === 0) {
+    return true;
+  }
+
+  const reqDigits = normalizePhoneDigits(request.phone || "");
   if (reqDigits.length < 10 || storedDigits.length < 10) {
     return false;
   }

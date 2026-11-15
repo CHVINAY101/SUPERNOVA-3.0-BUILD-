@@ -76,11 +76,7 @@ export const TicketPassModal: React.FC<TicketPassModalProps> = ({
   if (!isOpen) return null;
 
   const streamLabel =
-    registrationCategory === "visitor"
-      ? "Visitor Pass"
-      : registrationCategory === "participation"
-      ? "Participation Pass"
-      : "Esports Pass";
+    registrationCategory === "visitor" ? "Visitor Pass" : "Esports Pass";
 
   const handleCopy = () => {
     navigator.clipboard.writeText(ticketRef);
@@ -100,11 +96,7 @@ export const TicketPassModal: React.FC<TicketPassModalProps> = ({
         phone,
         institution: institution || undefined,
         registrationType:
-          registrationCategory === "esports"
-            ? "esports_team"
-            : registrationCategory === "participation"
-            ? "participation"
-            : "visitor",
+          registrationCategory === "esports" ? "esports_team" : "visitor",
         teamName,
         projectTitle,
         daysAttending,

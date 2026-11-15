@@ -13,3 +13,19 @@ export function isValidName(value: string, max = 80) {
   const length = value.trim().length;
   return length >= 2 && length <= max;
 }
+
+export function isValidClassCourse(value: string, max = 120) {
+  const length = value.trim().length;
+  return length >= 1 && length <= max;
+}
+
+export function isValidInstitution(value: string, max = 150) {
+  const length = value.trim().length;
+  return length >= 2 && length <= max;
+}
+
+export function isValidDesignation(value: string, max = 120) {
+  const length = value.trim().length;
+  return length >= 2 && length <= max;
+}
+
