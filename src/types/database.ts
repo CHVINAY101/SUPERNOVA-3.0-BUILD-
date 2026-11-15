@@ -203,6 +203,7 @@ export interface Registration {
 export interface ParticipationRegistration {
   id: string;
   registration_ref: string;
+  visitor_ticket_ref?: string | null;
   full_name: string;
   email: string;
   phone: string;
@@ -220,6 +221,8 @@ export interface ParticipationRegistration {
 export interface VisitorRegistration {
   id: string;
   registration_ref: string;
+  ticket_ref?: string | null;
+  linked_registration_ref?: string | null;
   full_name: string;
   email: string;
   phone: string;
@@ -432,7 +435,10 @@ export interface Announcement {
 export interface CheckIn {
   id: string;
   registration_id: string | null;
+  visitor_registration_id?: string | null;
+  participation_registration_id?: string | null;
   player_id: string | null;
+  ticket_id?: string | null;
   ticket_ref?: string | null;
   subject_type?: "visitor" | "esports_player" | "esports_team" | "participation";
   event_day?: EventDaySession;

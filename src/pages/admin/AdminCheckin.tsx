@@ -10,7 +10,9 @@ import {
   buildRegistrationCheckInPatch,
   computeEntryStatistics,
   evaluateEsportsPlayerEntry,
+  evaluateParticipationEntry,
   evaluateVisitorEntry,
+  formatCheckInDatabaseError,
   isAutoLinkedEsportsVisitorRecord,
   toUuidOrNull,
   validateWristbandIssuance,
@@ -50,8 +52,13 @@ import {
 interface EntrySubject {
   key: string;
   id: string;
-  registrationId: string;
+  /** ONLY populated for Esports entries referencing public.registrations(id). Null for Visitor/Participation. */
+  registrationId: string | null;
+  visitorRegistrationId?: string | null;
+  participationRegistrationId?: string | null;
+  playerId?: string | null;
   ticketRef: string;
+  altTicketRef?: string;
   teamRef?: string;
   name: string;
   gamerTag?: string | null;
@@ -334,12 +341,21 @@ export default function AdminCheckin() {
     if (canScanVisitor) {
       for (const v of visitorsRaw) {
         const autoLinked = isAutoLinkedEsportsVisitorRecord(v);
+        const primaryRef = v.ticket_ref || v.registration_ref;
+        const altRef =
+          v.registration_ref && v.ticket_ref && v.registration_ref !== v.ticket_ref
+            ? v.registration_ref
+            : undefined;
         // Only surface true visitors under Visitor Gate unless specifically searched by ref
         list.push({
           key: `vis-${v.id}`,
           id: v.id,
-          registrationId: v.id,
-          ticketRef: v.registration_ref,
+          registrationId: null,
+          visitorRegistrationId: v.id,
+          participationRegistrationId: null,
+          playerId: null,
+          ticketRef: primaryRef,
+          altTicketRef: altRef,
           name: v.full_name,
           phone: v.phone || "",
           email: v.email || "",
@@ -376,7 +392,14 @@ export default function AdminCheckin() {
             key: `esp-team-${team.id}`,
             id: team.id,
             registrationId: team.id,
-            ticketRef: team.registration_ref,
+            visitorRegistrationId: null,
+            participationRegistrationId: null,
+            playerId: null,
+            ticketRef: team.captain_ticket_ref || team.registration_ref,
+            altTicketRef:
+              team.captain_ticket_ref && team.captain_ticket_ref !== team.registration_ref
+                ? team.registration_ref
+                : undefined,
             teamRef: team.registration_ref,
             name: `${team.team_name} (Captain: ${team.captain_name})`,
             phone: team.phone || "",
@@ -396,6 +419,9 @@ export default function AdminCheckin() {
               key: `esp-player-${p.id}`,
               id: p.id,
               registrationId: team.id,
+              visitorRegistrationId: null,
+              participationRegistrationId: null,
+              playerId: p.id,
               ticketRef: pTicket,
               teamRef: team.registration_ref,
               name: p.player_name,
@@ -417,11 +443,20 @@ export default function AdminCheckin() {
 
     if (canViewParticipation) {
       for (const p of participationsRaw) {
+        const primaryRef = p.visitor_ticket_ref || p.registration_ref;
+        const altRef =
+          p.registration_ref && p.visitor_ticket_ref && p.registration_ref !== p.visitor_ticket_ref
+            ? p.registration_ref
+            : undefined;
         list.push({
           key: `part-${p.id}`,
           id: p.id,
-          registrationId: p.id,
-          ticketRef: p.registration_ref,
+          registrationId: null,
+          visitorRegistrationId: p.visitor_id || null,
+          participationRegistrationId: p.id,
+          playerId: null,
+          ticketRef: primaryRef,
+          altTicketRef: altRef,
           name: p.full_name,
           phone: p.phone || "",
           email: p.email || "",
@@ -430,6 +465,7 @@ export default function AdminCheckin() {
           categoryOrGame: `${p.participation_area || "Science Expo"} · ${p.project_title || "Project"}`,
           count: p.team_members_count || 1,
           status: p.status || "pending",
+          adminNotes: p.admin_notes,
         });
       }
     }
@@ -458,7 +494,9 @@ export default function AdminCheckin() {
 
       // Cross-check scenario: if esports entry staff scans a visitor ref (or vice-versa), still show with denial verdict if ref matches directly!
       const refMatches =
-        s.ticketRef.toLowerCase().includes(q) || (s.teamRef && s.teamRef.toLowerCase().includes(q));
+        s.ticketRef.toLowerCase().includes(q) ||
+        Boolean(s.altTicketRef && s.altTicketRef.toLowerCase().includes(q)) ||
+        Boolean(s.teamRef && s.teamRef.toLowerCase().includes(q));
       if (s.isAutoLinked && !refMatches) return false;
 
       return (
@@ -477,9 +515,21 @@ export default function AdminCheckin() {
       const dayMatch = (c.event_day || "2026-11-20") === eventDay;
       if (!dayMatch) return false;
       if (c.ticket_ref) {
-        return c.ticket_ref.toLowerCase() === subject.ticketRef.toLowerCase();
+        return (
+          c.ticket_ref.toLowerCase() === subject.ticketRef.toLowerCase() ||
+          Boolean(subject.altTicketRef && c.ticket_ref.toLowerCase() === subject.altTicketRef.toLowerCase())
+        );
       }
-      return c.registration_id === subject.registrationId;
+      if (subject.subjectType === "visitor") {
+        return c.visitor_registration_id === subject.id || c.registration_id === subject.id;
+      }
+      if (subject.subjectType === "participation") {
+        return c.participation_registration_id === subject.id;
+      }
+      if (subject.playerId && c.player_id) {
+        return c.player_id === subject.playerId;
+      }
+      return Boolean(subject.registrationId && c.registration_id === subject.registrationId);
     });
   };
 
@@ -532,12 +582,15 @@ export default function AdminCheckin() {
     }
 
     try {
-      // Try atomic SECURITY DEFINER RPC first
+      // Try atomic SECURITY DEFINER RPC first.
+      // Only pass p_registration_id for esports entries (public.registrations.id);
+      // visitor and participation entries resolve via p_ticket_ref on the server
+      // so check_ins.registration_id never receives a wrong-table UUID.
       const { data: rpcRes, error: rpcErr } = await supabase.rpc("perform_event_checkin", {
         p_ticket_ref: subject.ticketRef,
         p_subject_type: subject.subjectType,
         p_event_day: eventDay,
-        p_registration_id: subject.registrationId,
+        p_registration_id: subject.subjectType === "esports_player" ? subject.registrationId : null,
         p_wristband_category: bandCategory || null,
         p_wristband_code: bandCode || null,
         p_is_override: isOverride,
@@ -557,9 +610,14 @@ export default function AdminCheckin() {
           return;
         }
       } else if (isMissingRpcError(rpcErr)) {
-        // Fallback only when RPC migration hasn't been pushed yet — never pass email into UUID checked_in_by
+        // Fallback only when RPC migration hasn't been pushed yet — strictly preserve
+        // check_ins_registration_id_fkey by mapping each category to its proper FK column
+        // and never passing email strings into UUID checked_in_by.
         const fullPayload = buildCheckInInsertPayload({
           registrationId: subject.registrationId,
+          visitorRegistrationId: subject.visitorRegistrationId,
+          participationRegistrationId: subject.participationRegistrationId,
+          playerId: subject.playerId,
           ticketRef: subject.ticketRef,
           subjectType: subject.subjectType,
           eventDay,
@@ -567,33 +625,12 @@ export default function AdminCheckin() {
           actorEmail,
           checkedInAt: nowIso,
           wristbandCategory: bandCategory,
+          wristbandCode: bandCode,
           isOverride,
           overrideReason: reason,
           includeExtendedColumns: true,
         });
-        let { error: insertErr } = await supabase.from("check_ins").insert(fullPayload);
-        if (
-          insertErr &&
-          (insertErr.code === "42703" ||
-            String(insertErr.message || "").toLowerCase().includes("checked_in_by_email") ||
-            String(insertErr.message || "").toLowerCase().includes("ticket_ref"))
-        ) {
-          const minimalPayload = buildCheckInInsertPayload({
-            registrationId: subject.registrationId,
-            ticketRef: subject.ticketRef,
-            subjectType: subject.subjectType,
-            eventDay,
-            actorUserId: user?.id,
-            actorEmail,
-            checkedInAt: nowIso,
-            wristbandCategory: bandCategory,
-            isOverride,
-            overrideReason: reason,
-            includeExtendedColumns: false,
-          });
-          const retryRes = await supabase.from("check_ins").insert(minimalPayload);
-          insertErr = retryRes.error;
-        }
+        const { error: insertErr } = await supabase.from("check_ins").insert(fullPayload);
         if (insertErr) throw insertErr;
       } else if (rpcErr) {
         throw rpcErr;
@@ -627,10 +664,39 @@ export default function AdminCheckin() {
             .eq("id", subject.id);
         }
       } else if (subject.subjectType === "esports_player") {
-        await supabase
-          .from("players")
-          .update({ check_in_status: "checked_in", check_in_at: nowIso })
-          .eq("id", subject.id);
+        if (subject.playerId) {
+          await supabase
+            .from("players")
+            .update({ check_in_status: "checked_in", check_in_at: nowIso })
+            .eq("id", subject.playerId);
+        }
+        if (subject.registrationId) {
+          const patch = buildRegistrationCheckInPatch({
+            checkedIn: true,
+            actorUserId: user?.id,
+            actorEmail,
+            checkedInAt: nowIso,
+            includeEmailColumn: true,
+          });
+          const { error: regErr } = await supabase
+            .from("registrations")
+            .update(patch)
+            .eq("id", subject.registrationId);
+          if (regErr && (regErr.code === "42703" || String(regErr.message || "").includes("checked_in_by_email"))) {
+            await supabase
+              .from("registrations")
+              .update(
+                buildRegistrationCheckInPatch({
+                  checkedIn: true,
+                  actorUserId: user?.id,
+                  actorEmail,
+                  checkedInAt: nowIso,
+                  includeEmailColumn: false,
+                })
+              )
+              .eq("id", subject.registrationId);
+          }
+        }
       } else if (subject.subjectType === "participation") {
         const patch = buildRegistrationCheckInPatch({
           checkedIn: true,
@@ -669,7 +735,7 @@ export default function AdminCheckin() {
     } catch (err: any) {
       setStatusMessage({
         type: "error",
-        text: `Check-in failed: ${err?.message || "Database error"}`,
+        text: `Check-in failed: ${formatCheckInDatabaseError(err)}`,
       });
     }
   };
@@ -704,7 +770,11 @@ export default function AdminCheckin() {
       const catObj = wristbandCategories.find((c) => c.name === nextCatName);
       await supabase.from("wristband_issuances").insert({
         ticket_ref: replaceTarget.subject.ticketRef,
-        registration_id: replaceTarget.subject.registrationId,
+        registration_id:
+          replaceTarget.subject.visitorRegistrationId ||
+          replaceTarget.subject.participationRegistrationId ||
+          replaceTarget.subject.registrationId ||
+          replaceTarget.subject.id,
         subject_type: replaceTarget.subject.subjectType,
         event_day: eventDay,
         category_id: catObj?.id || null,
@@ -825,7 +895,10 @@ export default function AdminCheckin() {
         {
           key: `vis-${newId}`,
           id: newId,
-          registrationId: newId,
+          registrationId: null,
+          visitorRegistrationId: newId,
+          participationRegistrationId: null,
+          playerId: null,
           ticketRef: ref,
           name: walkInName.trim(),
           phone: walkInPhone.trim(),
@@ -1304,25 +1377,12 @@ export default function AdminCheckin() {
                   requestedTrack: trackFilter === "esports_player" ? "esports" : "visitor",
                 });
               }
-              const confirmed = subject.status === "confirmed";
-              return {
-                decision: !confirmed
-                  ? ("denied" as const)
-                  : existingDaily
-                  ? ("already_checked_in" as const)
-                  : ("eligible" as const),
-                reason: !confirmed
-                  ? `Participation registration is "${subject.status}". Only confirmed passes may enter.`
-                  : existingDaily
-                  ? `ALREADY CHECKED IN on ${eventDay}.`
-                  : `Valid confirmed participation pass for ${eventDay}.`,
-                subjectType: "visitor" as const,
-                ticketRef: subject.ticketRef,
-                holderName: subject.name,
-                categoryLabel: subject.categoryOrGame,
-                recommendedWristbandSlug: "general-visitor",
-                tournamentEligible: false,
-              };
+              const partRow = participationsRaw.find((p) => p.id === subject.id) || null;
+              return evaluateParticipationEntry({
+                participation: partRow,
+                checkIns: checkins,
+                eventDay,
+              });
             })();
 
             const canAct =

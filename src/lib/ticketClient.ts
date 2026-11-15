@@ -276,7 +276,7 @@ export async function checkinGateTicket(params: {
 
   if (error) {
     const friendlyError = isMissingRpcError(error)
-      ? "Gate check-in RPC (checkin_gate_ticket) is not yet deployed or schema cache needs reload. Apply migration 20261115000003_fix_gate_verification_uuid_and_schema_cache.sql in Supabase."
+      ? "Gate check-in RPC (checkin_gate_ticket) is not yet deployed or schema cache needs reload. Apply migration 20261116000000_fix_checkins_fk_registration_mapping.sql in Supabase."
       : error.message;
     return {
       ok: false,

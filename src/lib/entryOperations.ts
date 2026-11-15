@@ -1,6 +1,7 @@
 import type {
   CheckIn,
   EventDaySession,
+  ParticipationRegistration,
   Player,
   Registration,
   TournamentSelectionStatus,
@@ -127,7 +128,7 @@ export interface EntryVerificationDecision {
     | "already_checked_in"
     | "denied";
   reason: string;
-  subjectType: "visitor" | "esports_player";
+  subjectType: "visitor" | "esports_player" | "participation";
   ticketRef: string;
   holderName: string;
   categoryLabel: string;
@@ -213,10 +214,17 @@ export function evaluateVisitorEntry(params: {
   }
 
   // Check multi-day duplicate protection for the selected eventDay
+  const visRefs = new Set(
+    [visitor.registration_ref, visitor.ticket_ref]
+      .filter(Boolean)
+      .map((r) => String(r).trim().toUpperCase())
+  );
   const prior = checkIns.find(
     (c) =>
       !c.is_override &&
-      (c.ticket_ref === visitor.registration_ref || c.registration_id === visitor.id) &&
+      ((c.ticket_ref && visRefs.has(c.ticket_ref.trim().toUpperCase())) ||
+        c.visitor_registration_id === visitor.id ||
+        c.registration_id === visitor.id) &&
       (c.event_day || "2026-11-20") === eventDay &&
       (c.subject_type || "visitor") === "visitor"
   );
@@ -226,7 +234,7 @@ export function evaluateVisitorEntry(params: {
       decision: "already_checked_in",
       reason: `ALREADY CHECKED IN on ${eventDay}. Supervisor override required for documented re-entry.`,
       subjectType: "visitor",
-      ticketRef: visitor.registration_ref,
+      ticketRef: visitor.ticket_ref || visitor.registration_ref,
       holderName: visitor.full_name,
       categoryLabel: visitor.visitor_category || "General Visitor",
       recommendedWristbandSlug: "general-visitor",
@@ -244,9 +252,109 @@ export function evaluateVisitorEntry(params: {
     decision: "eligible",
     reason: `Valid confirmed Visitor Pass for ${eventDay}.`,
     subjectType: "visitor",
-    ticketRef: visitor.registration_ref,
+    ticketRef: visitor.ticket_ref || visitor.registration_ref,
     holderName: visitor.full_name,
     categoryLabel: visitor.visitor_category || "General Visitor",
+    recommendedWristbandSlug: "general-visitor",
+    tournamentEligible: false,
+  };
+}
+
+/**
+ * Evaluates a Participation (Science Expo / Exhibitor) pass against authoritative
+ * DB records and multi-day check-in logs.
+ */
+export function evaluateParticipationEntry(params: {
+  participation: (ParticipationRegistration & { archived_at?: string | null }) | null;
+  checkIns: CheckIn[];
+  eventDay: EventDaySession;
+}): EntryVerificationDecision {
+  const { participation, checkIns, eventDay } = params;
+
+  if (!participation) {
+    return {
+      decision: "denied",
+      reason: "Ticket reference not found in registered participation records.",
+      subjectType: "participation",
+      ticketRef: "",
+      holderName: "Unknown",
+      categoryLabel: "Participation",
+      recommendedWristbandSlug: "general-visitor",
+      tournamentEligible: false,
+    };
+  }
+
+  const canonicalRef = participation.visitor_ticket_ref || participation.registration_ref;
+  const categoryLabel = `${participation.participation_area || "Science Expo"} · ${
+    participation.project_title || "Project"
+  }`;
+
+  if (isRecordArchived(participation)) {
+    return {
+      decision: "denied",
+      reason: "Participation registration has been archived or revoked.",
+      subjectType: "participation",
+      ticketRef: canonicalRef,
+      holderName: participation.full_name,
+      categoryLabel,
+      recommendedWristbandSlug: "general-visitor",
+      tournamentEligible: false,
+    };
+  }
+
+  if (participation.status !== "confirmed") {
+    return {
+      decision: "denied",
+      reason: `Participation registration is "${participation.status}". Only confirmed passes may enter.`,
+      subjectType: "participation",
+      ticketRef: canonicalRef,
+      holderName: participation.full_name,
+      categoryLabel,
+      recommendedWristbandSlug: "general-visitor",
+      tournamentEligible: false,
+    };
+  }
+
+  const partRefs = new Set(
+    [participation.registration_ref, participation.visitor_ticket_ref]
+      .filter(Boolean)
+      .map((r) => String(r).trim().toUpperCase())
+  );
+  const prior = checkIns.find(
+    (c) =>
+      !c.is_override &&
+      ((c.ticket_ref && partRefs.has(c.ticket_ref.trim().toUpperCase())) ||
+        c.participation_registration_id === participation.id) &&
+      (c.event_day || "2026-11-20") === eventDay &&
+      c.subject_type === "participation"
+  );
+
+  if (prior) {
+    return {
+      decision: "already_checked_in",
+      reason: `ALREADY CHECKED IN on ${eventDay}. Supervisor override required for documented re-entry.`,
+      subjectType: "participation",
+      ticketRef: canonicalRef,
+      holderName: participation.full_name,
+      categoryLabel,
+      recommendedWristbandSlug: "general-visitor",
+      tournamentEligible: false,
+      priorCheckIn: {
+        checkedInAt: prior.checked_in_at,
+        checkedInBy: prior.checked_in_by_email || prior.checked_in_by || "Gate Staff",
+        eventDay: (prior.event_day || eventDay) as EventDaySession,
+        wristbandCategory: prior.wristband_category || null,
+      },
+    };
+  }
+
+  return {
+    decision: "eligible",
+    reason: `Valid confirmed participation pass for ${eventDay}.`,
+    subjectType: "participation",
+    ticketRef: canonicalRef,
+    holderName: participation.full_name,
+    categoryLabel,
     recommendedWristbandSlug: "general-visitor",
     tournamentEligible: false,
   };
@@ -522,8 +630,13 @@ export function computeEntryStatistics(params: {
 
     if (ci.subject_type === "esports_player" && (ci.player_id || ci.ticket_ref)) {
       checkedInPlayerRefs.add(ci.player_id || ci.ticket_ref || ci.id);
-    } else if ((ci.subject_type || "visitor") === "visitor" && (ci.ticket_ref || ci.registration_id)) {
-      checkedInVisitorRefs.add(ci.ticket_ref || ci.registration_id || ci.id);
+    } else if (
+      (ci.subject_type || "visitor") === "visitor" &&
+      (ci.ticket_ref || ci.visitor_registration_id || ci.registration_id)
+    ) {
+      checkedInVisitorRefs.add(
+        ci.ticket_ref || ci.visitor_registration_id || ci.registration_id || ci.id
+      );
     }
   }
 
@@ -573,12 +686,21 @@ export function toUuidOrNull(value: unknown): string | null {
 }
 
 /**
- * Builds an insert payload for public.check_ins that strictly enforces UUID-only
- * values on checked_in_by (never an email string) and stores the staff email
- * separately in checked_in_by_email.
+ * Builds an insert payload for public.check_ins that:
+ * 1. Strictly enforces FK integrity: check_ins.registration_id ONLY ever receives
+ *    a valid public.registrations(id) UUID (esports registration). Visitor and
+ *    participation check-ins store their UUIDs in visitor_registration_id /
+ *    participation_registration_id and keep registration_id = null (unless
+ *    explicitly linked to an authentic esports registrations row).
+ * 2. Strictly enforces UUID-only values on checked_in_by (never an email string)
+ *    and stores the staff email separately in checked_in_by_email.
  */
 export function buildCheckInInsertPayload(params: {
-  registrationId: string;
+  registrationId?: string | null;
+  visitorRegistrationId?: string | null;
+  participationRegistrationId?: string | null;
+  playerId?: string | null;
+  ticketId?: string | null;
   ticketRef: string;
   subjectType: "visitor" | "esports_player" | "participation";
   eventDay: EventDaySession;
@@ -586,6 +708,7 @@ export function buildCheckInInsertPayload(params: {
   actorEmail?: string | null;
   checkedInAt?: string;
   wristbandCategory?: string;
+  wristbandCode?: string;
   isOverride?: boolean;
   overrideReason?: string;
   includeExtendedColumns?: boolean;
@@ -594,9 +717,25 @@ export function buildCheckInInsertPayload(params: {
   const safeActorUuid = toUuidOrNull(params.actorUserId);
   const safeEmail = params.actorEmail?.trim() || null;
 
+  // Never send visitor_registrations.id or participation_registrations.id into
+  // check_ins.registration_id (which references public.registrations(id)).
+  const safeEsportsRegistrationId =
+    params.subjectType === "esports_player" ? toUuidOrNull(params.registrationId) : null;
+  const safeVisitorRegistrationId =
+    params.subjectType === "visitor"
+      ? toUuidOrNull(params.visitorRegistrationId)
+      : toUuidOrNull(params.visitorRegistrationId);
+  const safeParticipationRegistrationId =
+    params.subjectType === "participation"
+      ? toUuidOrNull(params.participationRegistrationId)
+      : null;
+  const safePlayerId =
+    params.subjectType === "esports_player" ? toUuidOrNull(params.playerId) : null;
+
   const base: Record<string, any> = {
-    registration_id: params.registrationId,
-    check_in_type: params.subjectType === "esports_player" ? "team" : "individual",
+    registration_id: safeEsportsRegistrationId,
+    player_id: safePlayerId,
+    check_in_type: params.subjectType === "esports_player" && !safePlayerId ? "team" : "individual",
     checked_in_by: safeActorUuid,
     checked_in_at: checkedInAt,
     notes: `[${params.eventDay}] ${params.ticketRef} (${params.subjectType})${
@@ -604,11 +743,59 @@ export function buildCheckInInsertPayload(params: {
     }${params.isOverride && params.overrideReason ? ` · OVERRIDE: ${params.overrideReason}` : ""}`,
   };
 
-  if (params.includeExtendedColumns !== false && safeEmail) {
-    base.checked_in_by_email = safeEmail;
+  if (params.includeExtendedColumns !== false) {
+    base.ticket_ref = params.ticketRef;
+    base.subject_type = params.subjectType;
+    base.event_day = params.eventDay;
+    base.is_override = Boolean(params.isOverride);
+    if (safeEmail) {
+      base.checked_in_by_email = safeEmail;
+    }
+    if (safeVisitorRegistrationId) {
+      base.visitor_registration_id = safeVisitorRegistrationId;
+    }
+    if (safeParticipationRegistrationId) {
+      base.participation_registration_id = safeParticipationRegistrationId;
+    }
+    const safeTicketId = toUuidOrNull(params.ticketId);
+    if (safeTicketId) {
+      base.ticket_id = safeTicketId;
+    }
+    if (params.wristbandCategory) {
+      base.wristband_category = params.wristbandCategory;
+    }
+    if (params.wristbandCode) {
+      base.wristband_id = params.wristbandCode;
+    }
+    if (params.isOverride && params.overrideReason) {
+      base.override_reason = params.overrideReason;
+      base.supervisor_id = safeActorUuid;
+    }
   }
 
   return base;
+}
+
+/**
+ * Formats check-in database errors into clear actionable guidance when a DB
+ * migration has not yet been applied in Supabase.
+ */
+export function formatCheckInDatabaseError(err: any): string {
+  const msg = String(err?.message || "Database error");
+  const code = String(err?.code || "");
+  const lower = msg.toLowerCase();
+
+  if (
+    lower.includes("check_ins_registration_id_fkey") ||
+    (code === "23502" && lower.includes("registration_id")) ||
+    (code === "42703" &&
+      (lower.includes("visitor_registration_id") ||
+        lower.includes("participation_registration_id")))
+  ) {
+    return "Database migration required: apply supabase/migrations/20261116000000_fix_checkins_fk_registration_mapping.sql in Supabase SQL Editor so visitor/participation check-ins map to their dedicated FK columns without violating check_ins_registration_id_fkey.";
+  }
+
+  return msg;
 }
 
 /**
