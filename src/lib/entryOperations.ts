@@ -663,32 +663,98 @@ export function buildCheckInInsertPayload(params: {
 }
 
 /**
- * Formats check-in database errors into clear actionable guidance when a DB
- * migration has not yet been applied in Supabase.
+ * Formats check-in database and verification errors into clear, honest diagnostics
+ * without suppressing or rewriting the underlying PostgreSQL / PostgREST error.
  */
 export function formatCheckInDatabaseError(err: any): string {
-  const msg = String(err?.message || "Database error");
-  const code = String(err?.code || "").toUpperCase();
+  const rawMsg =
+    typeof err === "string"
+      ? err
+      : err?.message || err?.error || err?.reason || "Database error";
+  const msg = String(rawMsg).trim() || "Database error";
+  const code = String(err?.code || "").trim().toUpperCase();
+  const codeSuffix = code ? ` [${code}]` : "";
   const lower = msg.toLowerCase();
 
+  // 1. Missing database column
   if (
+    code === "42703" ||
     code === "PGRST204" ||
-    lower.includes("checked_in_by_email") ||
-    lower.includes("schema cache") ||
-    lower.includes("could not find the '")
+    lower.includes("could not find the '") ||
+    (lower.includes("column ") && lower.includes("does not exist"))
   ) {
-    return "Database schema cache / column sync required: run supabase/migrations/20261118000000_gate_checkin_schema_repair_and_walkin.sql in the Supabase SQL Editor (adds missing check_ins columns including checked_in_by_email and reloads the schema cache).";
+    const colMatch =
+      msg.match(/could not find the '([^']+)' column/i) ||
+      msg.match(/column\s+(?:[a-z0-9_]+\.)?"?([a-z0-9_]+)"?\s+(?:of\s+relation\s+"[^"]+"\s+)?does not exist/i);
+    const colLabel = colMatch?.[1] ? ` (${colMatch[1]})` : "";
+    return `Missing database column${colLabel}: ${msg}${codeSuffix}`;
   }
 
+  // 2. Missing RPC
   if (
-    lower.includes("check_ins_registration_id_fkey") ||
-    (code === "23502" && lower.includes("registration_id")) ||
-    (code === "42703" && lower.includes("visitor_registration_id"))
+    code === "PGRST202" ||
+    code === "42883" ||
+    lower.includes("could not find the function") ||
+    (lower.includes("function ") && lower.includes("does not exist"))
   ) {
-    return "Database migration required: apply supabase/migrations/20261116000000_fix_checkins_fk_registration_mapping.sql (and 20261118000000_gate_checkin_schema_repair_and_walkin.sql) in Supabase SQL Editor so visitor check-ins map to their dedicated FK column without violating check_ins_registration_id_fkey.";
+    const fnMatch =
+      msg.match(/could not find the function\s+(?:public\.)?([a-z0-9_]+)/i) ||
+      msg.match(/function\s+(?:public\.)?([a-z0-9_]+)\s*\(/i);
+    const fnLabel = fnMatch?.[1] ? ` (${fnMatch[1]})` : "";
+    return `Missing database RPC${fnLabel}: ${msg}${codeSuffix}`;
   }
 
-  return msg;
+  // 3. Permission failure
+  if (
+    code === "42501" ||
+    lower.includes("permission denied") ||
+    lower.includes("row-level security") ||
+    lower.includes("forbidden") ||
+    lower.includes("authentication required") ||
+    lower.includes("not authorized") ||
+    lower.includes("insufficient privilege")
+  ) {
+    return `Permission failure: ${msg}${codeSuffix}`;
+  }
+
+  // 4. Foreign-key failure
+  if (code === "23503" || lower.includes("foreign key constraint")) {
+    const fkMatch = msg.match(/constraint\s+"([^"]+)"/i);
+    const fkLabel = fkMatch?.[1] ? ` (${fkMatch[1]})` : "";
+    return `Foreign-key failure${fkLabel}: ${msg}${codeSuffix}`;
+  }
+
+  // 5. Duplicate check-in
+  if (
+    code === "23505" ||
+    lower.includes("duplicate key") ||
+    lower.includes("already checked in") ||
+    lower.includes("already been used") ||
+    lower.includes("already used") ||
+    lower.includes("duplicate check-in")
+  ) {
+    return `Duplicate check-in: ${msg}${codeSuffix}`;
+  }
+
+  // 6. Invalid ticket
+  if (
+    lower.includes("invalid") ||
+    lower.includes("not found") ||
+    lower.includes("no matching") ||
+    lower.includes("mismatch") ||
+    lower.includes("archived") ||
+    lower.includes("revoked") ||
+    lower.includes("not confirmed") ||
+    lower.includes("disqualified") ||
+    lower.includes("declined") ||
+    lower.includes("withdrawn") ||
+    lower.includes("pending") ||
+    lower.includes("not active")
+  ) {
+    return `Invalid ticket: ${msg}${codeSuffix}`;
+  }
+
+  return `${code ? `[${code}] ` : ""}${msg}`;
 }
 
 /**

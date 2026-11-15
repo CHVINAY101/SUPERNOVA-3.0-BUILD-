@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { formatCheckInDatabaseError } from "./entryOperations";
 import { parseSecureQrPayload } from "./ticketing";
 import type {
   GateVerificationResult,
@@ -221,15 +222,11 @@ export async function lookupPublicTicket(params: {
   });
 
   if (error) {
-    if (isMissingRpcError(error)) {
-      return {
-        ok: false,
-        status: "error",
-        error:
-          "Public ticket lookup RPC is not deployed in Supabase yet. Apply migration 20261115000001_tickets_and_gate_verification.sql to enable instant pass lookup.",
-      };
-    }
-    return { ok: false, status: "error", error: error.message };
+    return {
+      ok: false,
+      status: "error",
+      error: formatCheckInDatabaseError(error),
+    };
   }
 
   return (data as PublicTicketLookupResult) || {
@@ -271,9 +268,7 @@ export async function verifyGateTicket(
       ok: false,
       verdict: "INVALID",
       can_check_in: false,
-      error: isMissingRpcError(error)
-        ? "Gate verification RPC (verify_gate_ticket) is not yet deployed or schema cache needs reload. Apply migration 20261118000000_gate_checkin_schema_repair_and_walkin.sql in Supabase."
-        : error.message,
+      error: formatCheckInDatabaseError(error),
       reason: error.message,
     };
   }
@@ -310,14 +305,11 @@ export async function checkinGateTicket(params: {
   });
 
   if (error) {
-    const friendlyError = isMissingRpcError(error)
-      ? "Gate check-in RPC (checkin_gate_ticket) is not yet deployed or schema cache needs reload. Apply migration 20261116000000_fix_checkins_fk_registration_mapping.sql in Supabase."
-      : error.message;
     return {
       ok: false,
       verdict: "INVALID",
       can_check_in: false,
-      error: friendlyError,
+      error: formatCheckInDatabaseError(error),
       reason: error.message,
     };
   }

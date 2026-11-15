@@ -467,19 +467,56 @@ describe("Event Entry, QR Verification & Wristband Operations (Scenarios 1–9)"
       "eligible"
     );
 
-    // Clear migration guidance if DB FK migration isn't applied yet
-    const fkHint = formatCheckInDatabaseError({
+    // Honest foreign-key failure classification preserving exact constraint and PostgreSQL message
+    const fkMsg = formatCheckInDatabaseError({
+      code: "23503",
       message: 'insert or update on table "check_ins" violates foreign key constraint "check_ins_registration_id_fkey"',
     });
-    assert.match(fkHint, /20261116000000_fix_checkins_fk_registration_mapping\.sql/);
+    assert.match(fkMsg, /^Foreign-key failure \(check_ins_registration_id_fkey\):/);
+    assert.match(fkMsg, /check_ins_registration_id_fkey/);
+    assert.match(fkMsg, /\[23503\]$/);
   });
 
-  it("Scenario 13: PGRST204 / checked_in_by_email schema cache errors return clear 20261118 migration guidance", () => {
-    const schemaCacheHint = formatCheckInDatabaseError({
+  it("Scenario 13: Explicitly classifies column, RPC, permission, FK, duplicate, and invalid ticket errors without hiding real messages", () => {
+    const missingCol = formatCheckInDatabaseError({
       code: "PGRST204",
       message: "Could not find the 'checked_in_by_email' column of 'check_ins' in the schema cache",
     });
-    assert.match(schemaCacheHint, /20261118000000_gate_checkin_schema_repair_and_walkin\.sql/);
-    assert.match(schemaCacheHint, /checked_in_by_email/);
+    assert.match(missingCol, /^Missing database column \(checked_in_by_email\):/);
+    assert.match(missingCol, /schema cache/);
+    assert.match(missingCol, /\[PGRST204\]$/);
+
+    const missingPgCol = formatCheckInDatabaseError({
+      code: "42703",
+      message: 'column check_ins.visitor_registration_id does not exist',
+    });
+    assert.match(missingPgCol, /^Missing database column \(visitor_registration_id\):/);
+    assert.match(missingPgCol, /\[42703\]$/);
+
+    const missingRpc = formatCheckInDatabaseError({
+      code: "PGRST202",
+      message: "Could not find the function public.verify_gate_ticket(p_event_day, p_qr_token, p_query) in the schema cache",
+    });
+    assert.match(missingRpc, /^Missing database RPC \(verify_gate_ticket\):/);
+    assert.match(missingRpc, /\[PGRST202\]$/);
+
+    const permDenied = formatCheckInDatabaseError({
+      code: "42501",
+      message: "new row violates row-level security policy for table check_ins",
+    });
+    assert.match(permDenied, /^Permission failure:/);
+    assert.match(permDenied, /row-level security/);
+
+    const duplicate = formatCheckInDatabaseError({
+      code: "23505",
+      message: "duplicate key value violates unique constraint \"idx_check_ins_unique_daily_entry\"",
+    });
+    assert.match(duplicate, /^Duplicate check-in:/);
+    assert.match(duplicate, /idx_check_ins_unique_daily_entry/);
+
+    const invalidTicket = formatCheckInDatabaseError({
+      message: "Ticket not found or has been revoked.",
+    });
+    assert.match(invalidTicket, /^Invalid ticket:/);
   });
 });

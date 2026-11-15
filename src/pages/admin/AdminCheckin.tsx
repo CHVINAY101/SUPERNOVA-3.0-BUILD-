@@ -7,8 +7,6 @@ import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge"
 import { LiveGateQrScanner } from "@/components/admin/LiveGateQrScanner";
 import {
   DEFAULT_WRISTBAND_CATEGORIES,
-  buildCheckInInsertPayload,
-  buildRegistrationCheckInPatch,
   computeEntryStatistics,
   evaluateEsportsPlayerEntry,
   evaluateVisitorEntry,
@@ -127,17 +125,6 @@ interface WalkInIssuedPass {
   checkedInDays: Partial<
     Record<EventDaySession, { at: string; by: string; wristband?: string | null }>
   >;
-}
-
-function isMissingRpcError(err: any): boolean {
-  const code = String(err?.code || "").toUpperCase();
-  const msg = String(err?.message || "").toLowerCase();
-  return (
-    code === "PGRST202" ||
-    code === "42883" ||
-    msg.includes("could not find the function") ||
-    (msg.includes("function") && msg.includes("does not exist"))
-  );
 }
 
 export default function AdminCheckin() {
@@ -280,7 +267,7 @@ export default function AdminCheckin() {
           ok: false,
           verdict: "INVALID",
           can_check_in: false,
-          error: err?.message || "Gate verification request failed.",
+          error: formatCheckInDatabaseError(err),
         });
       } finally {
         setVerifyingGate(false);
@@ -358,7 +345,7 @@ export default function AdminCheckin() {
     } catch (err: any) {
       setStatusMessage({
         type: "error",
-        text: err?.message || "Gate check-in failed.",
+        text: formatCheckInDatabaseError(err),
       });
     } finally {
       setCheckingInGate(false);
@@ -370,16 +357,16 @@ export default function AdminCheckin() {
       const [visRes, espRes, playersRes, ciRes, wbCatRes, wbIssRes] = await Promise.all([
         canScanVisitor
           ? supabase.from("visitor_registrations").select("*").order("submitted_at", { ascending: false })
-          : Promise.resolve({ data: [] as any[] }),
+          : Promise.resolve({ data: [] as any[], error: null as any }),
         canScanEsports
           ? supabase
               .from("registrations")
               .select("*, games(id, title)")
               .order("submitted_at", { ascending: false })
-          : Promise.resolve({ data: [] as any[] }),
+          : Promise.resolve({ data: [] as any[], error: null as any }),
         canScanEsports
           ? supabase.from("players").select("*").order("created_at", { ascending: true })
-          : Promise.resolve({ data: [] as any[] }),
+          : Promise.resolve({ data: [] as any[], error: null as any }),
         supabase.from("check_ins").select("*").order("checked_in_at", { ascending: false }),
         supabase.from("wristband_categories").select("*").order("sort_order", { ascending: true }),
         supabase.from("wristband_issuances").select("*").order("issued_at", { ascending: false }),
@@ -396,8 +383,20 @@ export default function AdminCheckin() {
       if (!wbIssRes.error && Array.isArray(wbIssRes.data)) {
         setWristbandIssuances(wbIssRes.data as WristbandIssuance[]);
       }
-    } catch (err) {
+
+      const loadErr = ciRes.error || visRes.error || espRes.error || playersRes.error;
+      if (loadErr) {
+        setStatusMessage({
+          type: "error",
+          text: `Failed to load gate entry records: ${formatCheckInDatabaseError(loadErr)}`,
+        });
+      }
+    } catch (err: any) {
       console.warn("Failed to load entry verification data:", err);
+      setStatusMessage({
+        type: "error",
+        text: `Failed to load gate entry records: ${formatCheckInDatabaseError(err)}`,
+      });
     } finally {
       setLoading(false);
     }
@@ -632,8 +631,6 @@ export default function AdminCheckin() {
     setStatusMessage(null);
     const bandCategory = canIssueWristband ? getDefaultBandForSubject(subject) : undefined;
     const bandCode = bandCodeByKey[subject.key]?.trim() || undefined;
-    const actorEmail = user?.email || "entry-staff@supernova.edu";
-    const nowIso = new Date().toISOString();
 
     if (bandCategory) {
       const bandObj = wristbandCategories.find((c) => c.name === bandCategory);
@@ -650,7 +647,7 @@ export default function AdminCheckin() {
     }
 
     try {
-      // Try atomic SECURITY DEFINER RPC first.
+      // Authoritative atomic SECURITY DEFINER RPC.
       // Only pass p_registration_id for esports entries (public.registrations.id);
       // visitor entries resolve via p_ticket_ref / visitor_registration_id on the server
       // so check_ins.registration_id never receives a wrong-table UUID.
@@ -665,105 +662,20 @@ export default function AdminCheckin() {
         p_override_reason: reason || null,
       });
 
-      if (!rpcErr && rpcRes) {
-        if (!rpcRes.ok) {
-          setStatusMessage({
-            type: "error",
-            text: rpcRes.duplicate
-              ? `ALREADY CHECKED IN (${subject.ticketRef}) on ${eventDay} at ${new Date(
-                  rpcRes.checked_in_at
-                ).toLocaleTimeString()} by ${rpcRes.checked_in_by || "staff"}`
-              : rpcRes.error || "Check-in blocked.",
-          });
-          return;
-        }
-      } else if (isMissingRpcError(rpcErr)) {
-        // Fallback only when RPC migration hasn't been pushed yet — strictly preserve
-        // check_ins_registration_id_fkey by mapping each category to its proper FK column
-        // and never passing email strings into UUID checked_in_by.
-        const fullPayload = buildCheckInInsertPayload({
-          registrationId: subject.registrationId,
-          visitorRegistrationId: subject.visitorRegistrationId,
-          playerId: subject.playerId,
-          ticketRef: subject.ticketRef,
-          subjectType: subject.subjectType,
-          eventDay,
-          actorUserId: user?.id,
-          actorEmail,
-          checkedInAt: nowIso,
-          wristbandCategory: bandCategory,
-          wristbandCode: bandCode,
-          isOverride,
-          overrideReason: reason,
-          includeExtendedColumns: true,
-        });
-        const { error: insertErr } = await supabase.from("check_ins").insert(fullPayload);
-        if (insertErr) throw insertErr;
-      } else if (rpcErr) {
+      if (rpcErr) {
         throw rpcErr;
       }
 
-      // Sync check_in_status on primary table (UUID-safe checked_in_by)
-      if (subject.subjectType === "visitor") {
-        const patch = buildRegistrationCheckInPatch({
-          checkedIn: true,
-          actorUserId: user?.id,
-          actorEmail,
-          checkedInAt: nowIso,
-          includeEmailColumn: true,
+      if (!rpcRes || !rpcRes.ok) {
+        setStatusMessage({
+          type: "error",
+          text: rpcRes?.duplicate
+            ? `Duplicate check-in: ALREADY CHECKED IN (${subject.ticketRef}) on ${eventDay} at ${new Date(
+                rpcRes.checked_in_at
+              ).toLocaleTimeString()} by ${rpcRes.checked_in_by || "staff"}`
+            : formatCheckInDatabaseError(rpcRes?.error || "Check-in blocked."),
         });
-        const { error: visErr } = await supabase
-          .from("visitor_registrations")
-          .update(patch)
-          .eq("id", subject.id);
-        if (visErr && (visErr.code === "42703" || String(visErr.message || "").includes("checked_in_by_email"))) {
-          await supabase
-            .from("visitor_registrations")
-            .update(
-              buildRegistrationCheckInPatch({
-                checkedIn: true,
-                actorUserId: user?.id,
-                actorEmail,
-                checkedInAt: nowIso,
-                includeEmailColumn: false,
-              })
-            )
-            .eq("id", subject.id);
-        }
-      } else if (subject.subjectType === "esports_player") {
-        if (subject.playerId) {
-          await supabase
-            .from("players")
-            .update({ check_in_status: "checked_in", check_in_at: nowIso })
-            .eq("id", subject.playerId);
-        }
-        if (subject.registrationId) {
-          const patch = buildRegistrationCheckInPatch({
-            checkedIn: true,
-            actorUserId: user?.id,
-            actorEmail,
-            checkedInAt: nowIso,
-            includeEmailColumn: true,
-          });
-          const { error: regErr } = await supabase
-            .from("registrations")
-            .update(patch)
-            .eq("id", subject.registrationId);
-          if (regErr && (regErr.code === "42703" || String(regErr.message || "").includes("checked_in_by_email"))) {
-            await supabase
-              .from("registrations")
-              .update(
-                buildRegistrationCheckInPatch({
-                  checkedIn: true,
-                  actorUserId: user?.id,
-                  actorEmail,
-                  checkedInAt: nowIso,
-                  includeEmailColumn: false,
-                })
-              )
-              .eq("id", subject.registrationId);
-          }
-        }
+        return;
       }
 
       setStatusMessage({
@@ -1073,59 +985,9 @@ export default function AdminCheckin() {
         return;
       }
 
-      // Legacy fallback only when checkin_gate_ticket RPC is not yet deployed
-      const errLower = String(res.error || "").toLowerCase();
-      if (errLower.includes("not yet deployed") || errLower.includes("does not exist")) {
-        const matchedVisitor = visitorsRaw.find(
-          (v) =>
-            v.id === walkInIssued.registrationId ||
-            v.registration_ref === walkInIssued.registrationRef ||
-            v.ticket_ref === walkInIssued.ticketRef
-        );
-        if (matchedVisitor?.id) {
-          await executeCheckIn(
-            {
-              key: `vis-${matchedVisitor.id}`,
-              id: matchedVisitor.id,
-              registrationId: null,
-              visitorRegistrationId: matchedVisitor.id,
-              playerId: null,
-              ticketRef: walkInIssued.ticketRef,
-              name: walkInIssued.fullName,
-              email: walkInIssued.email,
-              institution: walkInIssued.institution || "",
-              studentClass: walkInIssued.studentClass,
-              designation: walkInIssued.designation,
-              normalizedCategory: walkInIssued.visitorCategory,
-              registrationSource: "walk_in",
-              subjectType: "visitor",
-              categoryOrGame: walkInIssued.displaySubtitle,
-              count: 1,
-              status: "confirmed",
-            },
-            false,
-            ""
-          );
-          setWalkInIssued((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  checkedInDays: {
-                    ...prev.checkedInDays,
-                    [eventDay]: {
-                      at: new Date().toISOString(),
-                      by: user?.email || "Gate Staff",
-                      wristband: bandCategory,
-                    },
-                  },
-                }
-              : null
-          );
-          return;
-        }
-      }
-
-      setWalkInSubmitError(res.error || res.reason || "Unable to complete walk-in gate check-in.");
+      setWalkInSubmitError(
+        formatCheckInDatabaseError(res.error || res.reason || "Unable to complete walk-in gate check-in.")
+      );
     } catch (err: any) {
       setWalkInSubmitError(formatCheckInDatabaseError(err));
     } finally {

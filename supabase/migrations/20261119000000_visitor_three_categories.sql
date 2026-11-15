@@ -271,9 +271,13 @@ DECLARE
 BEGIN
   IF v_source = 'walk_in' THEN
     IF v_uid IS NULL OR NOT (
-      public.has_crm_permission('visitor:create')
-      OR public.is_entry_staff()
-      OR public.is_admin()
+      CASE
+        WHEN to_regprocedure('public._gate_has_perm(text)') IS NOT NULL
+          THEN public._gate_has_perm('visitor:create') OR public._gate_is_entry_staff() OR public.is_admin()
+        WHEN to_regprocedure('public.has_crm_permission(text)') IS NOT NULL
+          THEN public.has_crm_permission('visitor:create') OR public.is_entry_staff() OR public.is_admin()
+        ELSE public.is_admin()
+      END
     ) THEN
       RAISE EXCEPTION 'Forbidden: Authorized gate staff permission required for walk-in registration.';
     END IF;
