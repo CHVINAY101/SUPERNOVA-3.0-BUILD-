@@ -1,60 +1,103 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
 import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge";
-import { 
-  Play, 
-  Clock, 
-  Trophy, 
-  ArrowLeft, 
+import {
+  calculateCumulativeBattleRoyaleStandings,
+  calculateGroupStandings,
+} from "@/lib/tournamentEngine";
+import { formatIstDateTime, isMatchScheduled } from "@/lib/scheduling";
+import {
+  FORMAT_LABELS,
+  isBattleRoyaleTournament,
+  parseTournamentScoringRules,
+} from "@/components/admin/esports/types";
+import type { Game, Match, Registration, Tournament } from "@/types/database";
+import {
+  ArrowLeft,
+  CalendarClock,
+  Clock,
+  Crown,
+  GitBranch,
+  Play,
   RefreshCw,
-  Sparkles
+  Trophy,
 } from "lucide-react";
-import type { Game, Match, Registration } from "@/types/database";
+
+type PublicTeam = Pick<
+  Registration,
+  "id" | "game_id" | "registration_ref" | "team_name" | "institution" | "seed_number" | "group_name" | "selection_status" | "status"
+>;
 
 export default function EsportsLive() {
   const [games, setGames] = useState<Game[]>([]);
-  const [selectedGameId, setSelectedGameId] = useState<string>("all");
+  const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
-  const [teams, setTeams] = useState<Registration[]>([]);
+  const [teams, setTeams] = useState<PublicTeam[]>([]);
+  const [selectedGameId, setSelectedGameId] = useState<string>("all");
   const [loading, setLoading] = useState(true);
+  const [loadNotice, setLoadNotice] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
 
   const fetchLiveBoard = useCallback(async () => {
     try {
-      // 1. Fetch active games
-      const { data: gamesData } = await supabase
-        .from("games")
-        .select("*")
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true });
-      setGames(gamesData || []);
+      const rpcRes = await supabase.rpc("get_public_esports_live_board");
+      if (!rpcRes.error && rpcRes.data && typeof rpcRes.data === "object") {
+        const payload = rpcRes.data as {
+          games?: Game[];
+          tournaments?: Tournament[];
+          matches?: Match[];
+          teams?: PublicTeam[];
+        };
+        setGames(Array.isArray(payload.games) ? payload.games : []);
+        setTournaments(Array.isArray(payload.tournaments) ? payload.tournaments : []);
+        setMatches(Array.isArray(payload.matches) ? payload.matches : []);
+        setTeams(Array.isArray(payload.teams) ? payload.teams : []);
+        setLoadNotice(null);
+        setLastRefreshed(new Date());
+        return;
+      }
 
-      // 2. Fetch matches
-      const { data: matchesData } = await supabase
-        .from("matches")
-        .select("*")
-        .eq("is_published", true)
-        .order("scheduled_start", { ascending: true });
-      setMatches(matchesData || []);
+      // Fallback when 20261122 RPC isn't pushed yet
+      const [gRes, tRes, mRes, rRes] = await Promise.all([
+        supabase.from("games").select("*").eq("is_active", true).order("sort_order", { ascending: true }),
+        supabase.from("tournaments").select("*"),
+        supabase
+          .from("matches")
+          .select("*")
+          .eq("is_published", true)
+          .order("scheduled_start", { ascending: true }),
+        supabase
+          .from("registrations")
+          .select("id, game_id, registration_ref, team_name, institution, seed_number, group_name, selection_status, status")
+          .eq("status", "confirmed"),
+      ]);
 
-      // 3. Fetch teams
-      const { data: teamsData } = await supabase.from("registrations").select("*");
-      setTeams(teamsData || []);
+      if (mRes.error && mRes.error.code === "42501") {
+        setLoadNotice(
+          "Live public permissions require applying migration 20261122000000_esports_control_centre_revamp.sql on Supabase."
+        );
+      } else {
+        setLoadNotice(null);
+      }
 
+      setGames((gRes.data as Game[]) || []);
+      if (!tRes.error && Array.isArray(tRes.data)) setTournaments(tRes.data as Tournament[]);
+      if (!mRes.error && Array.isArray(mRes.data)) setMatches(mRes.data as Match[]);
+      if (!rRes.error && Array.isArray(rRes.data)) setTeams(rRes.data as PublicTeam[]);
       setLastRefreshed(new Date());
     } catch (err) {
-      console.warn("Failed to fetch live board:", err);
+      console.warn("Failed to fetch public live board:", err);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Connect to live Postgres changes on matches & games
   const { connectionState, lastEventTime } = useRealtimeSubscription(
     [
       { table: "matches", onRefresh: fetchLiveBoard },
+      { table: "tournaments", onRefresh: fetchLiveBoard },
       { table: "games", onRefresh: fetchLiveBoard },
     ],
     "esports-live"
@@ -62,253 +105,309 @@ export default function EsportsLive() {
 
   useEffect(() => {
     fetchLiveBoard();
-    const interval = setInterval(fetchLiveBoard, 20000); // 20-second fallback poll
+    const interval = setInterval(fetchLiveBoard, 20000);
     return () => clearInterval(interval);
   }, [fetchLiveBoard]);
 
-  const teamMap = new Map<string, Registration>();
-  teams.forEach((t) => teamMap.set(t.id, t));
+  const teamMap = useMemo(() => {
+    const map = new Map<string, PublicTeam>();
+    teams.forEach((t) => map.set(t.id, t));
+    return map;
+  }, [teams]);
 
-  const filteredMatches = selectedGameId === "all"
-    ? matches
-    : matches.filter((m) => m.game_id === selectedGameId);
+  const gameMap = useMemo(() => {
+    const map = new Map<string, Game>();
+    games.forEach((g) => map.set(g.id, g));
+    return map;
+  }, [games]);
 
-  const liveMatches = filteredMatches.filter((m) => m.status === "live");
-  const upcomingMatches = filteredMatches.filter((m) =>
-    ["upcoming", "scheduled", "check_in", "ready"].includes(m.status)
+  const selectedGame = selectedGameId === "all" ? null : gameMap.get(selectedGameId) || null;
+  const selectedTournament = useMemo(
+    () => (selectedGameId === "all" ? null : tournaments.find((t) => t.game_id === selectedGameId) || null),
+    [tournaments, selectedGameId]
   );
-  const completedMatches = filteredMatches.filter((m) => m.status === "completed");
 
-  const formatTime = (isoString?: string | null) => {
-    if (!isoString) return "";
-    try {
-      return new Date(isoString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    } catch {
-      return isoString;
+  const filteredMatches = useMemo(
+    () =>
+      (selectedGameId === "all" ? matches : matches.filter((m) => m.game_id === selectedGameId)).filter(
+        (m) => m.match_format !== "BYE"
+      ),
+    [matches, selectedGameId]
+  );
+
+  const liveMatches = useMemo(
+    () => filteredMatches.filter((m) => m.status === "live" || m.status === "result_submitted"),
+    [filteredMatches]
+  );
+
+  const upcomingMatches = useMemo(
+    () =>
+      filteredMatches
+        .filter((m) => ["upcoming", "scheduled", "check_in", "ready"].includes(m.status))
+        .sort((a, b) => {
+          const sa = a.scheduled_start || "9999";
+          const sb = b.scheduled_start || "9999";
+          if (sa !== sb) return sa.localeCompare(sb);
+          return (a.round_number ?? 1) - (b.round_number ?? 1);
+        }),
+    [filteredMatches]
+  );
+
+  const completedMatches = useMemo(
+    () => filteredMatches.filter((m) => m.status === "completed"),
+    [filteredMatches]
+  );
+
+  const championEntries = useMemo(() => {
+    return tournaments
+      .filter((t) => (selectedGameId === "all" || t.game_id === selectedGameId) && t.champion_team_id)
+      .map((t) => ({
+        tournament: t,
+        game: gameMap.get(t.game_id),
+        champion: teamMap.get(t.champion_team_id || ""),
+      }))
+      .filter((x) => Boolean(x.champion));
+  }, [tournaments, selectedGameId, gameMap, teamMap]);
+
+  // Game-specific standings when a single game tab is selected
+  const singleGameStandings = useMemo(() => {
+    if (!selectedGame) return null;
+    const gameTeams = teams.filter(
+      (t) => t.game_id === selectedGame.id && (!t.selection_status || t.selection_status === "selected")
+    );
+    const rules = parseTournamentScoringRules(selectedTournament, selectedGame);
+    const isBr = isBattleRoyaleTournament(selectedTournament, selectedGame);
+
+    if (isBr) {
+      return {
+        type: "br" as const,
+        rows: calculateCumulativeBattleRoyaleStandings({
+          teams: gameTeams,
+          matches: filteredMatches,
+          placementPointsTable: rules.placementPoints,
+          pointsPerKill: rules.pointsPerKill,
+        }),
+      };
     }
-  };
+
+    if (
+      selectedTournament?.format === "round_robin" ||
+      selectedTournament?.format === "group_knockout" ||
+      selectedTournament?.format === "head_to_head"
+    ) {
+      return {
+        type: "league" as const,
+        rows: calculateGroupStandings(
+          gameTeams.map((t) => t.id),
+          filteredMatches,
+          { win: rules.winPoints, draw: rules.drawPoints, loss: rules.lossPoints }
+        ),
+      };
+    }
+
+    // Knockout bracket grouped by round_number
+    const roundsMap = new Map<number, { title: string; items: Match[] }>();
+    filteredMatches.forEach((m) => {
+      const rn = m.round_number || 1;
+      const existing = roundsMap.get(rn) || { title: m.round || `Round ${rn}`, items: [] };
+      existing.items.push(m);
+      roundsMap.set(rn, existing);
+    });
+    const bracketRounds = Array.from(roundsMap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, val]) => val);
+
+    return { type: "bracket" as const, rounds: bracketRounds };
+  }, [selectedGame, selectedTournament, teams, filteredMatches]);
 
   return (
-    <div style={{ background: "#0e131f", color: "#ffffff", minHeight: "100vh", padding: "40px 20px 80px" }}>
-      <div className="container" style={{ maxWidth: 1080, margin: "0 auto" }}>
-        {/* Navigation & Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 32, flexWrap: "wrap", gap: 16 }}>
+    <div className="min-h-screen bg-[#0B1120] text-slate-100 px-4 sm:px-6 pt-8 pb-20">
+      <div className="max-w-6xl mx-auto space-y-10">
+        {/* Top Nav */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <Link
             to="/esports"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              color: "rgba(255,255,255,0.7)",
-              fontSize: "0.9rem",
-              fontWeight: 600,
-              textDecoration: "none",
-            }}
+            className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-slate-300 hover:text-white no-underline"
           >
-            <ArrowLeft size={16} /> Back to Esports Portal
+            <ArrowLeft size={16} />
+            <span>Back to Esports Portal</span>
           </Link>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div className="flex items-center gap-3 flex-wrap">
             <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} variant="dark" />
             <button
+              type="button"
               onClick={fetchLiveBoard}
-              style={{ background: "transparent", border: 0, color: "#38bdf8", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: "0.82rem" }}
-              title="Refresh now"
+              className="inline-flex items-center gap-1.5 text-xs font-mono text-sky-400 hover:text-sky-300 cursor-pointer"
             >
-              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-              <span className="hidden sm:inline text-xs text-white/60">Updated {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+              <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+              <span className="hidden sm:inline text-slate-400">
+                Synced {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </span>
             </button>
           </div>
         </div>
 
-        {/* Board Title */}
-        <div style={{ textAlign: "center", marginBottom: 40 }}>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "6px 16px",
-              borderRadius: 9999,
-              background: "rgba(240, 120, 85, 0.15)",
-              border: "1.5px solid rgba(240, 120, 85, 0.35)",
-              color: "var(--coral, #f07855)",
-              fontSize: "0.82rem",
-              fontWeight: 800,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              marginBottom: 12,
-            }}
-          >
-            <Sparkles size={14} /> LIVE ARENA SCOREBOARD
+        {/* Hero Title */}
+        <div className="text-center space-y-2">
+          <div className="text-[11px] font-mono font-bold uppercase tracking-[0.2em] text-orange-400">
+            Supernova 3.0 · Live Tournament Scoreboard (IST)
           </div>
-          <h1
-            style={{
-              fontFamily: 'Syne, "Space Grotesk", sans-serif',
-              fontSize: "clamp(2.4rem, 5vw, 4rem)",
-              fontWeight: 900,
-              letterSpacing: "-0.03em",
-              margin: 0,
-              color: "#ffffff",
-            }}
-          >
-            Tournament Match Center
+          <h1 className="font-display font-black text-3xl sm:text-5xl tracking-tight text-white m-0">
+            Esports Match Center
           </h1>
-          <p style={{ color: "rgba(255,255,255,0.7)", fontSize: "1.05rem", marginTop: 8 }}>
-            Real-time brackets, stage scores, and upcoming matchups across VALORANT, BGMI, and FREE FIRE.
+          <p className="text-sm text-slate-400 max-w-2xl mx-auto m-0">
+            Real-time brackets, IST schedules, live arena scores, Battle Royale leaderboards, and crowned champions across VALORANT, FREE FIRE, and BGMI.
           </p>
         </div>
 
-        {/* Filter Tabs by Game */}
-        <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 40, flexWrap: "wrap" }}>
+        {/* Game Filter Bar */}
+        <div className="flex flex-wrap items-center justify-center gap-2">
           <button
+            type="button"
             onClick={() => setSelectedGameId("all")}
-            style={{
-              padding: "10px 20px",
-              borderRadius: 9999,
-              fontSize: "0.88rem",
-              fontWeight: 800,
-              border: "1.5px solid",
-              borderColor: selectedGameId === "all" ? "var(--coral, #f07855)" : "rgba(255,255,255,0.15)",
-              background: selectedGameId === "all" ? "var(--coral, #f07855)" : "rgba(255,255,255,0.05)",
-              color: "#ffffff",
-              cursor: "pointer",
-              transition: "all 0.2s ease",
-            }}
+            className={`min-h-[40px] px-4 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+              selectedGameId === "all"
+                ? "bg-orange-500 border-orange-500 text-white"
+                : "bg-white/5 border-white/10 text-slate-300 hover:bg-white/10"
+            }`}
           >
             All Games
           </button>
           {games.map((g) => (
             <button
               key={g.id}
+              type="button"
               onClick={() => setSelectedGameId(g.id)}
-              style={{
-                padding: "10px 20px",
-                borderRadius: 9999,
-                fontSize: "0.88rem",
-                fontWeight: 800,
-                border: "1.5px solid",
-                borderColor: selectedGameId === g.id ? "var(--coral, #f07855)" : "rgba(255,255,255,0.15)",
-                background: selectedGameId === g.id ? "var(--coral, #f07855)" : "rgba(255,255,255,0.05)",
-                color: "#ffffff",
-                cursor: "pointer",
-                transition: "all 0.2s ease",
-              }}
+              className={`min-h-[40px] px-4 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                selectedGameId === g.id
+                  ? "bg-orange-500 border-orange-500 text-white"
+                  : "bg-white/5 border-white/10 text-slate-300 hover:bg-white/10"
+              }`}
             >
               {g.title}
             </button>
           ))}
         </div>
 
-        {/* 1. NOW PLAYING (LIVE NOW) */}
-        <section style={{ marginBottom: 48 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
-            <span
-              style={{
-                width: 12,
-                height: 12,
-                borderRadius: "50%",
-                background: "#ef4444",
-                boxShadow: "0 0 12px #ef4444",
-                display: "inline-block",
-                animation: "pulse 1.5s infinite",
-              }}
-            />
-            <h2 style={{ fontSize: "1.4rem", fontWeight: 800, margin: 0, letterSpacing: "0.02em", color: "#ffffff" }}>
-              LIVE NOW IN THE ARENA
+        {loadNotice && (
+          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-400/30 text-xs text-amber-200 text-center">
+            {loadNotice}
+          </div>
+        )}
+
+        {/* Tournament Champions Banner */}
+        {championEntries.length > 0 && (
+          <section className="space-y-3">
+            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-amber-400 m-0 flex items-center gap-2">
+              <Crown size={15} />
+              <span>Official Tournament Champions</span>
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {championEntries.map(({ tournament, game, champion }) => (
+                <div
+                  key={tournament.id}
+                  className="p-5 rounded-2xl bg-amber-500/10 border border-amber-400/30 flex items-center gap-4"
+                >
+                  <div className="w-11 h-11 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-300 shrink-0">
+                    <Trophy size={22} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-mono font-bold uppercase text-amber-300">
+                      {game?.title || tournament.name}
+                    </div>
+                    <div className="text-lg font-display font-black text-white truncate">
+                      {champion?.team_name}
+                    </div>
+                    {champion?.institution && (
+                      <div className="text-xs text-slate-300 truncate">{champion.institution}</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* 1. Live Matches */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base sm:text-lg font-display font-bold text-white m-0 flex items-center gap-2">
+              {liveMatches.length > 0 && (
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse inline-block" />
+              )}
+              <span>Live Now in the Arena ({liveMatches.length})</span>
             </h2>
           </div>
 
           {liveMatches.length === 0 ? (
-            <div
-              style={{
-                background: "rgba(255,255,255,0.02)",
-                border: "1px dashed rgba(255,255,255,0.15)",
-                borderRadius: 16,
-                padding: "36px 24px",
-                textAlign: "center",
-              }}
-            >
-              <Clock size={32} color="rgba(255,255,255,0.4)" style={{ margin: "0 auto 10px" }} />
-              <p style={{ fontWeight: 700, color: "rgba(255,255,255,0.8)" }}>No matches currently in progress.</p>
-              <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 4 }}>
-                Next matchups are listed below. Live matches will appear with real-time score updates.
+            <div className="p-8 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] text-center space-y-1">
+              <Clock size={26} className="mx-auto text-slate-500 mb-2" />
+              <p className="text-sm font-semibold text-slate-200 m-0">No Matches Currently Live</p>
+              <p className="text-xs text-slate-400 m-0">
+                Scheduled IST fixtures and current tournament standings are updated below in real time.
               </p>
             </div>
           ) : (
-            <div style={{ display: "grid", gap: 18 }}>
+            <div className="grid grid-cols-1 gap-4">
               {liveMatches.map((m) => {
+                const game = gameMap.get(m.game_id || "");
+                const isBr =
+                  m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
                 const teamA = teamMap.get(m.team_a_id || "");
                 const teamB = teamMap.get(m.team_b_id || "");
 
                 return (
                   <div
                     key={m.id}
-                    style={{
-                      background: "linear-gradient(135deg, rgba(240, 120, 85, 0.12) 0%, rgba(49, 91, 219, 0.1) 100%)",
-                      border: "2px solid var(--coral, #f07855)",
-                      borderRadius: 18,
-                      padding: "24px 28px",
-                      boxShadow: "0 10px 30px rgba(240, 120, 85, 0.18)",
-                    }}
+                    className="p-5 sm:p-6 rounded-2xl border border-orange-500/60 bg-orange-500/10 space-y-4"
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                      <span style={{ fontSize: "0.85rem", fontWeight: 800, color: "var(--coral, #f07855)", letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                        {m.round || "Arena Stage"}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="font-mono font-bold uppercase text-orange-300">
+                        {game?.title || "Esports"} · {m.match_code ? `${m.match_code} · ` : ""}
+                        {m.round}
+                        {m.station ? ` · ${m.station}` : ""}
                       </span>
-                      <span
-                        style={{
-                          background: "#ef4444",
-                          color: "#ffffff",
-                          fontSize: "0.75rem",
-                          fontWeight: 900,
-                          padding: "4px 12px",
-                          borderRadius: 9999,
-                          letterSpacing: "0.08em",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        <Play size={10} fill="#ffffff" /> LIVE MATCH
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-600 text-white font-mono text-[11px] font-bold uppercase">
+                        <Play size={10} fill="currentColor" />
+                        <span>{m.status === "result_submitted" ? "Verifying Score" : "Live"}</span>
                       </span>
                     </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 16, alignItems: "center", textAlign: "center" }}>
-                      <div style={{ textAlign: "right" }}>
-                        <h3 style={{ fontSize: "clamp(1.2rem, 3vw, 1.8rem)", fontWeight: 900, margin: 0, color: "#ffffff" }}>
-                          {teamA?.team_name || "Team Alpha"}
-                        </h3>
-                        <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
-                          {teamA?.institution || "Collegiate"}
-                        </p>
+                    {isBr ? (
+                      <div className="text-center py-2">
+                        <div className="text-lg font-display font-bold text-white">
+                          Battle Royale Lobby In Progress ({Array.isArray(m.br_results) ? m.br_results.length : 0} Squads)
+                        </div>
+                        <div className="text-xs text-slate-300 mt-1">
+                          Placement & kill standings publish automatically once lobby concludes.
+                        </div>
                       </div>
-
-                      <div
-                        style={{
-                          fontFamily: 'Syne, "Space Grotesk", sans-serif',
-                          fontSize: "clamp(2rem, 5vw, 3.4rem)",
-                          fontWeight: 900,
-                          color: "#ffffff",
-                          background: "rgba(0,0,0,0.5)",
-                          padding: "8px 24px",
-                          borderRadius: 14,
-                          border: "1.5px solid rgba(255,255,255,0.15)",
-                          letterSpacing: "0.05em",
-                        }}
-                      >
-                        {m.score_a} : {m.score_b}
+                    ) : (
+                      <div className="grid grid-cols-3 items-center gap-3 text-center">
+                        <div className="text-right">
+                          <div className="text-base sm:text-2xl font-display font-black text-white truncate">
+                            {teamA?.team_name || "TBD"}
+                          </div>
+                          {teamA?.institution && (
+                            <div className="text-xs text-slate-400 truncate">{teamA.institution}</div>
+                          )}
+                        </div>
+                        <div>
+                          <span className="inline-block font-mono text-2xl sm:text-4xl font-black text-white bg-black/40 border border-white/15 px-4 sm:px-6 py-2 rounded-xl tabular-nums">
+                            {m.score_a} : {m.score_b}
+                          </span>
+                        </div>
+                        <div className="text-left">
+                          <div className="text-base sm:text-2xl font-display font-black text-white truncate">
+                            {teamB?.team_name || "TBD"}
+                          </div>
+                          {teamB?.institution && (
+                            <div className="text-xs text-slate-400 truncate">{teamB.institution}</div>
+                          )}
+                        </div>
                       </div>
-
-                      <div style={{ textAlign: "left" }}>
-                        <h3 style={{ fontSize: "clamp(1.2rem, 3vw, 1.8rem)", fontWeight: 900, margin: 0, color: "#ffffff" }}>
-                          {teamB?.team_name || "Team Bravo"}
-                        </h3>
-                        <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.6)", marginTop: 4 }}>
-                          {teamB?.institution || "Collegiate"}
-                        </p>
-                      </div>
-                    </div>
+                    )}
                   </div>
                 );
               })}
@@ -316,45 +415,183 @@ export default function EsportsLive() {
           )}
         </section>
 
-        {/* 2. UP NEXT (SCHEDULED MATCHES) */}
-        <section style={{ marginBottom: 48 }}>
-          <h2 style={{ fontSize: "1.3rem", fontWeight: 800, marginBottom: 20, color: "#38bdf8" }}>
-            UP NEXT ON STAGE
+        {/* 2. Game-Specific Bracket or Standings Board when Game Tab Selected */}
+        {selectedGame && singleGameStandings && (
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-base sm:text-lg font-display font-bold text-white m-0 flex items-center gap-2">
+                <GitBranch size={17} className="text-sky-400" />
+                <span>
+                  {selectedGame.title} —{" "}
+                  {singleGameStandings.type === "br"
+                    ? "Cumulative Battle Royale Leaderboard"
+                    : singleGameStandings.type === "league"
+                    ? "League Standings"
+                    : `${FORMAT_LABELS[selectedTournament?.format || "single_elimination"]} Bracket`}
+                </span>
+              </h2>
+            </div>
+
+            {singleGameStandings.type === "br" ? (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                  <thead>
+                    <tr className="border-b border-white/10 text-[11px] font-mono uppercase text-slate-400">
+                      <th className="py-3 px-4 w-14">Rank</th>
+                      <th className="py-3 px-4">Squad</th>
+                      <th className="py-3 px-4 text-right">Matches</th>
+                      <th className="py-3 px-4 text-right">Wins</th>
+                      <th className="py-3 px-4 text-right">Kills</th>
+                      <th className="py-3 px-4 text-right">Place Pts</th>
+                      <th className="py-3 px-4 text-right text-white">Total Pts</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {singleGameStandings.rows.map((r) => (
+                      <tr key={r.teamId} className={r.rank === 1 && r.totalPoints > 0 ? "bg-amber-500/10" : ""}>
+                        <td className="py-3 px-4 font-mono font-bold tabular-nums">#{r.rank}</td>
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-white">{r.teamName}</div>
+                          {r.institution && <div className="text-xs text-slate-400">{r.institution}</div>}
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums">{r.roundsPlayed}</td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums">{r.wins}</td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums">{r.totalKills}</td>
+                        <td className="py-3 px-4 text-right font-mono tabular-nums">{r.totalPlacementPoints}</td>
+                        <td className="py-3 px-4 text-right font-mono font-black text-amber-300 tabular-nums">
+                          {r.totalPoints}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : singleGameStandings.type === "league" ? (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                  <thead>
+                    <tr className="border-b border-white/10 text-[11px] font-mono uppercase text-slate-400">
+                      <th className="py-3 px-4">#</th>
+                      <th className="py-3 px-4">Team</th>
+                      <th className="py-3 px-4 text-right">P</th>
+                      <th className="py-3 px-4 text-right">W</th>
+                      <th className="py-3 px-4 text-right">D</th>
+                      <th className="py-3 px-4 text-right">L</th>
+                      <th className="py-3 px-4 text-right">Diff</th>
+                      <th className="py-3 px-4 text-right text-white">Pts</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {singleGameStandings.rows.map((r, i) => {
+                      const t = teamMap.get(r.teamId);
+                      return (
+                        <tr key={r.teamId}>
+                          <td className="py-3 px-4 font-mono font-bold tabular-nums">#{i + 1}</td>
+                          <td className="py-3 px-4 font-bold text-white">{t?.team_name || r.teamId}</td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums">{r.played}</td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums text-emerald-400">{r.wins}</td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums">{r.draws}</td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums text-rose-400">{r.losses}</td>
+                          <td className="py-3 px-4 text-right font-mono tabular-nums">
+                            {r.scoreDiff >= 0 ? `+${r.scoreDiff}` : r.scoreDiff}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono font-black text-sky-300 tabular-nums">
+                            {r.points}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : singleGameStandings.rounds.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {singleGameStandings.rounds.map((rnd) => (
+                  <div key={rnd.title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
+                    <div className="text-xs font-mono font-bold uppercase text-sky-400">{rnd.title}</div>
+                    <div className="space-y-2.5">
+                      {rnd.items.map((m) => {
+                        const tA = teamMap.get(m.team_a_id || "");
+                        const tB = teamMap.get(m.team_b_id || "");
+                        return (
+                          <div key={m.id} className="p-3 rounded-xl bg-black/30 border border-white/10 text-xs space-y-1">
+                            <div className="flex justify-between font-mono text-[10px] text-slate-400">
+                              <span>{m.match_code || `M${m.match_number ?? 1}`}</span>
+                              <span>{m.status === "completed" ? "FINAL" : m.status.toUpperCase()}</span>
+                            </div>
+                            <div className="flex justify-between font-semibold">
+                              <span className={m.winner_id === m.team_a_id ? "text-emerald-400" : "text-white"}>
+                                {tA?.team_name || "TBD"}
+                              </span>
+                              <span className="font-mono tabular-nums">{m.score_a}</span>
+                            </div>
+                            <div className="flex justify-between font-semibold">
+                              <span className={m.winner_id === m.team_b_id ? "text-emerald-400" : "text-white"}>
+                                {tB?.team_name || "TBD"}
+                              </span>
+                              <span className="font-mono tabular-nums">{m.score_b}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        )}
+
+        {/* 3. Upcoming Scheduled Matches */}
+        <section className="space-y-4">
+          <h2 className="text-base sm:text-lg font-display font-bold text-sky-400 m-0 flex items-center gap-2">
+            <CalendarClock size={17} />
+            <span>Upcoming Match Schedule (IST)</span>
           </h2>
 
           {upcomingMatches.length === 0 ? (
-            <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.9rem" }}>No upcoming matches scheduled for this game.</p>
+            <p className="text-xs text-slate-400 m-0">No upcoming published matches scheduled yet.</p>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {upcomingMatches.map((m) => {
+                const game = gameMap.get(m.game_id || "");
                 const teamA = teamMap.get(m.team_a_id || "");
                 const teamB = teamMap.get(m.team_b_id || "");
+                const isBr =
+                  m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
 
                 return (
-                  <div
-                    key={m.id}
-                    style={{
-                      background: "rgba(255,255,255,0.03)",
-                      border: "1px solid rgba(255,255,255,0.08)",
-                      borderRadius: 14,
-                      padding: "20px 22px",
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", color: "#38bdf8", fontWeight: 700, marginBottom: 12 }}>
-                      <span>{m.round || "Upcoming Match"}</span>
-                      {m.scheduled_start && <span>Starts {formatTime(m.scheduled_start)}</span>}
+                  <div key={m.id} className="p-4 rounded-2xl border border-white/10 bg-white/[0.03] space-y-3">
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-sky-300">
+                      <span className="truncate">
+                        {game?.title} · {m.match_code || m.round}
+                      </span>
+                      <span className="text-slate-400 shrink-0">{m.station || "Arena"}</span>
                     </div>
 
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    {isBr ? (
                       <div>
-                        <p style={{ fontSize: "1.1rem", fontWeight: 800, margin: 0 }}>{teamA?.team_name || "TBD"}</p>
-                        <p style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)", marginTop: 2 }}>{teamA?.institution}</p>
+                        <div className="text-sm font-bold text-white">{m.round}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          Multi-Squad Battle Royale Lobby ({Array.isArray(m.br_results) ? m.br_results.length : 0} squads)
+                        </div>
                       </div>
-                      <span style={{ fontWeight: 800, color: "rgba(255,255,255,0.3)" }}>VS</span>
-                      <div style={{ textAlign: "right" }}>
-                        <p style={{ fontSize: "1.1rem", fontWeight: 800, margin: 0 }}>{teamB?.team_name || "TBD"}</p>
-                        <p style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)", marginTop: 2 }}>{teamB?.institution}</p>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-white truncate">{teamA?.team_name || "TBD"}</div>
+                          <div className="text-[11px] text-slate-400 truncate">{teamA?.institution}</div>
+                        </div>
+                        <span className="text-xs font-mono text-slate-500 shrink-0">VS</span>
+                        <div className="min-w-0 text-right">
+                          <div className="text-sm font-bold text-white truncate">{teamB?.team_name || "TBD"}</div>
+                          <div className="text-[11px] text-slate-400 truncate">{teamB?.institution}</div>
+                        </div>
                       </div>
+                    )}
+
+                    <div className="pt-2 border-t border-white/10 text-[11px] font-mono text-slate-300 tabular-nums">
+                      {isMatchScheduled(m) ? formatIstDateTime(m.scheduled_start) : "Schedule pending admin confirmation"}
                     </div>
                   </div>
                 );
@@ -363,41 +600,39 @@ export default function EsportsLive() {
           )}
         </section>
 
-        {/* 3. RECENT RESULTS */}
+        {/* 4. Recent Completed Results */}
         {completedMatches.length > 0 && (
-          <section>
-            <h2 style={{ fontSize: "1.3rem", fontWeight: 800, marginBottom: 20, color: "#10b981" }}>
-              RECENT RESULTS
+          <section className="space-y-4">
+            <h2 className="text-base sm:text-lg font-display font-bold text-emerald-400 m-0 flex items-center gap-2">
+              <Trophy size={17} />
+              <span>Recent Official Results</span>
             </h2>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {completedMatches.map((m) => {
+                const game = gameMap.get(m.game_id || "");
                 const teamA = teamMap.get(m.team_a_id || "");
                 const teamB = teamMap.get(m.team_b_id || "");
                 const winner = teamMap.get(m.winner_id || "");
+                const isBr =
+                  m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
 
                 return (
-                  <div
-                    key={m.id}
-                    style={{
-                      background: "rgba(255,255,255,0.02)",
-                      border: "1px solid rgba(255,255,255,0.06)",
-                      borderRadius: 14,
-                      padding: "18px 20px",
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", color: "#10b981", fontWeight: 700, marginBottom: 10 }}>
-                      <span>{m.round}</span>
-                      <span>FINAL: {m.score_a} - {m.score_b}</span>
+                  <div key={m.id} className="p-4 rounded-2xl border border-white/10 bg-white/[0.02] space-y-2">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-emerald-400">
+                      <span>
+                        {game?.title} · {m.match_code || m.round}
+                      </span>
+                      <span className="tabular-nums">
+                        {isBr ? "BR FINAL" : `FINAL ${m.score_a} - ${m.score_b}`}
+                      </span>
                     </div>
-
-                    <p style={{ fontSize: "1rem", fontWeight: 700, margin: 0 }}>
-                      {teamA?.team_name} vs {teamB?.team_name}
-                    </p>
-
+                    <div className="text-sm font-bold text-white">
+                      {isBr ? m.round : `${teamA?.team_name || "TBD"} vs ${teamB?.team_name || "TBD"}`}
+                    </div>
                     {winner && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.82rem", color: "#10b981", fontWeight: 700, marginTop: 8 }}>
-                        <Trophy size={14} /> Winner: {winner.team_name}
+                      <div className="text-xs text-emerald-300 font-semibold flex items-center gap-1.5">
+                        <Trophy size={13} />
+                        <span>{isBr ? `Round Top: ${winner.team_name}` : `Winner: ${winner.team_name}`}</span>
                       </div>
                     )}
                   </div>

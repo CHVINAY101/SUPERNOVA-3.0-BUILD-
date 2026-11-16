@@ -15,12 +15,30 @@ const VALID_ROLES = [
   "registration_staff",
   "esports_entry_staff",
   "checkin_staff",
+  "participation_manager",
   "esports_manager",
   "match_conductor",
   "score_operator",
   "content_manager",
   "viewer",
 ];
+
+const ROLE_PRIORITY: Record<string, number> = {
+  super_admin: 100,
+  crm_admin: 90,
+  event_admin: 85,
+  esports_manager: 80,
+  score_operator: 75,
+  esports_entry_staff: 70,
+  registration_staff: 65,
+  checkin_staff: 60,
+  match_conductor: 55,
+  content_manager: 50,
+  participation_manager: 20,
+  viewer: 10,
+};
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function parseOverridesPayload(raw: unknown): { permission_key: string; allowed: boolean }[] {
   if (Array.isArray(raw)) {
@@ -126,7 +144,12 @@ Deno.serve(async (req) => {
       (profiles || []).forEach((p: any) => profileMap.set(p.id, p));
 
       const roleMap = new Map<string, any>();
-      (roles || []).forEach((r: any) => roleMap.set(r.user_id, r));
+      (roles || []).forEach((r: any) => {
+        const existing = roleMap.get(r.user_id);
+        if (!existing || (ROLE_PRIORITY[r.role] ?? 0) > (ROLE_PRIORITY[existing.role] ?? 0)) {
+          roleMap.set(r.user_id, r);
+        }
+      });
 
       const overrideMap = new Map<string, any[]>();
       (overrides || []).forEach((o: any) => {
@@ -160,6 +183,8 @@ Deno.serve(async (req) => {
             created_at: prof?.created_at || roleRow?.created_at || authUser?.created_at,
             invited_at: prof?.invited_at || null,
             activated_at: prof?.activated_at || null,
+            deactivated_at: prof?.deactivated_at || null,
+            revoked_at: prof?.revoked_at || null,
             last_login_at: prof?.last_login_at || authUser?.last_sign_in_at || null,
           };
         });
@@ -299,15 +324,16 @@ Deno.serve(async (req) => {
     // Guard helpers for mutations (self-edit & last-super-admin)
     // -------------------------------------------------------------------------
     const targetUserId = String(payload.targetUserId || "").trim();
-    if (!targetUserId) {
-      return jsonResponse({ ok: false, error: "targetUserId is required" }, 400);
+    if (!UUID_REGEX.test(targetUserId)) {
+      return jsonResponse({ ok: false, error: "Invalid targetUserId format" }, 400);
     }
 
     if (targetUserId === user.id) {
       return jsonResponse(
         {
           ok: false,
-          error: "Security policy violation: You cannot modify your own role, permissions, or account status.",
+          error:
+            "Security policy violation: You cannot modify, deactivate, or delete your own account.",
         },
         403
       );
@@ -425,31 +451,54 @@ Deno.serve(async (req) => {
         );
       }
 
+      const { data: authTargetRes } = await adminClient.auth.admin.getUserById(targetUserId);
+      const targetEmail = authTargetRes?.user?.email?.toLowerCase() || null;
+      const targetFullName =
+        (authTargetRes?.user?.user_metadata?.full_name as string | undefined) ||
+        (targetEmail ? targetEmail.split("@")[0] : null);
+
       const nowIso = new Date().toISOString();
-      const updateFields: Record<string, any> = {
+      const upsertFields: Record<string, any> = {
+        id: targetUserId,
         account_status: nextStatus,
         updated_at: nowIso,
       };
-      if (nextStatus === "deactivated") updateFields.deactivated_at = nowIso;
-      if (nextStatus === "revoked") updateFields.revoked_at = nowIso;
+      if (targetEmail) upsertFields.email = targetEmail;
+      if (targetFullName) upsertFields.full_name = targetFullName;
+      if (nextStatus === "deactivated") upsertFields.deactivated_at = nowIso;
+      if (nextStatus === "revoked") upsertFields.revoked_at = nowIso;
       if (nextStatus === "active") {
-        updateFields.activated_at = nowIso;
-        updateFields.deactivated_at = null;
+        upsertFields.activated_at = nowIso;
+        upsertFields.deactivated_at = null;
       }
 
       const { error: profErr } = await adminClient
         .from("profiles")
-        .update(updateFields)
-        .eq("id", targetUserId);
+        .upsert(upsertFields, { onConflict: "id" });
 
       if (profErr) {
         return jsonResponse({ ok: false, error: profErr.message }, 500);
       }
 
       // Enforce at Supabase Auth level as well (ban deactivated/revoked immediately, unban active)
-      await adminClient.auth.admin.updateUserById(targetUserId, {
-        ban_duration: nextStatus === "active" || nextStatus === "invited" ? "none" : "876000h",
-      });
+      if (authTargetRes?.user) {
+        const { error: banErr } = await adminClient.auth.admin.updateUserById(targetUserId, {
+          ban_duration: nextStatus === "active" || nextStatus === "invited" ? "none" : "876000h",
+        });
+        if (banErr) {
+          return jsonResponse(
+            { ok: false, error: `Auth status update failed: ${banErr.message}` },
+            500
+          );
+        }
+        if (nextStatus === "deactivated" || nextStatus === "revoked") {
+          try {
+            await (adminClient.auth.admin as any).signOut?.(targetUserId, "global");
+          } catch {
+            // Best-effort session revocation; Auth ban + DB account_status already block access
+          }
+        }
+      }
 
       if (nextStatus === "revoked") {
         const { data: targetProf } = await adminClient
@@ -457,11 +506,12 @@ Deno.serve(async (req) => {
           .select("email")
           .eq("id", targetUserId)
           .maybeSingle();
-        if (targetProf?.email) {
+        const emailForInvite = targetProf?.email || targetEmail;
+        if (emailForInvite) {
           await adminClient
             .from("crm_invitations")
             .update({ status: "revoked" })
-            .eq("email", targetProf.email)
+            .eq("email", emailForInvite)
             .eq("status", "pending");
         }
       }
@@ -471,10 +521,142 @@ Deno.serve(async (req) => {
         action: `crm_user_status_${nextStatus}`,
         entity_type: "profiles",
         entity_id: targetUserId,
-        metadata: { next_status: nextStatus, updated_at: nowIso },
+        metadata: { email: targetEmail, next_status: nextStatus, updated_at: nowIso },
       });
 
       return jsonResponse({ ok: true, userId: targetUserId, accountStatus: nextStatus });
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. PERMANENTLY DELETE CRM STAFF ACCOUNT (PRESERVING HISTORICAL EVENT DATA)
+    // -------------------------------------------------------------------------
+    if (action === "delete_user") {
+      const { isTargetActiveSuper, activeSuperCount } = await checkLastSuperAdmin();
+      if (isTargetActiveSuper && activeSuperCount <= 1) {
+        return jsonResponse(
+          { ok: false, error: "Cannot delete the last active Super Admin." },
+          409
+        );
+      }
+
+      const [{ data: targetProf }, { data: targetRoles }, authTargetRes] = await Promise.all([
+        adminClient.from("profiles").select("email, full_name").eq("id", targetUserId).maybeSingle(),
+        adminClient.from("user_roles").select("role").eq("user_id", targetUserId),
+        adminClient.auth.admin.getUserById(targetUserId),
+      ]);
+
+      const targetEmail = targetProf?.email || authTargetRes?.user?.email || null;
+      const targetName =
+        targetProf?.full_name || authTargetRes?.user?.user_metadata?.full_name || targetEmail;
+      const targetRolesList = (targetRoles || []).map((r: any) => r.role);
+
+      if (!targetProf && targetRolesList.length === 0 && !authTargetRes?.user) {
+        return jsonResponse({ ok: false, error: "Target CRM account was not found." }, 404);
+      }
+
+      // Preserve all historical event records by detaching actor/reviewer FKs before deleting auth user
+      const nullifyRefs: Array<[string, string]> = [
+        ["event_settings", "updated_by"],
+        ["site_content", "updated_by"],
+        ["announcements", "author_id"],
+        ["check_ins", "checked_in_by"],
+        ["registration_controls", "updated_by"],
+        ["media_items", "created_by"],
+        ["institutions", "updated_by"],
+        ["registrations", "reviewed_by"],
+        ["registrations", "checked_in_by"],
+        ["registrations", "archived_by"],
+        ["visitor_registrations", "checked_in_by"],
+        ["visitor_registrations", "archived_by"],
+        ["tickets", "checked_in_by"],
+        ["wristband_issuances", "issued_by"],
+        ["wristband_issuances", "replaced_by"],
+        ["gate_overrides", "supervisor_id"],
+        ["matches", "conductor_id"],
+        ["matches", "submitted_by"],
+        ["matches", "confirmed_by"],
+        ["match_attendance", "verified_by"],
+        ["match_disputes", "reported_by"],
+        ["match_disputes", "resolved_by"],
+        ["tournaments", "created_by"],
+        ["team_status_history", "changed_by"],
+        ["crm_emails", "sent_by"],
+        ["audit_logs", "actor_id"],
+        ["crm_invitations", "invited_by"],
+        ["profiles", "invited_by"],
+        ["user_roles", "assigned_by"],
+        ["crm_user_permissions", "updated_by"],
+      ];
+
+      await Promise.all(
+        nullifyRefs.map(async ([tableName, colName]) => {
+          try {
+            await adminClient
+              .from(tableName)
+              .update({ [colName]: null })
+              .eq(colName, targetUserId);
+          } catch {
+            // Table or column may not exist on partial deployments; ignore safely
+          }
+        })
+      );
+
+      if (targetEmail) {
+        await adminClient
+          .from("crm_invitations")
+          .update({ status: "revoked" })
+          .eq("email", targetEmail)
+          .eq("status", "pending");
+      }
+
+      await adminClient.from("crm_user_permissions").delete().eq("user_id", targetUserId);
+      const { error: delRoleErr } = await adminClient
+        .from("user_roles")
+        .delete()
+        .eq("user_id", targetUserId);
+      if (delRoleErr) {
+        return jsonResponse({ ok: false, error: delRoleErr.message }, 500);
+      }
+
+      // Record deletion in immutable audit log before deleting profile/auth row
+      await adminClient.from("audit_logs").insert({
+        actor_id: user.id,
+        action: "crm_user_deleted",
+        entity_type: "profiles",
+        entity_id: targetUserId,
+        metadata: {
+          deleted_user_id: targetUserId,
+          deleted_email: targetEmail,
+          deleted_name: targetName,
+          deleted_roles: targetRolesList,
+          historical_data_preserved: true,
+        },
+      });
+
+      const { error: delProfErr } = await adminClient
+        .from("profiles")
+        .delete()
+        .eq("id", targetUserId);
+      if (delProfErr) {
+        return jsonResponse({ ok: false, error: delProfErr.message }, 500);
+      }
+
+      if (authTargetRes?.user) {
+        const { error: delAuthErr } = await adminClient.auth.admin.deleteUser(targetUserId);
+        if (delAuthErr && !String(delAuthErr.message || "").toLowerCase().includes("not found")) {
+          return jsonResponse(
+            { ok: false, error: `Failed to delete auth account: ${delAuthErr.message}` },
+            500
+          );
+        }
+      }
+
+      return jsonResponse({
+        ok: true,
+        deletedUserId: targetUserId,
+        email: targetEmail,
+        historicalDataPreserved: true,
+      });
     }
 
     return jsonResponse({ ok: false, error: `Unknown action: ${String(action)}` }, 400);

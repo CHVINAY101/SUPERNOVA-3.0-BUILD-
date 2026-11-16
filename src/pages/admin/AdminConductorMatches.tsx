@@ -9,7 +9,10 @@ import {
   escalateMatchDispute,
   submitMatchResultDraft,
 } from "@/lib/tournamentEngine";
-import type { Game, Match, MatchAttendance, Player, Registration } from "@/types/database";
+import { formatMatchDatabaseError } from "@/lib/matchOperations";
+import { formatIstDateTime, isMatchScheduled } from "@/lib/scheduling";
+import { parseTournamentScoringRules } from "@/components/admin/esports/types";
+import type { BattleRoyaleTeamResult, Game, Match, MatchAttendance, Player, Registration } from "@/types/database";
 import {
   Trophy,
   Play,
@@ -45,6 +48,7 @@ export default function AdminConductorMatches() {
   const [draftScoreB, setDraftScoreB] = useState<number>(0);
   const [draftWinnerId, setDraftWinnerId] = useState<string>("");
   const [draftNotes, setDraftNotes] = useState<string>("");
+  const [draftBrRows, setDraftBrRows] = useState<BattleRoyaleTeamResult[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
   // Dispute modal
@@ -106,7 +110,30 @@ export default function AdminConductorMatches() {
     setDraftScoreB(activeMatch.score_b ?? 0);
     setDraftWinnerId(activeMatch.winner_id || "");
     setDraftNotes(activeMatch.notes || "");
-  }, [activeMatch?.id]);
+    const isBr =
+      activeMatch.bracket_side === "battle_royale" ||
+      (activeMatch.match_format || "").toUpperCase().includes("BR");
+    if (isBr) {
+      const existing = Array.isArray(activeMatch.br_results) && activeMatch.br_results.length > 0
+        ? activeMatch.br_results
+        : teams
+            .filter((t) => t.game_id === activeMatch.game_id && t.status === "confirmed")
+            .map((t) => ({
+              team_id: t.id,
+              team_name: t.team_name,
+              registration_ref: t.registration_ref,
+              institution: t.institution,
+              placement: null,
+              kills: 0,
+              placement_points: 0,
+              kill_points: 0,
+              total_points: 0,
+            }));
+      setDraftBrRows(existing.map((r) => ({ ...r })));
+    } else {
+      setDraftBrRows([]);
+    }
+  }, [activeMatch?.id, teams]);
 
   const teamMap = useMemo(() => {
     const map = new Map<string, Registration>();
@@ -179,10 +206,42 @@ export default function AdminConductorMatches() {
       });
       await fetchConductorData();
     } catch (err: any) {
-      setStatusMsg({ type: "error", text: `Status update failed: ${err?.message || "Error"}` });
+      setStatusMsg({ type: "error", text: `Status update failed: ${formatMatchDatabaseError(err, nextStatus)}` });
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const activeMatchIsBr = Boolean(
+    activeMatch &&
+      (activeMatch.bracket_side === "battle_royale" ||
+        (activeMatch.match_format || "").toUpperCase().includes("BR"))
+  );
+
+  const activeBrRules = useMemo(() => {
+    const g = activeMatch ? gameMap.get(activeMatch.game_id || "") || null : null;
+    return parseTournamentScoringRules(null, g);
+  }, [activeMatch, gameMap]);
+
+  const updateConductorBrRow = (teamId: string, field: "placement" | "kills", rawValue: string) => {
+    setDraftBrRows((prev) =>
+      prev.map((row) => {
+        if (row.team_id !== teamId) return row;
+        const val = rawValue.trim() === "" ? null : Math.max(0, Math.trunc(Number(rawValue) || 0));
+        const nextPlacement = field === "placement" ? (val && val >= 1 ? val : null) : row.placement ?? null;
+        const nextKills = field === "kills" ? Math.max(0, val ?? 0) : Math.max(0, row.kills || 0);
+        const placementPts = nextPlacement ? activeBrRules.placementPoints[nextPlacement] ?? 0 : 0;
+        const killPts = nextKills * activeBrRules.pointsPerKill;
+        return {
+          ...row,
+          placement: nextPlacement,
+          kills: nextKills,
+          placement_points: placementPts,
+          kill_points: killPts,
+          total_points: placementPts + killPts,
+        };
+      })
+    );
   };
 
   const handleSubmitResult = async (e: React.FormEvent) => {
@@ -195,20 +254,29 @@ export default function AdminConductorMatches() {
       return;
     }
 
-    const outcome = calculateRoundBasedOutcome({
-      teamAId: activeMatch.team_a_id || "",
-      teamBId: activeMatch.team_b_id || "",
-      maps: [{ mapName: "Match Total", scoreA: draftScoreA, scoreB: draftScoreB }],
-    });
-    const chosenWinnerId = draftWinnerId || outcome.winnerId;
+    const isBr = activeMatchIsBr;
+    let chosenWinnerId: string | null = null;
+
+    if (isBr) {
+      const top = [...draftBrRows].sort((a, b) => (b.total_points || 0) - (a.total_points || 0))[0];
+      chosenWinnerId = top?.team_id || null;
+    } else {
+      const outcome = calculateRoundBasedOutcome({
+        teamAId: activeMatch.team_a_id || "",
+        teamBId: activeMatch.team_b_id || "",
+        maps: [{ mapName: "Match Total", scoreA: draftScoreA, scoreB: draftScoreB }],
+      });
+      chosenWinnerId = draftWinnerId || outcome.winnerId;
+    }
 
     const draft = submitMatchResultDraft({
       match: activeMatch,
       actorUserId: user?.id || "",
       permissions,
-      scoreA: draftScoreA,
-      scoreB: draftScoreB,
+      scoreA: isBr ? 0 : draftScoreA,
+      scoreB: isBr ? 0 : draftScoreB,
       winnerId: chosenWinnerId,
+      brResults: isBr ? draftBrRows : undefined,
       requireManagerConfirmation: true,
       notes: draftNotes,
     });
@@ -221,18 +289,23 @@ export default function AdminConductorMatches() {
     setSubmitting(true);
     setStatusMsg(null);
     try {
+      const updateBody: Record<string, any> = {
+        score_a: draft.updatedMatch.score_a,
+        score_b: draft.updatedMatch.score_b,
+        winner_id: draft.updatedMatch.winner_id,
+        status: "result_submitted",
+        result_status: "submitted",
+        submitted_by: user?.id || null,
+        submitted_at: draft.updatedMatch.submitted_at,
+        notes: draftNotes.trim() || null,
+      };
+      if (isBr) {
+        updateBody.br_results = draftBrRows;
+      }
+
       const { error } = await supabase
         .from("matches")
-        .update({
-          score_a: draft.updatedMatch.score_a,
-          score_b: draft.updatedMatch.score_b,
-          winner_id: draft.updatedMatch.winner_id,
-          status: "result_submitted",
-          result_status: "submitted",
-          submitted_by: user?.id || null,
-          submitted_at: draft.updatedMatch.submitted_at,
-          notes: draftNotes.trim() || null,
-        })
+        .update(updateBody)
         .eq("id", activeMatch.id);
 
       if (error) throw error;
@@ -243,7 +316,10 @@ export default function AdminConductorMatches() {
       });
       await fetchConductorData();
     } catch (err: any) {
-      setStatusMsg({ type: "error", text: `Result submission failed: ${err?.message || "Error"}` });
+      setStatusMsg({
+        type: "error",
+        text: `Result submission failed: ${formatMatchDatabaseError(err, "result_submitted")}`,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -265,7 +341,7 @@ export default function AdminConductorMatches() {
 
     setSubmitting(true);
     try {
-      await supabase.from("match_disputes").insert({
+      const { error: dispErr } = await supabase.from("match_disputes").insert({
         match_id: disputeTarget.id,
         reported_by: user?.id || null,
         reported_by_email: user?.email || "conductor@supernova.edu",
@@ -273,11 +349,13 @@ export default function AdminConductorMatches() {
         original_submission: esc.dispute.original_submission,
         status: "open",
       });
+      if (dispErr) throw dispErr;
 
-      await supabase
+      const { error: matchErr } = await supabase
         .from("matches")
         .update({ status: "disputed", result_status: "disputed" })
         .eq("id", disputeTarget.id);
+      if (matchErr) throw matchErr;
 
       setStatusMessageSafe({
         type: "success",
@@ -287,7 +365,10 @@ export default function AdminConductorMatches() {
       setDisputeReason("");
       await fetchConductorData();
     } catch (err: any) {
-      setStatusMsg({ type: "error", text: `Dispute submission failed: ${err?.message || "Error"}` });
+      setStatusMsg({
+        type: "error",
+        text: `Dispute submission failed: ${formatMatchDatabaseError(err, "disputed")}`,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -378,7 +459,7 @@ export default function AdminConductorMatches() {
                 >
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200">
-                      {game?.title || "Esports"} · {m.round}
+                      {m.match_code ? `${m.match_code} · ` : ""}{game?.title || "Esports"} · {m.round}
                     </span>
                     <span
                       className={`text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded border ${
@@ -395,13 +476,19 @@ export default function AdminConductorMatches() {
                     </span>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 text-sm font-bold text-slate-900">
-                    <span className="truncate">{teamA?.team_name || "TBD"}</span>
-                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 shrink-0 tabular-nums">
-                      {m.score_a} : {m.score_b}
-                    </span>
-                    <span className="truncate text-right">{teamB?.team_name || "TBD"}</span>
-                  </div>
+                  {m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR") ? (
+                    <div className="text-sm font-bold text-slate-900">
+                      Battle Royale Lobby ({Array.isArray(m.br_results) ? m.br_results.length : 0} squads)
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2 text-sm font-bold text-slate-900">
+                      <span className="truncate">{teamA?.team_name || "TBD"}</span>
+                      <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 shrink-0 tabular-nums">
+                        {m.score_a} : {m.score_b}
+                      </span>
+                      <span className="truncate text-right">{teamB?.team_name || "TBD"}</span>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-3 text-[11px] font-mono text-slate-500 mt-2">
                     {m.station && (
@@ -409,12 +496,10 @@ export default function AdminConductorMatches() {
                         <MapPin size={11} /> {m.station}
                       </span>
                     )}
-                    {m.scheduled_start && (
-                      <span className="inline-flex items-center gap-1">
-                        <Clock size={11} />{" "}
-                        {new Date(m.scheduled_start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    )}
+                    <span className="inline-flex items-center gap-1">
+                      <Clock size={11} />{" "}
+                      {isMatchScheduled(m) ? formatIstDateTime(m.scheduled_start) : "Unscheduled"}
+                    </span>
                   </div>
                 </button>
               );
@@ -427,12 +512,20 @@ export default function AdminConductorMatches() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
                 <div>
                   <span className="text-[11px] font-mono font-bold uppercase text-blue-700">
+                    {activeMatch.match_code ? `${activeMatch.match_code} · ` : ""}
                     {gameMap.get(activeMatch.game_id || "")?.title || "Tournament"} · {activeMatch.round}
                   </span>
                   <h2 className="text-xl font-display font-black text-slate-900 m-0 mt-0.5">
-                    {teamMap.get(activeMatch.team_a_id || "")?.team_name || "TBD"} vs{" "}
-                    {teamMap.get(activeMatch.team_b_id || "")?.team_name || "TBD"}
+                    {activeMatchIsBr
+                      ? `${activeMatch.round} — Battle Royale Lobby`
+                      : `${teamMap.get(activeMatch.team_a_id || "")?.team_name || "TBD"} vs ${
+                          teamMap.get(activeMatch.team_b_id || "")?.team_name || "TBD"
+                        }`}
                   </h2>
+                  <p className="text-[11px] font-mono text-slate-500 mt-1 m-0">
+                    {isMatchScheduled(activeMatch) ? formatIstDateTime(activeMatch.scheduled_start) : "Unscheduled"}
+                    {activeMatch.station ? ` · ${activeMatch.station}` : ""}
+                  </p>
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
@@ -529,52 +622,98 @@ export default function AdminConductorMatches() {
                   Submit Match Result (Requires Manager Confirmation)
                 </h3>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {teamMap.get(activeMatch.team_a_id || "")?.team_name || "Team A"} Score
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={draftScoreA}
-                      onChange={(e) => setDraftScoreA(Number(e.target.value) || 0)}
-                      className="w-full h-11 px-3 rounded-xl border border-slate-300 bg-white text-base font-mono font-black text-center tabular-nums"
-                    />
+                {activeMatchIsBr ? (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white max-h-72 overflow-y-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead className="bg-slate-100 border-b border-slate-200 text-[10px] font-mono uppercase text-slate-600 sticky top-0">
+                        <tr>
+                          <th className="py-2 px-3">Squad</th>
+                          <th className="py-2 px-3 w-20">Placement</th>
+                          <th className="py-2 px-3 w-20">Kills</th>
+                          <th className="py-2 px-3 text-right">Pts</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {draftBrRows.map((row) => (
+                          <tr key={row.team_id}>
+                            <td className="py-2 px-3 font-semibold text-slate-900">
+                              {row.team_name || teamMap.get(row.team_id)?.team_name || row.team_id}
+                            </td>
+                            <td className="py-1.5 px-3">
+                              <input
+                                type="number"
+                                min={1}
+                                value={row.placement ?? ""}
+                                placeholder="—"
+                                onChange={(e) => updateConductorBrRow(row.team_id, "placement", e.target.value)}
+                                className="w-16 h-8 px-2 rounded-lg border border-slate-300 font-mono text-center tabular-nums"
+                              />
+                            </td>
+                            <td className="py-1.5 px-3">
+                              <input
+                                type="number"
+                                min={0}
+                                value={row.kills}
+                                onChange={(e) => updateConductorBrRow(row.team_id, "kills", e.target.value)}
+                                className="w-16 h-8 px-2 rounded-lg border border-slate-300 font-mono text-center tabular-nums"
+                              />
+                            </td>
+                            <td className="py-2 px-3 text-right font-mono font-bold tabular-nums text-slate-900">
+                              {row.total_points}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {teamMap.get(activeMatch.team_b_id || "")?.team_name || "Team B"} Score
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={draftScoreB}
-                      onChange={(e) => setDraftScoreB(Number(e.target.value) || 0)}
-                      className="w-full h-11 px-3 rounded-xl border border-slate-300 bg-white text-base font-mono font-black text-center tabular-nums"
-                    />
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        {teamMap.get(activeMatch.team_a_id || "")?.team_name || "Team A"} Score
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={draftScoreA}
+                        onChange={(e) => setDraftScoreA(Number(e.target.value) || 0)}
+                        className="w-full h-11 px-3 rounded-xl border border-slate-300 bg-white text-base font-mono font-black text-center tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        {teamMap.get(activeMatch.team_b_id || "")?.team_name || "Team B"} Score
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={draftScoreB}
+                        onChange={(e) => setDraftScoreB(Number(e.target.value) || 0)}
+                        className="w-full h-11 px-3 rounded-xl border border-slate-300 bg-white text-base font-mono font-black text-center tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Declared Winner</label>
+                      <select
+                        value={draftWinnerId}
+                        onChange={(e) => setDraftWinnerId(e.target.value)}
+                        className="w-full h-11 px-3 rounded-xl border border-slate-300 bg-white text-xs font-semibold"
+                      >
+                        <option value="">Auto from score</option>
+                        {activeMatch.team_a_id && (
+                          <option value={activeMatch.team_a_id}>
+                            {teamMap.get(activeMatch.team_a_id)?.team_name || "Team A"}
+                          </option>
+                        )}
+                        {activeMatch.team_b_id && (
+                          <option value={activeMatch.team_b_id}>
+                            {teamMap.get(activeMatch.team_b_id)?.team_name || "Team B"}
+                          </option>
+                        )}
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Declared Winner</label>
-                    <select
-                      value={draftWinnerId}
-                      onChange={(e) => setDraftWinnerId(e.target.value)}
-                      className="w-full h-11 px-3 rounded-xl border border-slate-300 bg-white text-xs font-semibold"
-                    >
-                      <option value="">Auto from score</option>
-                      {activeMatch.team_a_id && (
-                        <option value={activeMatch.team_a_id}>
-                          {teamMap.get(activeMatch.team_a_id)?.team_name || "Team A"}
-                        </option>
-                      )}
-                      {activeMatch.team_b_id && (
-                        <option value={activeMatch.team_b_id}>
-                          {teamMap.get(activeMatch.team_b_id)?.team_name || "Team B"}
-                        </option>
-                      )}
-                    </select>
-                  </div>
-                </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Match / Tie-breaker Notes</label>

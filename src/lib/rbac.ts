@@ -616,11 +616,73 @@ export function getDefaultAdminRoute(
 export interface CrmUserGuardCheckInput {
   actorId: string;
   targetUserId: string;
+  action?: "update" | "delete";
   nextRole?: string;
   nextStatus?: AccountStatus;
   activeSuperAdminCount: number;
   targetCurrentRole: string | null;
   targetCurrentStatus: AccountStatus;
+}
+
+export function isLastActiveSuperAdmin(
+  role: string | null | undefined,
+  accountStatus: AccountStatus | string | null | undefined,
+  activeSuperAdminCount: number
+): boolean {
+  return (
+    normalizeRole(role) === "super_admin" &&
+    accountStatus === "active" &&
+    activeSuperAdminCount <= 1
+  );
+}
+
+export function getCrmDeactivateEligibility(params: {
+  actorId?: string | null;
+  targetUserId: string;
+  targetRole: string | null | undefined;
+  targetStatus: AccountStatus;
+  activeSuperAdminCount: number;
+}): { eligible: boolean; reason?: string } {
+  if (params.actorId && params.actorId === params.targetUserId) {
+    return { eligible: false, reason: "Cannot deactivate your own account" };
+  }
+  if (isLastActiveSuperAdmin(params.targetRole, params.targetStatus, params.activeSuperAdminCount)) {
+    return { eligible: false, reason: "Cannot deactivate the last active Super Admin" };
+  }
+  if (params.targetStatus !== "active" && params.targetStatus !== "invited") {
+    return { eligible: false, reason: "Account is already deactivated or revoked" };
+  }
+  return { eligible: true };
+}
+
+export function getCrmReactivateEligibility(params: {
+  actorId?: string | null;
+  targetUserId: string;
+  targetStatus: AccountStatus;
+}): { eligible: boolean; reason?: string } {
+  if (params.actorId && params.actorId === params.targetUserId) {
+    return { eligible: false, reason: "Cannot modify your own account status" };
+  }
+  if (params.targetStatus !== "deactivated" && params.targetStatus !== "revoked") {
+    return { eligible: false, reason: "Only deactivated or revoked accounts can be reactivated" };
+  }
+  return { eligible: true };
+}
+
+export function getCrmDeleteEligibility(params: {
+  actorId?: string | null;
+  targetUserId: string;
+  targetRole: string | null | undefined;
+  targetStatus: AccountStatus;
+  activeSuperAdminCount: number;
+}): { eligible: boolean; reason?: string } {
+  if (params.actorId && params.actorId === params.targetUserId) {
+    return { eligible: false, reason: "Cannot permanently delete your own account" };
+  }
+  if (isLastActiveSuperAdmin(params.targetRole, params.targetStatus, params.activeSuperAdminCount)) {
+    return { eligible: false, reason: "Cannot permanently delete the last active Super Admin" };
+  }
+  return { eligible: true };
 }
 
 export function validateCrmUserMutation(
@@ -630,16 +692,24 @@ export function validateCrmUserMutation(
     return { ok: false, error: "Actor and target user identifiers are required." };
   }
 
-  // Rule: Users cannot modify their own permissions, role, or status
+  // Rule: Users cannot modify, deactivate, or delete their own account
   if (input.actorId === input.targetUserId) {
-    return { ok: false, error: "Security policy violation: You cannot modify your own role, permissions, or account status." };
+    return {
+      ok: false,
+      error: "Security policy violation: You cannot modify, deactivate, or delete your own account.",
+    };
   }
 
-  const isTargetActiveSuperAdmin =
-    normalizeRole(input.targetCurrentRole) === "super_admin" &&
-    input.targetCurrentStatus === "active";
+  const isTargetLastActiveSuper = isLastActiveSuperAdmin(
+    input.targetCurrentRole,
+    input.targetCurrentStatus,
+    input.activeSuperAdminCount
+  );
 
-  if (isTargetActiveSuperAdmin && input.activeSuperAdminCount <= 1) {
+  if (isTargetLastActiveSuper) {
+    if (input.action === "delete") {
+      return { ok: false, error: "Cannot delete the last active Super Admin." };
+    }
     if (input.nextRole && normalizeRole(input.nextRole) !== "super_admin") {
       return { ok: false, error: "Cannot demote the last active Super Admin." };
     }

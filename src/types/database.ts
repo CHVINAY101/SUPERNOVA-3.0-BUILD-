@@ -30,6 +30,8 @@ export type TournamentFormat =
   | "single_elimination"
   | "double_elimination"
   | "round_robin"
+  | "battle_royale"
+  | "head_to_head"
   | "group_knockout"
   | "custom";
 
@@ -38,6 +40,20 @@ export type TournamentScoringMode =
   | "battle_royale"
   | "group_points"
   | "custom";
+
+export type CompetitionMode = "team" | "squad" | "duo" | "solo" | "lobby_br";
+
+export interface BattleRoyaleTeamResult {
+  team_id: string;
+  team_name: string;
+  registration_ref?: string;
+  institution?: string | null;
+  placement: number | null;
+  kills: number;
+  placement_points: number;
+  kill_points: number;
+  total_points: number;
+}
 
 export type AdminRole =
   | "super_admin"
@@ -290,20 +306,33 @@ export interface Match {
   id: string;
   tournament_id?: string | null;
   game_id: string | null;
+  match_code?: string | null;
+  bracket_position?: string | null;
   round: string | null;
   round_number?: number;
   match_number?: number;
-  bracket_side?: "winners" | "losers" | "grand_final" | "group" | "knockout";
+  bracket_side?:
+    | "winners"
+    | "losers"
+    | "grand_final"
+    | "group"
+    | "knockout"
+    | "battle_royale"
+    | "head_to_head";
   group_name?: string | null;
   team_a_id: string | null;
   team_b_id: string | null;
   scheduled_start: string | null;
+  scheduled_end?: string | null;
+  duration_minutes?: number | null;
+  is_scheduled?: boolean;
   station?: string | null;
   conductor_id?: string | null;
   conductor_email?: string | null;
   match_format?: string | null;
   score_a: number;
   score_b: number;
+  br_results?: BattleRoyaleTeamResult[] | null;
   detailed_scores?: Record<string, unknown> | null;
   status: MatchStatus;
   result_status?: "pending" | "submitted" | "confirmed" | "rejected" | "disputed";
@@ -317,6 +346,10 @@ export interface Match {
   confirmed_by?: string | null;
   confirmed_at?: string | null;
   bracket_advanced_at?: string | null;
+  undo_count?: number;
+  last_undone_at?: string | null;
+  last_undone_by?: string | null;
+  undo_reason?: string | null;
   notes?: string | null;
   is_published: boolean;
   created_at: string;
@@ -330,13 +363,39 @@ export interface Tournament {
   format: TournamentFormat;
   scoring_mode: TournamentScoringMode;
   seeding_mode: "manual" | "random" | "registration_order";
+  competition_mode?: CompetitionMode | string;
+  approved_team_limit?: number | null;
+  total_rounds?: number | null;
+  start_date?: string | null;
+  champion_team_id?: string | null;
   require_manager_confirmation: boolean;
   rules_snapshot?: Record<string, unknown> | null;
-  status: "draft" | "published" | "locked" | "completed";
+  status: "draft" | "open" | "published" | "in_progress" | "locked" | "completed";
   has_started: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface MatchResultHistoryEntry {
+  id: string;
+  match_id: string;
+  tournament_id?: string | null;
+  game_id?: string | null;
+  action_type:
+    | "result_submitted"
+    | "result_confirmed"
+    | "undo_rewind"
+    | "dispute_resolved"
+    | "teams_remapped"
+    | "schedule_updated";
+  previous_state: Record<string, unknown>;
+  next_state: Record<string, unknown>;
+  downstream_affected_ids: string[];
+  reason?: string | null;
+  actor_id?: string | null;
+  actor_email?: string | null;
+  created_at: string;
 }
 
 export interface MatchAttendance {

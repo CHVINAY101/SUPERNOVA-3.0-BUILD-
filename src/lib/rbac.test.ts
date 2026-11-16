@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 import {
   ALL_PERMISSIONS,
   canAccessAdminRoute,
+  getCrmDeactivateEligibility,
+  getCrmDeleteEligibility,
+  getCrmReactivateEligibility,
   getDefaultAdminRoute,
   hasCrmPermission,
   isDedicatedOperationsRole,
+  isLastActiveSuperAdmin,
   normalizeRole,
   resolveEffectivePermissions,
   validateCrmUserMutation,
@@ -165,5 +169,219 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
     ]);
     assert.equal(customStaff.has("visitor:export"), true);
     assert.equal(customStaff.has("visitor:edit"), false);
+  });
+
+  it("CRM User Lifecycle: Deactivate/Reactivate/Delete eligible for staff, blocked for self & last Super Admin", () => {
+    // Current Super Admin cannot deactivate or delete self
+    assert.equal(
+      validateCrmUserMutation({
+        actorId: "super-1",
+        targetUserId: "super-1",
+        nextStatus: "deactivated",
+        activeSuperAdminCount: 2,
+        targetCurrentRole: "super_admin",
+        targetCurrentStatus: "active",
+      }).ok,
+      false
+    );
+    assert.equal(
+      validateCrmUserMutation({
+        actorId: "super-1",
+        targetUserId: "super-1",
+        action: "delete",
+        activeSuperAdminCount: 2,
+        targetCurrentRole: "super_admin",
+        targetCurrentStatus: "active",
+      }).ok,
+      false
+    );
+
+    // Last active Super Admin cannot be deactivated or deleted by another user
+    assert.equal(
+      validateCrmUserMutation({
+        actorId: "super-2",
+        targetUserId: "super-1",
+        nextStatus: "deactivated",
+        activeSuperAdminCount: 1,
+        targetCurrentRole: "super_admin",
+        targetCurrentStatus: "active",
+      }).ok,
+      false
+    );
+    assert.equal(
+      validateCrmUserMutation({
+        actorId: "super-2",
+        targetUserId: "super-1",
+        action: "delete",
+        activeSuperAdminCount: 1,
+        targetCurrentRole: "super_admin",
+        targetCurrentStatus: "active",
+      }).ok,
+      false
+    );
+
+    // Separate active CRM staff account (registration_staff, esports_manager, or second super_admin) IS eligible
+    for (const staffRole of [
+      "registration_staff",
+      "esports_entry_staff",
+      "esports_manager",
+      "match_conductor",
+      "crm_admin",
+      "content_manager",
+      "viewer",
+      "checkin_staff",
+      "score_operator",
+    ]) {
+      assert.equal(
+        validateCrmUserMutation({
+          actorId: "super-1",
+          targetUserId: "staff-1",
+          nextStatus: "deactivated",
+          activeSuperAdminCount: 1,
+          targetCurrentRole: staffRole,
+          targetCurrentStatus: "active",
+        }).ok,
+        true,
+        `Expected ${staffRole} to be eligible for deactivation`
+      );
+      assert.equal(
+        validateCrmUserMutation({
+          actorId: "super-1",
+          targetUserId: "staff-1",
+          nextStatus: "active",
+          activeSuperAdminCount: 1,
+          targetCurrentRole: staffRole,
+          targetCurrentStatus: "deactivated",
+        }).ok,
+        true,
+        `Expected ${staffRole} to be eligible for reactivation`
+      );
+      assert.equal(
+        validateCrmUserMutation({
+          actorId: "super-1",
+          targetUserId: "staff-1",
+          action: "delete",
+          activeSuperAdminCount: 1,
+          targetCurrentRole: staffRole,
+          targetCurrentStatus: "active",
+        }).ok,
+        true,
+        `Expected ${staffRole} to be eligible for permanent deletion`
+      );
+    }
+  });
+
+  it("CRM UI Eligibility Helpers: Deactivate, Reactivate, and Delete button rules", () => {
+    assert.equal(isLastActiveSuperAdmin("super_admin", "active", 1), true);
+    assert.equal(isLastActiveSuperAdmin("super_admin", "active", 2), false);
+    assert.equal(isLastActiveSuperAdmin("registration_staff", "active", 1), false);
+
+    // Self-protection
+    assert.equal(
+      getCrmDeactivateEligibility({
+        actorId: "super-1",
+        targetUserId: "super-1",
+        targetRole: "super_admin",
+        targetStatus: "active",
+        activeSuperAdminCount: 2,
+      }).eligible,
+      false
+    );
+    assert.equal(
+      getCrmDeleteEligibility({
+        actorId: "super-1",
+        targetUserId: "super-1",
+        targetRole: "super_admin",
+        targetStatus: "active",
+        activeSuperAdminCount: 2,
+      }).eligible,
+      false
+    );
+
+    // Last active Super Admin protection
+    assert.equal(
+      getCrmDeactivateEligibility({
+        actorId: "super-2",
+        targetUserId: "super-1",
+        targetRole: "super_admin",
+        targetStatus: "active",
+        activeSuperAdminCount: 1,
+      }).eligible,
+      false
+    );
+    assert.equal(
+      getCrmDeleteEligibility({
+        actorId: "super-2",
+        targetUserId: "super-1",
+        targetRole: "super_admin",
+        targetStatus: "active",
+        activeSuperAdminCount: 1,
+      }).eligible,
+      false
+    );
+
+    // Eligible separate staff account (active -> deactivate & delete enabled)
+    assert.equal(
+      getCrmDeactivateEligibility({
+        actorId: "super-1",
+        targetUserId: "staff-1",
+        targetRole: "registration_staff",
+        targetStatus: "active",
+        activeSuperAdminCount: 1,
+      }).eligible,
+      true
+    );
+    assert.equal(
+      getCrmDeleteEligibility({
+        actorId: "super-1",
+        targetUserId: "staff-1",
+        targetRole: "registration_staff",
+        targetStatus: "active",
+        activeSuperAdminCount: 1,
+      }).eligible,
+      true
+    );
+
+    // Deactivated staff account -> reactivate & delete enabled
+    assert.equal(
+      getCrmReactivateEligibility({
+        actorId: "super-1",
+        targetUserId: "staff-1",
+        targetStatus: "deactivated",
+      }).eligible,
+      true
+    );
+    assert.equal(
+      getCrmDeleteEligibility({
+        actorId: "super-1",
+        targetUserId: "staff-1",
+        targetRole: "registration_staff",
+        targetStatus: "deactivated",
+        activeSuperAdminCount: 1,
+      }).eligible,
+      true
+    );
+
+    // Second active Super Admin -> eligible for deactivate & delete
+    assert.equal(
+      getCrmDeactivateEligibility({
+        actorId: "super-1",
+        targetUserId: "super-2",
+        targetRole: "super_admin",
+        targetStatus: "active",
+        activeSuperAdminCount: 2,
+      }).eligible,
+      true
+    );
+    assert.equal(
+      getCrmDeleteEligibility({
+        actorId: "super-1",
+        targetUserId: "super-2",
+        targetRole: "super_admin",
+        targetStatus: "active",
+        activeSuperAdminCount: 2,
+      }).eligible,
+      true
+    );
   });
 });

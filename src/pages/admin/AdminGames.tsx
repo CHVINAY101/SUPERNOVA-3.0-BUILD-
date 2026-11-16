@@ -31,6 +31,8 @@ const FORMAT_LABELS: Record<TournamentFormat, string> = {
   single_elimination: "Single Elimination",
   double_elimination: "Double Elimination",
   round_robin: "Round Robin",
+  battle_royale: "Battle Royale (Multi-Round Lobby)",
+  head_to_head: "Head-to-Head Series",
   group_knockout: "Group + Knockout",
   custom: "Custom Format",
 };

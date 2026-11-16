@@ -7,7 +7,11 @@ import {
   PERMISSION_GROUPS,
   ROLE_DEFAULT_PERMISSIONS,
   ROLE_METADATA,
+  getCrmDeactivateEligibility,
+  getCrmDeleteEligibility,
+  getCrmReactivateEligibility,
   getRoleLabel,
+  isLastActiveSuperAdmin,
   normalizeRole,
   resolveEffectivePermissions,
   validateCrmUserMutation,
@@ -29,6 +33,7 @@ import {
   ShieldAlert,
   UserX,
   UserCheck,
+  Trash2,
 } from "lucide-react";
 
 const CANONICAL_ROLES: CanonicalCrmRole[] = [
@@ -91,6 +96,10 @@ export default function AdminUsers() {
     nextStatus: AccountStatus;
   } | null>(null);
   const [savingStatus, setSavingStatus] = useState(false);
+
+  // Permanent Delete Modal State
+  const [deleteTarget, setDeleteTarget] = useState<CrmUserSummary | null>(null);
+  const [deletingUser, setDeletingUser] = useState(false);
 
   const canInvite = isSuperAdmin || hasPermission("user_management:invite");
   const canEdit = isSuperAdmin || hasPermission(["user_management:edit", "user_management:assign_permissions"]);
@@ -156,7 +165,29 @@ export default function AdminUsers() {
         ovMap.set(ov.user_id, list);
       });
 
-      const merged: CrmUserSummary[] = (rolesRes.data || []).map((r: any) => {
+      const rolePriority: Record<string, number> = {
+        super_admin: 100,
+        crm_admin: 90,
+        event_admin: 85,
+        esports_manager: 80,
+        score_operator: 75,
+        esports_entry_staff: 70,
+        registration_staff: 65,
+        checkin_staff: 60,
+        match_conductor: 55,
+        content_manager: 50,
+        participation_manager: 20,
+        viewer: 10,
+      };
+      const bestRoleByUser = new Map<string, any>();
+      (rolesRes.data || []).forEach((r: any) => {
+        const existing = bestRoleByUser.get(r.user_id);
+        if (!existing || (rolePriority[r.role] ?? 0) > (rolePriority[existing.role] ?? 0)) {
+          bestRoleByUser.set(r.user_id, r);
+        }
+      });
+
+      const merged: CrmUserSummary[] = Array.from(bestRoleByUser.values()).map((r: any) => {
         const prof = profMap.get(r.user_id) || {};
         return {
           user_id: r.user_id,
@@ -412,6 +443,52 @@ export default function AdminUsers() {
     }
   };
 
+  const handleConfirmDeleteUser = async () => {
+    if (!deleteTarget || !user) return;
+    const guard = validateCrmUserMutation({
+      actorId: user.id,
+      targetUserId: deleteTarget.user_id,
+      action: "delete",
+      activeSuperAdminCount,
+      targetCurrentRole: deleteTarget.role,
+      targetCurrentStatus: deleteTarget.account_status,
+    });
+    if (!guard.ok) {
+      setStatusMsg({ type: "error", text: guard.error });
+      setDeleteTarget(null);
+      return;
+    }
+
+    setDeletingUser(true);
+    setStatusMsg(null);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
+        body: {
+          action: "delete_user",
+          targetUserId: deleteTarget.user_id,
+        },
+      });
+
+      if (error || !data?.ok) {
+        throw new Error(await extractFnError(error, data));
+      }
+
+      setStatusMsg({
+        type: "success",
+        text: `Permanently deleted CRM staff account ${deleteTarget.email}. All historical event records were preserved.`,
+      });
+      setDeleteTarget(null);
+      await fetchUsers();
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: `Failed to delete account: ${err?.message || "Unknown error"}`,
+      });
+    } finally {
+      setDeletingUser(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -579,10 +656,30 @@ export default function AdminUsers() {
                   const meta = ROLE_METADATA[canonical];
                   const effective = resolveEffectivePermissions(canonical, u.account_status, u.overrides);
                   const isSelf = user?.id === u.user_id;
-                  const isLastSuper =
-                    canonical === "super_admin" &&
-                    u.account_status === "active" &&
-                    activeSuperAdminCount <= 1;
+                  const isLastSuper = isLastActiveSuperAdmin(
+                    canonical,
+                    u.account_status,
+                    activeSuperAdminCount
+                  );
+                  const deactivateCheck = getCrmDeactivateEligibility({
+                    actorId: user?.id,
+                    targetUserId: u.user_id,
+                    targetRole: canonical,
+                    targetStatus: u.account_status,
+                    activeSuperAdminCount,
+                  });
+                  const reactivateCheck = getCrmReactivateEligibility({
+                    actorId: user?.id,
+                    targetUserId: u.user_id,
+                    targetStatus: u.account_status,
+                  });
+                  const deleteCheck = getCrmDeleteEligibility({
+                    actorId: user?.id,
+                    targetUserId: u.user_id,
+                    targetRole: canonical,
+                    targetStatus: u.account_status,
+                    activeSuperAdminCount,
+                  });
 
                   return (
                     <tr key={u.user_id} className="hover:bg-slate-50/80 transition-colors">
@@ -643,7 +740,7 @@ export default function AdminUsers() {
                               disabled={isSelf}
                               onClick={() => handleOpenEdit(u)}
                               title={isSelf ? "Self-modification is disabled by security policy" : "Edit Role & Permissions"}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors disabled:opacity-40 cursor-pointer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                             >
                               <Edit3 size={12} />
                               <span>Edit Access</span>
@@ -651,34 +748,47 @@ export default function AdminUsers() {
                           )}
 
                           {canDeactivate && (
-                            u.account_status === "active" || u.account_status === "invited" ? (
+                            <>
+                              {u.account_status === "active" || u.account_status === "invited" ? (
+                                <button
+                                  type="button"
+                                  disabled={!deactivateCheck.eligible}
+                                  onClick={() => setStatusTarget({ user: u, nextStatus: "deactivated" })}
+                                  title={deactivateCheck.reason || "Deactivate account"}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                >
+                                  <Ban size={12} />
+                                  <span>Deactivate</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={!reactivateCheck.eligible}
+                                  onClick={() => setStatusTarget({ user: u, nextStatus: "active" })}
+                                  title={reactivateCheck.reason || "Reactivate account"}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                                >
+                                  <UserCheck size={12} />
+                                  <span>Reactivate</span>
+                                </button>
+                              )}
+
                               <button
                                 type="button"
-                                disabled={isSelf || isLastSuper}
-                                onClick={() => setStatusTarget({ user: u, nextStatus: "deactivated" })}
+                                disabled={!deleteCheck.eligible}
+                                onClick={() => setDeleteTarget(u)}
                                 title={
-                                  isSelf
-                                    ? "Cannot deactivate your own account"
-                                    : isLastSuper
-                                    ? "Cannot deactivate the last active Super Admin"
-                                    : "Deactivate account"
+                                  deleteCheck.reason ||
+                                  (isLastSuper
+                                    ? "Cannot delete the last active Super Admin"
+                                    : "Permanently delete CRM account")
                                 }
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs transition-colors disabled:opacity-40 cursor-pointer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                               >
-                                <Ban size={12} />
-                                <span>Deactivate</span>
+                                <Trash2 size={12} />
+                                <span>Delete</span>
                               </button>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={isSelf}
-                                onClick={() => setStatusTarget({ user: u, nextStatus: "active" })}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-xs transition-colors disabled:opacity-40 cursor-pointer"
-                              >
-                                <UserCheck size={12} />
-                                <span>Reactivate</span>
-                              </button>
-                            )
+                            </>
                           )}
                         </div>
                       </td>
@@ -1081,6 +1191,59 @@ export default function AdminUsers() {
                 }`}
               >
                 {savingStatus ? "Updating..." : "Confirm Change"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => !deletingUser && setDeleteTarget(null)}
+        >
+          <div
+            className="w-full max-w-md bg-white rounded-2xl border border-rose-200 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-50 text-rose-700">
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-display font-black text-rose-950 m-0">
+                  Permanently Delete Staff Account
+                </h3>
+                <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
+                  Are you sure you want to permanently delete{" "}
+                  <strong>{deleteTarget.full_name || deleteTarget.email}</strong> ({deleteTarget.email})?
+                </p>
+                <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                  This removes their login credentials, CRM role, and permissions permanently. All historical event
+                  data (registrations, check-ins, matches, and audit history) will be preserved.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={deletingUser}
+                onClick={() => setDeleteTarget(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingUser}
+                onClick={handleConfirmDeleteUser}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                {deletingUser ? "Deleting..." : "Delete Permanently"}
               </button>
             </div>
           </div>

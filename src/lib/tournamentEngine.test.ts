@@ -3,15 +3,19 @@ import assert from "node:assert/strict";
 import {
   authorizeConductorMatchOperation,
   calculateBattleRoyaleStandings,
+  calculateCumulativeBattleRoyaleStandings,
   calculateGroupStandings,
   calculateRoundBasedOutcome,
   canRegenerateBracket,
   canTeamEnterTournament,
   confirmAndAdvanceMatchResult,
   escalateMatchDispute,
+  findDependentDownstreamMatches,
   generateTournamentMatches,
+  reassignTeamsInMatch,
   resolveMatchDispute,
   submitMatchResultDraft,
+  undoMatchResultAndRewind,
   validateSelectionUpdate,
 } from "./tournamentEngine.ts";
 import { resolveEffectivePermissions } from "./rbac.ts";
@@ -396,5 +400,303 @@ describe("Esports Tournament Operations Engine (Scenarios 10–20)", () => {
       assert.equal(resolved.matches[0].status, "completed");
       assert.equal(resolved.matches[1].team_b_id, "t3");
     }
+  });
+
+  it("Scenario 21: Odd-team brackets (5, 6, 7 teams) produce zero empty (null, null) matches and leave fixtures unscheduled when requested", () => {
+    for (const count of [5, 6, 7]) {
+      const cohort = Array.from({ length: count }, (_, i) => makeTeam(`${i + 1}`, `Squad ${i + 1}`));
+      const built = generateTournamentMatches({
+        tournamentId: `tour-${count}`,
+        gameId: "g-val",
+        gameTitle: "VALORANT",
+        format: "single_elimination",
+        teams: cohort,
+        seedingMode: "registration_order",
+        leaveUnscheduled: true,
+      });
+      assert.equal(built.ok, true);
+      if (!built.ok) continue;
+
+      const r1 = built.matches.filter((m) => m.round_number === 1);
+      assert.equal(r1.length, 4);
+      // Zero empty (null, null) matches allowed
+      assert.equal(r1.some((m) => !m.team_a_id && !m.team_b_id), false);
+      // Real matches count matches n - 4, and remaining (8 - n) are Byes
+      const realMatches = r1.filter((m) => m.team_a_id && m.team_b_id);
+      const byeMatches = r1.filter((m) => m.match_format === "BYE");
+      assert.equal(realMatches.length, count - 4);
+      assert.equal(byeMatches.length, 8 - count);
+      // Unscheduled non-bye matches stay unscheduled
+      assert.equal(realMatches.every((m) => !m.is_scheduled && m.scheduled_start === null && m.status === "upcoming"), true);
+      assert.ok(realMatches[0].match_code.startsWith("VAL-R1-"));
+    }
+  });
+
+  it("Scenario 22: Battle Royale (BGMI / Free Fire) multi-round lobbies aggregate cumulative points without H2H bracket advancement", () => {
+    const squads = [makeTeam("1", "Alpha"), makeTeam("2", "Bravo"), makeTeam("3", "Charlie")];
+    const brTour = generateTournamentMatches({
+      tournamentId: "tour-bgmi",
+      gameId: "g-bgmi",
+      gameTitle: "BGMI",
+      format: "battle_royale",
+      teams: squads,
+      seedingMode: "registration_order",
+      totalRounds: 2,
+      leaveUnscheduled: true,
+    });
+    assert.equal(brTour.ok, true);
+    if (!brTour.ok) return;
+
+    assert.equal(brTour.matches.length, 2);
+    assert.equal(brTour.matches[0].bracket_side, "battle_royale");
+    assert.equal(brTour.matches[0].br_results.length, 3);
+    assert.equal(brTour.matches[0].match_code, "BGMI-R01-L01");
+
+    const mgrPerms = resolveEffectivePermissions("esports_manager", "active");
+    const r1Confirmed = confirmAndAdvanceMatchResult({
+      matches: brTour.matches as unknown as Match[],
+      matchId: brTour.matches[0].id,
+      managerUserId: "mgr-1",
+      permissions: mgrPerms,
+      overrideBrResults: [
+        { team_id: "1", team_name: "Alpha", placement: 1, kills: 6, placement_points: 15, kill_points: 6, total_points: 21 },
+        { team_id: "2", team_name: "Bravo", placement: 2, kills: 10, placement_points: 12, kill_points: 10, total_points: 22 },
+        { team_id: "3", team_name: "Charlie", placement: 3, kills: 2, placement_points: 10, kill_points: 2, total_points: 12 },
+      ],
+    });
+    assert.equal(r1Confirmed.ok, true);
+    if (!r1Confirmed.ok) return;
+    assert.equal(r1Confirmed.advancedToMatchId, null);
+
+    const r2Confirmed = confirmAndAdvanceMatchResult({
+      matches: r1Confirmed.matches,
+      matchId: brTour.matches[1].id,
+      managerUserId: "mgr-1",
+      permissions: mgrPerms,
+      overrideBrResults: [
+        { team_id: "1", team_name: "Alpha", placement: 1, kills: 8, placement_points: 15, kill_points: 8, total_points: 23 },
+        { team_id: "2", team_name: "Bravo", placement: 4, kills: 2, placement_points: 8, kill_points: 2, total_points: 10 },
+        { team_id: "3", team_name: "Charlie", placement: 2, kills: 5, placement_points: 12, kill_points: 5, total_points: 17 },
+      ],
+    });
+    assert.equal(r2Confirmed.ok, true);
+    if (!r2Confirmed.ok) return;
+
+    const cum = calculateCumulativeBattleRoyaleStandings({
+      teams: squads,
+      matches: r2Confirmed.matches,
+    });
+    // Alpha: 21 + 23 = 44; Bravo: 22 + 10 = 32; Charlie: 12 + 17 = 29
+    assert.equal(cum[0].teamId, "1");
+    assert.equal(cum[0].totalPoints, 44);
+    assert.equal(cum[0].wins, 2);
+    assert.equal(cum[1].teamId, "2");
+    assert.equal(cum[1].totalPoints, 32);
+  });
+
+  it("Scenario 23: Undo/Rewind clears propagated slots downstream, blocks unconfirmed cascade when downstream is live/completed, and supports pre-play remap", () => {
+    const mgrPerms = resolveEffectivePermissions("esports_manager", "active");
+    const semi: Match = {
+      id: "semi-a",
+      game_id: "g-1",
+      match_code: "VAL-R1-M01",
+      round: "Semifinal 1",
+      team_a_id: "t1",
+      team_b_id: "t2",
+      scheduled_start: null,
+      score_a: 2,
+      score_b: 0,
+      status: "completed",
+      result_status: "confirmed",
+      winner_id: "t1",
+      next_match_id: "gf-1",
+      next_match_slot: "a",
+      bracket_advanced_at: "2026-11-20T06:00:00Z",
+      is_published: true,
+      created_at: "",
+      updated_at: "",
+    };
+    const finalCompleted: Match = {
+      id: "gf-1",
+      game_id: "g-1",
+      match_code: "VAL-R2-M01",
+      round: "Grand Final",
+      team_a_id: "t1",
+      team_b_id: "t3",
+      scheduled_start: null,
+      score_a: 1,
+      score_b: 2,
+      status: "completed",
+      winner_id: "t3",
+      is_published: true,
+      created_at: "",
+      updated_at: "",
+    };
+
+    const deps = findDependentDownstreamMatches([semi, finalCompleted], "semi-a");
+    assert.equal(deps.startedDownstream.length, 1);
+
+    // Without forceCascade -> blocked safely
+    const blocked = undoMatchResultAndRewind({
+      matches: [semi, finalCompleted],
+      matchId: "semi-a",
+      managerUserId: "mgr-1",
+      permissions: mgrPerms,
+      reason: "Wrong winner clicked during confirmation",
+      forceCascade: false,
+    });
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) {
+      assert.equal(blocked.requiresCascade, true);
+    }
+
+    // With forceCascade -> clears semi AND resets final cleanly
+    const rewound = undoMatchResultAndRewind({
+      matches: [semi, finalCompleted],
+      matchId: "semi-a",
+      managerUserId: "mgr-1",
+      permissions: mgrPerms,
+      reason: "Wrong winner clicked during confirmation",
+      forceCascade: true,
+    });
+    assert.equal(rewound.ok, true);
+    if (!rewound.ok) return;
+    assert.equal(rewound.matches[0].status, "upcoming");
+    assert.equal(rewound.matches[0].winner_id, null);
+    assert.equal(rewound.matches[0].undo_count, 1);
+    assert.equal(rewound.matches[1].team_a_id, null);
+    assert.equal(rewound.matches[1].status, "upcoming");
+
+    // Remap teams on rewound match
+    const remapped = reassignTeamsInMatch({
+      matches: rewound.matches,
+      matchId: "semi-a",
+      teamAId: "t2",
+      teamBId: "t1",
+    });
+    assert.equal(remapped.ok, true);
+    if (remapped.ok) {
+      assert.equal(remapped.matches[0].team_a_id, "t2");
+      assert.equal(remapped.matches[0].team_b_id, "t1");
+    }
+  });
+
+  it("Scenario 24: Free Fire Battle Royale automatic multi-lobby allocation, IST schedule separation, FF scoring & cumulative champion ranking", () => {
+    const ffTeams = Array.from({ length: 24 }, (_, idx) =>
+      makeTeam(`ff-${idx + 1}`, `FF Squad ${idx + 1}`, {
+        submitted_at: `2026-11-01T10:${String(idx).padStart(2, "0")}:00Z`,
+      })
+    );
+
+    const ffPlacementTable: Record<number, number> = {
+      1: 12,
+      2: 9,
+      3: 8,
+      4: 7,
+      5: 6,
+      6: 5,
+      7: 4,
+      8: 3,
+      9: 2,
+      10: 1,
+      11: 0,
+      12: 0,
+    };
+
+    const built = generateTournamentMatches({
+      tournamentId: "tour-ff-br",
+      gameId: "g-ff",
+      gameTitle: "FREE FIRE",
+      format: "battle_royale",
+      teams: ffTeams,
+      seedingMode: "registration_order",
+      totalRounds: 3,
+      teamsPerLobby: 12,
+      leaveUnscheduled: true,
+    });
+
+    assert.equal(built.ok, true);
+    if (!built.ok) return;
+
+    // 24 teams ÷ 12 per lobby = 2 lobbies/round × 3 rounds = 6 unique BR matches
+    assert.equal(built.teamCount, 24);
+    assert.equal(built.matches.length, 6);
+    assert.deepEqual(
+      built.matches.map((m) => m.match_code),
+      ["FF-R01-L01", "FF-R01-L02", "FF-R02-L01", "FF-R02-L02", "FF-R03-L01", "FF-R03-L02"]
+    );
+    assert.equal(built.matches[0].group_name, "Lobby 1");
+    assert.equal(built.matches[1].group_name, "Lobby 2");
+    assert.equal(built.matches[0].br_results.length, 12);
+    assert.equal(built.matches[1].br_results.length, 12);
+    assert.equal(built.matches.every((m) => m.next_match_id === null && !m.is_scheduled), true);
+
+    // Every round assigns all 24 unique teams with zero overlap across lobbies in the same round
+    for (let r = 1; r <= 3; r++) {
+      const roundLobbies = built.matches.filter((m) => m.round_number === r);
+      const assignedIds = new Set(roundLobbies.flatMap((m) => m.br_results.map((row) => row.team_id)));
+      assert.equal(assignedIds.size, 24);
+    }
+
+    // Score and confirm all 6 lobbies using Free Fire placement table + 1 pt/kill
+    const mgrPerms = resolveEffectivePermissions("esports_manager", "active");
+    let currentMatches = built.matches as unknown as Match[];
+
+    for (const m of built.matches) {
+      const scoredRows = m.br_results.map((row, idx) => {
+        // Give ff-1 Booyah (#1) + 8 kills in all its lobbies, ff-2 #2 + 5 kills, others descending
+        let placement = idx + 1;
+        let kills = Math.max(0, 4 - idx);
+        if (row.team_id === "ff-1") {
+          placement = 1;
+          kills = 8;
+        } else if (row.team_id === "ff-2") {
+          placement = 2;
+          kills = 5;
+        } else if (placement <= 2) {
+          placement += 2;
+        }
+        const pp = ffPlacementTable[placement] ?? 0;
+        const kp = kills * 1;
+        return {
+          ...row,
+          placement,
+          kills,
+          placement_points: pp,
+          kill_points: kp,
+          total_points: pp + kp,
+        };
+      });
+
+      const confirmed = confirmAndAdvanceMatchResult({
+        matches: currentMatches,
+        matchId: m.id,
+        managerUserId: "mgr-1",
+        permissions: mgrPerms,
+        overrideBrResults: scoredRows,
+      });
+      assert.equal(confirmed.ok, true);
+      if (!confirmed.ok) return;
+      assert.equal(confirmed.advancedToMatchId, null);
+      currentMatches = confirmed.matches;
+    }
+
+    const cumulative = calculateCumulativeBattleRoyaleStandings({
+      teams: ffTeams,
+      matches: currentMatches,
+      placementPointsTable: ffPlacementTable,
+      pointsPerKill: 1,
+    });
+
+    // ff-1 played 3 rounds with #1 (12 pts) + 8 kills = 20 pts/round => 60 pts total, 3 Booyah wins
+    assert.equal(cumulative[0].teamId, "ff-1");
+    assert.equal(cumulative[0].rank, 1);
+    assert.equal(cumulative[0].roundsPlayed, 3);
+    assert.equal(cumulative[0].wins, 3);
+    assert.equal(cumulative[0].totalPoints, 60);
+
+    // ff-2 played 3 rounds with #2 (9 pts) + 5 kills = 14 pts/round => 42 pts total
+    assert.equal(cumulative[1].teamId, "ff-2");
+    assert.equal(cumulative[1].totalPoints, 42);
   });
 });
