@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, getSupabaseClientConfig } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import {
   CheckCircle2,
@@ -232,7 +232,7 @@ export default function AdminCrmEmails() {
 
       // Probe send-registration-confirmation deployment cleanly
       try {
-        const baseUrl = (import.meta.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+        const { url: baseUrl } = getSupabaseClientConfig();
         const getResp = baseUrl
           ? await fetch(`${baseUrl}/functions/v1/send-registration-confirmation`, { method: "GET" })
           : null;

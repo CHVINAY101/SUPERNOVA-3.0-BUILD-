@@ -3,7 +3,7 @@ import {
   FunctionsHttpError,
   FunctionsRelayError,
 } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { supabase, getSupabaseClientConfig } from "@/lib/supabase";
 import {
   EMAIL_DELIVERY_ENABLED,
   EMAIL_UNAVAILABLE_MESSAGE,
@@ -338,7 +338,7 @@ const inFlightConfirmationDispatches = new Map<string, Promise<any>>();
 
 async function probeEdgeFunctionStatus(functionName: string): Promise<{ status?: number; code?: string }> {
   try {
-    const baseUrl = (import.meta.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+    const { url: baseUrl } = getSupabaseClientConfig();
     if (!baseUrl) return {};
     // Simple GET without custom headers bypasses CORS preflight and exposes gateway 404/NOT_FOUND status
     const res = await fetch(`${baseUrl}/functions/v1/${functionName}`, { method: "GET" });
@@ -495,11 +495,7 @@ export async function sendRegistrationConfirmationEmail(
     }
 
     // Ensure authenticated admin session JWT is fresh and explicitly sent on resend / admin operations
-    const apiKey = (
-      import.meta.env.VITE_SUPABASE_ANON_KEY ||
-      import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-      ""
-    ).trim();
+    const { key: apiKey } = getSupabaseClientConfig();
 
     let accessToken: string | null = null;
     try {

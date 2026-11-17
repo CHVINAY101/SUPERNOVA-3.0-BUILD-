@@ -20,7 +20,7 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
           <p className="text-sm text-slate-600 leading-relaxed mb-6">
             The application cannot connect to the backend database because{" "}
             <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">VITE_SUPABASE_URL</code> or{" "}
-            <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">VITE_SUPABASE_ANON_KEY</code> is missing.
+            <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">VITE_SUPABASE_PUBLISHABLE_KEY</code> is missing or invalid.
           </p>
           <Link
             to="/"

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { supabase, checkSupabaseClientConfig } from "@/lib/supabase";
 import type { AdminRole, AccountStatus } from "@/types/database";
 import {
   ALL_PERMISSIONS,
@@ -346,6 +346,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [activeUserId, verifyAdminStatus]);
 
   const signIn = async (email: string, password: string): Promise<SignInResult> => {
+    const clientConfig = checkSupabaseClientConfig();
+    if (!clientConfig.isValid) {
+      return {
+        error:
+          clientConfig.warning ||
+          "Supabase configuration incomplete. VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are required.",
+        errorCategory: "config_error",
+      };
+    }
+
     setLoading(true);
 
     try {
@@ -363,22 +373,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let category: AuthErrorCategory = "unknown_error";
         let userMessage = error.message;
 
+        const isConfigErr =
+          errMsg.includes("Supabase configuration incomplete") ||
+          errMsg.includes("Supabase client is not configured");
+
         const isOffline = typeof navigator !== "undefined" && !navigator.onLine;
         const isNetworkMsg =
-          errMsg.includes("Failed to fetch") ||
-          errMsg.includes("NetworkError") ||
-          errMsg.includes("Network request failed") ||
-          errMsg.includes("Load failed") ||
-          errMsg.includes("timeout") ||
-          errMsg.includes("ERR_") ||
-          error.name === "AuthRetryableFetchError" ||
-          (error.name === "TypeError" && errMsg.includes("fetch")) ||
-          status === 0 ||
-          status === 504 ||
-          status === 502 ||
-          status === 503;
+          !isConfigErr &&
+          (errMsg.includes("Failed to fetch") ||
+            errMsg.includes("NetworkError") ||
+            errMsg.includes("Network request failed") ||
+            errMsg.includes("Load failed") ||
+            errMsg.includes("timeout") ||
+            errMsg.includes("ERR_") ||
+            error.name === "AuthRetryableFetchError" ||
+            (error.name === "TypeError" && errMsg.includes("fetch")) ||
+            status === 0 ||
+            status === 504 ||
+            status === 502 ||
+            status === 503);
 
-        if (isOffline || isNetworkMsg) {
+        if (isConfigErr) {
+          category = "config_error";
+        } else if (isOffline || isNetworkMsg) {
           category = "network_error";
           userMessage = isOffline
             ? "Your browser appears to be offline. Please verify your internet connection and try again."

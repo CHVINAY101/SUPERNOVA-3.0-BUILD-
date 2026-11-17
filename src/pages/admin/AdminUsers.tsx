@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, getSupabaseClientConfig } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import type { AccountStatus, CrmUserSummary, CrmInvitation } from "@/types/database";
 import {
@@ -142,11 +142,7 @@ export default function AdminUsers() {
     async (
       body: Record<string, unknown>
     ): Promise<{ data: any; error: any; statusCode?: number }> => {
-      const apiKey = (
-        import.meta.env.VITE_SUPABASE_ANON_KEY ||
-        import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-        ""
-      ).trim();
+      const { url: supabaseUrl, key: apiKey } = getSupabaseClientConfig();
 
       let accessToken: string | null = null;
       try {
@@ -199,7 +195,6 @@ export default function AdminUsers() {
         statusCode === undefined &&
         String(error?.message || "").includes("Failed to send a request to the Edge Function")
       ) {
-        const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || "").replace(/\/+$/, "");
         if (supabaseUrl) {
           try {
             const probeRes = await fetch(`${supabaseUrl}/functions/v1/manage-crm-users`, {

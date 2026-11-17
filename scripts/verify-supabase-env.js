@@ -39,9 +39,34 @@ function loadDotEnv() {
 }
 
 const fileEnv = loadDotEnv();
-const url = process.env.VITE_SUPABASE_URL || fileEnv.VITE_SUPABASE_URL;
-const key = process.env.VITE_SUPABASE_ANON_KEY || fileEnv.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || fileEnv.VITE_SUPABASE_PUBLISHABLE_KEY;
-const mock = process.env.VITE_USE_MOCK || fileEnv.VITE_USE_MOCK;
+const isValidUrlString = (val) => {
+  if (!val || /your-project|placeholder|example\.supabase\.co|<|>/i.test(val)) return false;
+  try {
+    const parsed = new URL(val);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+const isValidKeyString = (val) => {
+  if (!val || val.length < 20 || /placeholder|your-key/i.test(val) || val.startsWith('sb_secret_')) return false;
+  return val.startsWith('sb_publishable_') || val.startsWith('eyJ');
+};
+
+const url = isValidUrlString(fileEnv.VITE_SUPABASE_URL)
+  ? fileEnv.VITE_SUPABASE_URL
+  : process.env.VITE_SUPABASE_URL || fileEnv.VITE_SUPABASE_URL;
+const key = isValidKeyString(fileEnv.VITE_SUPABASE_PUBLISHABLE_KEY)
+  ? fileEnv.VITE_SUPABASE_PUBLISHABLE_KEY
+  : isValidKeyString(process.env.VITE_SUPABASE_PUBLISHABLE_KEY)
+  ? process.env.VITE_SUPABASE_PUBLISHABLE_KEY
+  : isValidKeyString(fileEnv.VITE_SUPABASE_ANON_KEY)
+  ? fileEnv.VITE_SUPABASE_ANON_KEY
+  : process.env.VITE_SUPABASE_ANON_KEY;
+const mock =
+  fileEnv.VITE_USE_MOCK === 'true' || fileEnv.VITE_USE_MOCK === 'false'
+    ? fileEnv.VITE_USE_MOCK
+    : process.env.VITE_USE_MOCK;
 
 console.log('\n=============================================================');
 console.log('⚡ SUPERNOVA 3.0 — SUPABASE RUNTIME ENVIRONMENT VERIFICATION');
@@ -134,13 +159,15 @@ try {
   console.log(`✅ Supabase database ping successful (${latency}ms, HTTP ${status})`);
   console.log(`   Sample verified record: Game "${data?.[0]?.title || 'Games list accessible'}" (ID: ${data?.[0]?.id || 'N/A'})`);
 
-  // Test auth endpoint
-  const authPing = await client.auth.getSession();
-  if (authPing.error) {
-    console.warn(`⚠️ Supabase auth endpoint warning: ${authPing.error.message}`);
-  } else {
-    console.log(`✅ Supabase Auth service reachable and responding.`);
+  // Test live Auth HTTP endpoint
+  const authRes = await fetch(`${url.replace(/\/+$/, '')}/auth/v1/settings`, {
+    headers: { apikey: key },
+  });
+  if (!authRes.ok) {
+    console.error(`❌ Supabase Auth HTTP endpoint failed (HTTP ${authRes.status})`);
+    process.exit(1);
   }
+  console.log(`✅ Supabase Auth service reachable and responding (HTTP ${authRes.status}).`);
 
   console.log('\n=============================================================');
   console.log('🎉 SUPABASE CLIENT CONFIGURATION VERIFIED SUCCESSFULLY');

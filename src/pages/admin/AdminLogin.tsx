@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Navigate, useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth, type AuthErrorCategory } from "@/lib/auth";
-import { supabase, checkSupabaseClientConfig, getSupabaseConnectionInfo } from "@/lib/supabase";
+import {
+  supabase,
+  checkSupabaseClientConfig,
+  getSupabaseConnectionInfo,
+  pingSupabaseAuth,
+} from "@/lib/supabase";
 import {
   Eye,
   EyeOff,
@@ -55,8 +60,30 @@ function classifyAuthError(
   const errCode = error?.code || error?.name || "";
   const status = typeof error?.status === "number" ? error.status : 0;
   const connectionInfo = getSupabaseConnectionInfo();
-  const endpoint = connectionInfo.url || "https://cirreovughlncadrbvcn.supabase.co";
+  const endpoint = connectionInfo.url || "(unconfigured)";
   const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  // 0. Configuration Incomplete
+  const isConfigError =
+    explicitCategory === "config_error" ||
+    rawMsg.includes("Supabase configuration incomplete") ||
+    rawMsg.includes("Supabase client is not configured");
+
+  if (isConfigError) {
+    return {
+      category: "config_error",
+      title: "Supabase Configuration Incomplete",
+      message: rawMsg,
+      actionHint:
+        "Ensure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY are set in the application environment and restart the server.",
+      statusCode: 0,
+      errorCode: "SUPABASE_CONFIG_INCOMPLETE",
+      timestamp: now,
+      isOnline,
+      endpoint,
+      rawDetails: rawMsg,
+    };
+  }
 
   // 1. Network Failure
   const isNetwork =
@@ -279,25 +306,12 @@ export default function AdminLogin() {
   const handleTestConnection = async () => {
     setTestingConnection(true);
     setPingResult(null);
-    const start = performance.now();
     try {
-      const { error: pingErr } = await supabase.auth.getSession();
-      const latency = Math.round(performance.now() - start);
-      if (pingErr) {
-        setPingResult({ ok: false, message: `Endpoint returned error: ${pingErr.message}`, latencyMs: latency });
-      } else {
-        setPingResult({
-          ok: true,
-          message: `Endpoint reachable (${latency}ms). Connection to Supabase is active.`,
-          latencyMs: latency,
-        });
-      }
-    } catch (testErr: any) {
-      const latency = Math.round(performance.now() - start);
+      const result = await pingSupabaseAuth();
       setPingResult({
-        ok: false,
-        message: `Network ping failed: ${testErr?.message || "Server unreachable"}`,
-        latencyMs: latency,
+        ok: result.ok,
+        message: result.message,
+        latencyMs: result.latencyMs,
       });
     } finally {
       setTestingConnection(false);
@@ -427,6 +441,16 @@ export default function AdminLogin() {
 
   const getCategoryStyles = (category: AuthDiagnostic["category"]) => {
     switch (category) {
+      case "config_error":
+        return {
+          containerBg: "bg-amber-50/95 border-amber-500",
+          tagBg: "bg-amber-600 text-white",
+          tagLabel: "CONFIG ERROR",
+          icon: <ShieldAlert size={20} className="shrink-0 text-amber-600 mt-0.5" />,
+          titleColor: "text-amber-950",
+          textColor: "text-amber-900",
+          hintBg: "bg-amber-100/80 border-amber-300 text-amber-950",
+        };
       case "network_error":
         return {
           containerBg: "bg-red-50/95 border-red-500",

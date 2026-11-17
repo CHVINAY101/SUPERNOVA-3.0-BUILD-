@@ -3,7 +3,7 @@ import {
   FunctionsHttpError,
   FunctionsRelayError,
 } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { supabase, getSupabaseClientConfig } from "@/lib/supabase";
 import type { CrmEmail, CrmEmailStatus } from "@/types/database";
 import {
   EMAIL_DELIVERY_ENABLED,
@@ -71,11 +71,7 @@ function saveLocalCrmEmail(email: CrmEmail) {
 }
 
 async function getAdminInvokeHeaders(): Promise<Record<string, string>> {
-  const apiKey = (
-    import.meta.env.VITE_SUPABASE_ANON_KEY ||
-    import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-    ""
-  ).trim();
+  const { key: apiKey } = getSupabaseClientConfig();
   const headers: Record<string, string> = {};
   if (apiKey) headers["apikey"] = apiKey;
   try {
@@ -123,7 +119,7 @@ async function extractEdgeFunctionError(error: any, data: any): Promise<{ messag
   let probeCode: string | undefined;
   if (isFetchErr) {
     try {
-      const baseUrl = (import.meta.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+      const { url: baseUrl } = getSupabaseClientConfig();
       if (baseUrl) {
         const res = await fetch(`${baseUrl}/functions/v1/send-crm-email`, { method: "GET" });
         probeStatus = res.status;
