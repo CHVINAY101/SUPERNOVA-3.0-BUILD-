@@ -90,8 +90,10 @@ export interface CrmInvitation {
   full_name: string | null;
   role: AdminRole;
   status: "pending" | "accepted" | "revoked" | "expired";
-  invited_at: string;
+  created_at: string;
+  invited_at?: string | null;
   accepted_at?: string | null;
+  permission_overrides?: { permission_key: string; allowed: boolean }[] | Record<string, boolean> | null;
   custom_permissions?: Record<string, boolean> | null;
 }
 
@@ -126,6 +128,10 @@ export interface Game {
   team_size: number | null;
   substitutes_count?: number;
   max_teams?: number | null;
+  registration_open?: boolean;
+  auto_close_at_capacity?: boolean;
+  registration_override_open?: boolean;
+  registration_closed_message?: string | null;
   match_format?: string | null;
   scoring_mode?: TournamentScoringMode;
   scoring_config?: Record<string, unknown> | null;
@@ -137,6 +143,36 @@ export interface Game {
   sort_order: number;
   created_at: string;
   updated_at: string;
+}
+
+export type EsportsRegistrationStatusReason =
+  | "open"
+  | "open_override"
+  | "manual_closed"
+  | "capacity_reached"
+  | "portal_closed"
+  | "portal_scheduled"
+  | "portal_expired";
+
+export interface EsportsGameAvailability {
+  id: string;
+  title: string;
+  team_size: number | null;
+  sort_order: number;
+  is_active: boolean;
+  is_published: boolean;
+  registration_open: boolean;
+  max_teams: number | null;
+  auto_close_at_capacity: boolean;
+  registration_override_open: boolean;
+  registration_closed_message: string | null;
+  total_registered_teams: number;
+  approved_teams: number;
+  pending_teams: number;
+  active_capacity_teams: number;
+  slots_remaining: number | null;
+  is_effectively_open: boolean;
+  status_reason: EsportsRegistrationStatusReason;
 }
 
 export interface Sponsor {
@@ -288,11 +324,17 @@ export interface MediaItem {
   created_by?: string | null;
 }
 
+export type PlayerInstitutionType = "School" | "College" | "Other";
+
 export interface Player {
   id: string;
   registration_id: string;
   player_name: string;
   gamer_tag: string | null;
+  institution_type?: PlayerInstitutionType | string | null;
+  institution_name?: string | null;
+  course_or_class?: string | null;
+  current_year_or_class?: string | null;
   player_ticket_ref?: string | null;
   roster_role?: "captain" | "starter" | "substitute";
   is_verified?: boolean;

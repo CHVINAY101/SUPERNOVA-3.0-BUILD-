@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import type { AdminRole, AccountStatus, CrmUserSummary, CrmInvitation } from "@/types/database";
+import type { AccountStatus, CrmUserSummary, CrmInvitation } from "@/types/database";
 import {
   ALL_PERMISSIONS,
   PERMISSION_GROUPS,
   ROLE_DEFAULT_PERMISSIONS,
   ROLE_METADATA,
+  canDelegateRoleAndPermissions,
   getCrmDeactivateEligibility,
   getCrmDeleteEligibility,
   getCrmReactivateEligibility,
@@ -15,6 +16,7 @@ import {
   normalizeRole,
   resolveEffectivePermissions,
   validateCrmUserMutation,
+  validateNewCrmUserInput,
   type CanonicalCrmRole,
   type PermissionKey,
 } from "@/lib/rbac";
@@ -34,6 +36,10 @@ import {
   UserX,
   UserCheck,
   Trash2,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Mail,
 } from "lucide-react";
 
 const CANONICAL_ROLES: CanonicalCrmRole[] = [
@@ -62,33 +68,55 @@ function statusBadgeClasses(status: AccountStatus): string {
   }
 }
 
+function formatDisplayDate(value: string | null | undefined, fallback = "—"): string {
+  if (!value) return fallback;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return fallback;
+  return parsed.toLocaleDateString("en-IN");
+}
+
+type BackendErrorState = {
+  title: string;
+  message: string;
+  statusCode?: number;
+  hint?: string;
+};
+
 export default function AdminUsers() {
-  const { user, isSuperAdmin, hasPermission } = useAuth();
+  const { user, isSuperAdmin, permissions, hasPermission } = useAuth();
   const [users, setUsers] = useState<CrmUserSummary[]>([]);
   const [invitations, setInvitations] = useState<CrmInvitation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [backendWarning, setBackendWarning] = useState<string | null>(null);
+  const [backendError, setBackendError] = useState<BackendErrorState | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  // Invite Modal State
-  const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [inviteName, setInviteName] = useState("");
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<CanonicalCrmRole>("registration_staff");
-  const [invitePermSet, setInvitePermSet] = useState<Set<PermissionKey>>(
+  // Add User Modal State (supports Direct Creation with Password OR Email Invitation)
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [addMode, setAddMode] = useState<"direct" | "invite">("direct");
+  const [addName, setAddName] = useState("");
+  const [addEmail, setAddEmail] = useState("");
+  const [addPassword, setAddPassword] = useState("");
+  const [addConfirmPassword, setAddConfirmPassword] = useState("");
+  const [showAddPassword, setShowAddPassword] = useState(false);
+  const [showAddConfirmPassword, setShowAddConfirmPassword] = useState(false);
+  const [addRole, setAddRole] = useState<CanonicalCrmRole>("registration_staff");
+  const [addPermSet, setAddPermSet] = useState<Set<PermissionKey>>(
     new Set(ROLE_DEFAULT_PERMISSIONS.registration_staff)
   );
-  const [submittingInvite, setSubmittingInvite] = useState(false);
+  const [submittingAdd, setSubmittingAdd] = useState(false);
+  const [addModalError, setAddModalError] = useState<string | null>(null);
 
-  // Edit Role & Permissions Modal State
+  // Edit User, Role & Permissions Modal State
   const [editTarget, setEditTarget] = useState<CrmUserSummary | null>(null);
+  const [editName, setEditName] = useState("");
   const [editRole, setEditRole] = useState<CanonicalCrmRole>("viewer");
   const [editPermSet, setEditPermSet] = useState<Set<PermissionKey>>(new Set());
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editModalError, setEditModalError] = useState<string | null>(null);
 
   // Status Mutation Modal State
   const [statusTarget, setStatusTarget] = useState<{
@@ -96,32 +124,59 @@ export default function AdminUsers() {
     nextStatus: AccountStatus;
   } | null>(null);
   const [savingStatus, setSavingStatus] = useState(false);
+  const [statusModalError, setStatusModalError] = useState<string | null>(null);
 
   // Permanent Delete Modal State
   const [deleteTarget, setDeleteTarget] = useState<CrmUserSummary | null>(null);
   const [deletingUser, setDeletingUser] = useState(false);
+  const [deleteModalError, setDeleteModalError] = useState<string | null>(null);
 
   const canInvite = isSuperAdmin || hasPermission("user_management:invite");
-  const canEdit = isSuperAdmin || hasPermission(["user_management:edit", "user_management:assign_permissions"]);
+  const canEditDetails = isSuperAdmin || hasPermission("user_management:edit");
+  const canAssignPermissions = isSuperAdmin || hasPermission("user_management:assign_permissions");
+  const canEdit = canEditDetails || canAssignPermissions;
   const canDeactivate = isSuperAdmin || hasPermission("user_management:deactivate");
+  const canDelete = isSuperAdmin || hasPermission(["user_management:delete", "user_management:deactivate"]);
 
-  const extractFnError = async (err: any, data: any): Promise<string> => {
-    if (data?.error) return String(data.error);
+  const extractFnDetails = async (
+    err: any,
+    data: any
+  ): Promise<{ message: string; statusCode?: number }> => {
+    const statusCode =
+      typeof err?.context?.status === "number" ? err.context.status : undefined;
+
+    if (data?.error) {
+      return { message: String(data.error), statusCode };
+    }
     if (err?.context && typeof err.context.json === "function") {
       try {
-        const cloned = typeof err.context.clone === "function" ? err.context.clone() : err.context;
+        const cloned =
+          typeof err.context.clone === "function" ? err.context.clone() : err.context;
         const body = await cloned.json();
-        if (body?.error) return String(body.error);
+        if (body?.error) {
+          return { message: String(body.error), statusCode };
+        }
+        if (body?.message) {
+          return { message: String(body.message), statusCode };
+        }
       } catch {
-        // ignore
+        // ignore non-JSON body
       }
     }
-    return err?.message || "Edge Function request failed.";
+    return {
+      message: err?.message || "Edge Function request failed.",
+      statusCode,
+    };
+  };
+
+  const extractFnError = async (err: any, data: any): Promise<string> => {
+    const { message } = await extractFnDetails(err, data);
+    return message;
   };
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
-    setBackendWarning(null);
+    setBackendError(null);
     try {
       const { data, error } = await supabase.functions.invoke("manage-crm-users", {
         body: { action: "list_users" },
@@ -130,84 +185,48 @@ export default function AdminUsers() {
       if (!error && data?.ok) {
         setUsers(Array.isArray(data.users) ? data.users : []);
         setInvitations(Array.isArray(data.invitations) ? data.invitations : []);
-        setLoading(false);
+        setBackendError(null);
         return;
       }
 
-      const fnMsg = await extractFnError(error, data);
-      if (fnMsg.includes("404") || fnMsg.includes("Failed to send") || fnMsg.includes("NOT_FOUND")) {
-        setBackendWarning(
-          "The manage-crm-users Edge Function or RBAC migration is not yet deployed on Supabase. Displaying read-only fallback directory from user_roles/profiles."
-        );
-      } else {
-        setBackendWarning(fnMsg);
-      }
+      const { message, statusCode } = await extractFnDetails(error, data);
+      const isNotDeployedOrUnreachable =
+        statusCode === 404 ||
+        message.includes("404") ||
+        message.includes("NOT_FOUND") ||
+        message.includes("Requested function was not found") ||
+        message.includes("Failed to send a request to the Edge Function");
+
+      setUsers([]);
+      setInvitations([]);
+      setBackendError(
+        isNotDeployedOrUnreachable
+          ? {
+              title: "CRM User Management Backend Not Deployed or Unreachable",
+              statusCode,
+              message,
+              hint:
+                "Deploy the manage-crm-users Edge Function and apply migration 20261124000000_complete_crm_user_management_and_rbac_repair.sql on Supabase project cirreovughlncadrbvcn, then retry.",
+            }
+          : {
+              title: "CRM User Management Backend Error",
+              statusCode,
+              message,
+              hint:
+                statusCode === 401 || statusCode === 403
+                  ? "Verify that your account is an active CRM staff user with User Management permissions and that your session is valid."
+                  : "Verify that migration 20261124000000_complete_crm_user_management_and_rbac_repair.sql and manage-crm-users secrets are configured on Supabase.",
+            }
+      );
     } catch (err: any) {
-      setBackendWarning(err?.message || "Unable to invoke manage-crm-users Edge Function.");
-    }
-
-    // Read-only fallback from Supabase tables
-    try {
-      const [rolesRes, profilesRes, overridesRes, invitesRes] = await Promise.all([
-        supabase.from("user_roles").select("user_id, role, created_at"),
-        supabase.from("profiles").select("*"),
-        supabase.from("crm_user_permissions").select("user_id, permission_key, allowed"),
-        supabase.from("crm_invitations").select("*").order("invited_at", { ascending: false }),
-      ]);
-
-      const profMap = new Map<string, any>();
-      (profilesRes.data || []).forEach((p: any) => profMap.set(p.id, p));
-
-      const ovMap = new Map<string, { permission_key: string; allowed: boolean }[]>();
-      (overridesRes.data || []).forEach((ov: any) => {
-        const list = ovMap.get(ov.user_id) || [];
-        list.push({ permission_key: ov.permission_key, allowed: ov.allowed });
-        ovMap.set(ov.user_id, list);
+      setUsers([]);
+      setInvitations([]);
+      setBackendError({
+        title: "CRM User Management Backend Unavailable",
+        message: err?.message || "Unable to invoke manage-crm-users Edge Function.",
+        hint:
+          "Check network connectivity and confirm manage-crm-users is deployed with CORS/verify_jwt=false configured.",
       });
-
-      const rolePriority: Record<string, number> = {
-        super_admin: 100,
-        crm_admin: 90,
-        event_admin: 85,
-        esports_manager: 80,
-        score_operator: 75,
-        esports_entry_staff: 70,
-        registration_staff: 65,
-        checkin_staff: 60,
-        match_conductor: 55,
-        content_manager: 50,
-        participation_manager: 20,
-        viewer: 10,
-      };
-      const bestRoleByUser = new Map<string, any>();
-      (rolesRes.data || []).forEach((r: any) => {
-        const existing = bestRoleByUser.get(r.user_id);
-        if (!existing || (rolePriority[r.role] ?? 0) > (rolePriority[existing.role] ?? 0)) {
-          bestRoleByUser.set(r.user_id, r);
-        }
-      });
-
-      const merged: CrmUserSummary[] = Array.from(bestRoleByUser.values()).map((r: any) => {
-        const prof = profMap.get(r.user_id) || {};
-        return {
-          user_id: r.user_id,
-          email: prof.email || prof.display_name || `User ${String(r.user_id).slice(0, 8)}`,
-          full_name: prof.full_name || prof.display_name || null,
-          role: r.role as AdminRole,
-          account_status: (prof.account_status || "active") as AccountStatus,
-          created_at: r.created_at,
-          last_login_at: prof.last_login_at || null,
-          invited_at: prof.invited_at || null,
-          activated_at: prof.activated_at || null,
-          deactivated_at: prof.deactivated_at || null,
-          overrides: ovMap.get(r.user_id) || [],
-        };
-      });
-
-      setUsers(merged);
-      setInvitations((invitesRes.data as CrmInvitation[]) || []);
-    } catch {
-      // ignore fallback errors
     } finally {
       setLoading(false);
     }
@@ -241,23 +260,42 @@ export default function AdminUsers() {
     });
   }, [users, roleFilter, statusFilter, searchQuery]);
 
-  const handleOpenInvite = () => {
-    setInviteName("");
-    setInviteEmail("");
-    setInviteRole("registration_staff");
-    setInvitePermSet(new Set(ROLE_DEFAULT_PERMISSIONS.registration_staff));
-    setIsInviteOpen(true);
+  const filterPresetPermissionsForActor = useCallback(
+    (targetRole: CanonicalCrmRole): Set<PermissionKey> => {
+      const defaults = ROLE_DEFAULT_PERMISSIONS[targetRole] || [];
+      if (isSuperAdmin) {
+        return new Set<PermissionKey>(defaults);
+      }
+      return new Set<PermissionKey>(defaults.filter((perm) => permissions.has(perm)));
+    },
+    [isSuperAdmin, permissions]
+  );
+
+  const handleOpenAddUser = () => {
+    setAddMode("direct");
+    setAddName("");
+    setAddEmail("");
+    setAddPassword("");
+    setAddConfirmPassword("");
+    setShowAddPassword(false);
+    setShowAddConfirmPassword(false);
+    setAddRole("registration_staff");
+    setAddPermSet(filterPresetPermissionsForActor("registration_staff"));
+    setAddModalError(null);
+    setIsAddOpen(true);
   };
 
-  const handleInviteRoleChange = (nextRole: CanonicalCrmRole) => {
-    setInviteRole(nextRole);
-    setInvitePermSet(new Set(ROLE_DEFAULT_PERMISSIONS[nextRole]));
+  const handleAddRoleChange = (nextRole: CanonicalCrmRole) => {
+    if (!isSuperAdmin && nextRole === "super_admin") return;
+    setAddRole(nextRole);
+    setAddPermSet(filterPresetPermissionsForActor(nextRole));
   };
 
   const togglePermissionInSet = (
     setter: React.Dispatch<React.SetStateAction<Set<PermissionKey>>>,
     perm: PermissionKey
   ) => {
+    if (!isSuperAdmin && !permissions.has(perm)) return;
     setter((prev) => {
       const next = new Set(prev);
       if (next.has(perm)) next.delete(perm);
@@ -283,25 +321,47 @@ export default function AdminUsers() {
     return overrides;
   };
 
-  const handleSendInvite = async (e: React.FormEvent) => {
+  const handleCreateOrInviteUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAddModalError(null);
     setStatusMsg(null);
-    const cleanEmail = inviteEmail.trim().toLowerCase();
-    if (!cleanEmail || !inviteName.trim()) {
-      setStatusMsg({ type: "error", text: "Full Name and valid Email Address are required." });
+
+    const validation = validateNewCrmUserInput({
+      mode: addMode,
+      fullName: addName,
+      email: addEmail,
+      password: addPassword,
+      confirmPassword: addConfirmPassword,
+      role: addRole,
+      existingEmails: users.map((u) => u.email),
+      actorIsSuperAdmin: isSuperAdmin,
+      actorPermissions: permissions,
+      selectedPermissions: addPermSet,
+    });
+
+    if (!validation.ok) {
+      setAddModalError(validation.error);
       return;
     }
 
-    setSubmittingInvite(true);
+    setSubmittingAdd(true);
     try {
-      const customPermissions = computeOverridesFromSet(inviteRole, invitePermSet);
+      const overridesObj = computeOverridesFromSet(addRole, addPermSet);
+      const redirectTo =
+        typeof window !== "undefined"
+          ? `${window.location.origin}/admin/login?type=invite`
+          : undefined;
+
       const { data, error } = await supabase.functions.invoke("manage-crm-users", {
         body: {
-          action: "invite_user",
-          fullName: inviteName.trim(),
-          email: cleanEmail,
-          role: inviteRole,
-          customPermissions,
+          action: addMode === "direct" ? "create_user" : "invite_user",
+          mode: addMode,
+          fullName: validation.normalizedName,
+          email: validation.normalizedEmail,
+          ...(addMode === "direct" ? { password: addPassword } : { redirectTo }),
+          role: addRole,
+          overrides: overridesObj,
+          customPermissions: overridesObj,
         },
       });
 
@@ -311,17 +371,17 @@ export default function AdminUsers() {
 
       setStatusMsg({
         type: "success",
-        text: `Invitation dispatched to ${cleanEmail} as ${ROLE_METADATA[inviteRole].label}.`,
+        text:
+          addMode === "direct"
+            ? `Created active CRM account for ${validation.normalizedEmail} (${ROLE_METADATA[addRole].label}). They can sign in immediately.`
+            : `Invitation dispatched to ${validation.normalizedEmail} as ${ROLE_METADATA[addRole].label}.`,
       });
-      setIsInviteOpen(false);
+      setIsAddOpen(false);
       await fetchUsers();
     } catch (err: any) {
-      setStatusMsg({
-        type: "error",
-        text: `Invitation failed: ${err?.message || "Unknown error"}`,
-      });
+      setAddModalError(err?.message || "Unable to create CRM staff account.");
     } finally {
-      setSubmittingInvite(false);
+      setSubmittingAdd(false);
     }
   };
 
@@ -329,68 +389,86 @@ export default function AdminUsers() {
     const canonical = normalizeRole(target.role) || "viewer";
     const effective = resolveEffectivePermissions(canonical, "active", target.overrides);
     setEditTarget(target);
+    setEditName(target.full_name || "");
     setEditRole(canonical);
     setEditPermSet(effective);
+    setEditModalError(null);
   };
 
   const handleEditRoleChange = (nextRole: CanonicalCrmRole) => {
+    if (!isSuperAdmin && nextRole === "super_admin") return;
     setEditRole(nextRole);
-    setEditPermSet(new Set(ROLE_DEFAULT_PERMISSIONS[nextRole]));
+    setEditPermSet(filterPresetPermissionsForActor(nextRole));
   };
 
   const handleSaveEdit = async () => {
     if (!editTarget || !user) return;
+    setEditModalError(null);
     setStatusMsg(null);
+
+    const targetIsSuper = normalizeRole(editTarget.role) === "super_admin";
+    if (targetIsSuper && !isSuperAdmin) {
+      setEditModalError("Only a Super Admin can modify a Super Admin account.");
+      return;
+    }
+
+    const trimmedName = editName.trim();
+    if (canEditDetails && (trimmedName.length < 2 || trimmedName.length > 120)) {
+      setEditModalError("Full Name must be between 2 and 120 characters.");
+      return;
+    }
 
     const guard = validateCrmUserMutation({
       actorId: user.id,
       targetUserId: editTarget.user_id,
-      nextRole: editRole,
+      nextRole: canEditDetails ? editRole : undefined,
       activeSuperAdminCount,
       targetCurrentRole: editTarget.role,
       targetCurrentStatus: editTarget.account_status,
     });
     if (!guard.ok) {
-      setStatusMsg({ type: "error", text: guard.error });
+      setEditModalError(guard.error);
       return;
+    }
+
+    if (canEditDetails || canAssignPermissions) {
+      const delegationCheck = canDelegateRoleAndPermissions({
+        actorIsSuperAdmin: isSuperAdmin,
+        actorPermissions: permissions,
+        targetRole: editRole,
+        selectedPermissions: editPermSet,
+      });
+      if (!delegationCheck.ok) {
+        setEditModalError(delegationCheck.error);
+        return;
+      }
     }
 
     setSavingEdit(true);
     try {
       const overridesObj = computeOverridesFromSet(editRole, editPermSet);
 
-      if (normalizeRole(editTarget.role) !== editRole) {
-        const { data: rData, error: rErr } = await supabase.functions.invoke("manage-crm-users", {
-          body: {
-            action: "update_user_role",
-            targetUserId: editTarget.user_id,
-            role: editRole,
-          },
-        });
-        if (rErr || !rData?.ok) throw new Error(await extractFnError(rErr, rData));
-      }
-
-      const { data: pData, error: pErr } = await supabase.functions.invoke("manage-crm-users", {
+      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
         body: {
-          action: "update_user_permissions",
+          action: "update_user",
           targetUserId: editTarget.user_id,
-          role: editRole,
-          overrides: overridesObj,
+          ...(canEditDetails ? { fullName: trimmedName, role: editRole } : {}),
+          ...(canAssignPermissions ? { overrides: overridesObj } : {}),
         },
       });
-      if (pErr || !pData?.ok) throw new Error(await extractFnError(pErr, pData));
+
+      if (error || !data?.ok) {
+        throw new Error(await extractFnError(error, data));
+      }
 
       setStatusMsg({
         type: "success",
-        text: `Updated role & permissions for ${editTarget.full_name || editTarget.email}.`,
+        text: `Updated access & profile for ${trimmedName || editTarget.email}.`,
       });
       setEditTarget(null);
       await fetchUsers();
     } catch (err: any) {
-      setStatusMsg({
-        type: "error",
-        text: `Failed to update user access: ${err?.message || "Unknown error"}`,
-      });
+      setEditModalError(err?.message || "Failed to update user access.");
     } finally {
       setSavingEdit(false);
     }
@@ -398,6 +476,13 @@ export default function AdminUsers() {
 
   const handleConfirmStatusChange = async () => {
     if (!statusTarget || !user) return;
+    setStatusModalError(null);
+
+    if (normalizeRole(statusTarget.user.role) === "super_admin" && !isSuperAdmin) {
+      setStatusModalError("Only a Super Admin can change the status of a Super Admin account.");
+      return;
+    }
+
     const guard = validateCrmUserMutation({
       actorId: user.id,
       targetUserId: statusTarget.user.user_id,
@@ -407,8 +492,7 @@ export default function AdminUsers() {
       targetCurrentStatus: statusTarget.user.account_status,
     });
     if (!guard.ok) {
-      setStatusMsg({ type: "error", text: guard.error });
-      setStatusTarget(null);
+      setStatusModalError(guard.error);
       return;
     }
 
@@ -434,10 +518,7 @@ export default function AdminUsers() {
       setStatusTarget(null);
       await fetchUsers();
     } catch (err: any) {
-      setStatusMsg({
-        type: "error",
-        text: `Failed to update status: ${err?.message || "Unknown error"}`,
-      });
+      setStatusModalError(err?.message || "Failed to update account status.");
     } finally {
       setSavingStatus(false);
     }
@@ -445,6 +526,13 @@ export default function AdminUsers() {
 
   const handleConfirmDeleteUser = async () => {
     if (!deleteTarget || !user) return;
+    setDeleteModalError(null);
+
+    if (normalizeRole(deleteTarget.role) === "super_admin" && !isSuperAdmin) {
+      setDeleteModalError("Only a Super Admin can permanently delete a Super Admin account.");
+      return;
+    }
+
     const guard = validateCrmUserMutation({
       actorId: user.id,
       targetUserId: deleteTarget.user_id,
@@ -454,8 +542,7 @@ export default function AdminUsers() {
       targetCurrentStatus: deleteTarget.account_status,
     });
     if (!guard.ok) {
-      setStatusMsg({ type: "error", text: guard.error });
-      setDeleteTarget(null);
+      setDeleteModalError(guard.error);
       return;
     }
 
@@ -480,14 +567,18 @@ export default function AdminUsers() {
       setDeleteTarget(null);
       await fetchUsers();
     } catch (err: any) {
-      setStatusMsg({
-        type: "error",
-        text: `Failed to delete account: ${err?.message || "Unknown error"}`,
-      });
+      setDeleteModalError(err?.message || "Failed to delete CRM account.");
     } finally {
       setDeletingUser(false);
     }
   };
+
+  const editTargetIsLastSuper = editTarget
+    ? isLastActiveSuperAdmin(editTarget.role, editTarget.account_status, activeSuperAdminCount)
+    : false;
+  const editTargetLockedByNonSuper = editTarget
+    ? normalizeRole(editTarget.role) === "super_admin" && !isSuperAdmin
+    : false;
 
   return (
     <div className="space-y-6">
@@ -496,14 +587,14 @@ export default function AdminUsers() {
         <div>
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-300">
-              Super Admin Security Console
+              RBAC & Staff Security Console
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight mt-1 mb-1">
             CRM User Management & RBAC
           </h1>
           <p className="text-xs sm:text-sm text-slate-500">
-            Invite authorized staff, assign operational roles, customize module permissions, and revoke access.
+            Create or invite authorized staff, assign operational roles, customize module permissions, and control access.
           </p>
         </div>
 
@@ -521,25 +612,21 @@ export default function AdminUsers() {
           {canInvite && (
             <button
               type="button"
-              onClick={handleOpenInvite}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+              onClick={handleOpenAddUser}
+              disabled={loading || Boolean(backendError)}
+              title={
+                backendError
+                  ? "Disabled until the manage-crm-users backend is deployed and reachable"
+                  : undefined
+              }
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <UserPlus size={14} />
-              <span>Invite CRM User</span>
+              <span>Add User</span>
             </button>
           )}
         </div>
       </div>
-
-      {backendWarning && (
-        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-xs flex items-start gap-2.5">
-          <ShieldAlert size={16} className="shrink-0 text-amber-600 mt-0.5" />
-          <div>
-            <p className="font-bold m-0">Backend Edge Function Notice</p>
-            <p className="m-0 mt-0.5 text-amber-900/90 leading-relaxed">{backendWarning}</p>
-          </div>
-        </div>
-      )}
 
       {statusMsg && (
         <div
@@ -558,6 +645,48 @@ export default function AdminUsers() {
           </button>
         </div>
       )}
+
+      {!loading && backendError ? (
+        <div className="bg-white border border-rose-200 rounded-2xl p-6 shadow-2xs space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 shrink-0">
+              <ShieldAlert size={20} />
+            </div>
+            <div className="space-y-1.5 min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-display font-black text-slate-900 m-0">
+                  {backendError.title}
+                </h2>
+                {backendError.statusCode !== undefined && (
+                  <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 font-mono text-[11px] font-bold">
+                    HTTP {backendError.statusCode}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs sm:text-sm text-rose-900 font-mono break-words m-0">
+                {backendError.message}
+              </p>
+              {backendError.hint && (
+                <p className="text-xs text-slate-600 leading-relaxed m-0 pt-1">
+                  {backendError.hint}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={fetchUsers}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
+            >
+              <RefreshCw size={13} />
+              <span>Retry Backend Connection</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
 
       {/* Summary Metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
@@ -656,6 +785,7 @@ export default function AdminUsers() {
                   const meta = ROLE_METADATA[canonical];
                   const effective = resolveEffectivePermissions(canonical, u.account_status, u.overrides);
                   const isSelf = user?.id === u.user_id;
+                  const targetLockedForNonSuper = canonical === "super_admin" && !isSuperAdmin;
                   const isLastSuper = isLastActiveSuperAdmin(
                     canonical,
                     u.account_status,
@@ -680,6 +810,27 @@ export default function AdminUsers() {
                     targetStatus: u.account_status,
                     activeSuperAdminCount,
                   });
+
+                  const editDisabledReason = isSelf
+                    ? "Self-modification is disabled by security policy"
+                    : targetLockedForNonSuper
+                    ? "Only a Super Admin can modify a Super Admin account"
+                    : "Edit Profile, Role & Permissions";
+
+                  const deactivateDisabledReason = targetLockedForNonSuper
+                    ? "Only a Super Admin can modify a Super Admin account"
+                    : deactivateCheck.reason || "Deactivate account";
+
+                  const reactivateDisabledReason = targetLockedForNonSuper
+                    ? "Only a Super Admin can modify a Super Admin account"
+                    : reactivateCheck.reason || "Reactivate account";
+
+                  const deleteDisabledReason = targetLockedForNonSuper
+                    ? "Only a Super Admin can delete a Super Admin account"
+                    : deleteCheck.reason ||
+                      (isLastSuper
+                        ? "Cannot delete the last active Super Admin"
+                        : "Permanently delete CRM account");
 
                   return (
                     <tr key={u.user_id} className="hover:bg-slate-50/80 transition-colors">
@@ -726,9 +877,9 @@ export default function AdminUsers() {
                       </td>
 
                       <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500 whitespace-nowrap">
-                        <div>Added: {new Date(u.created_at).toLocaleDateString("en-IN")}</div>
+                        <div>Added: {formatDisplayDate(u.created_at)}</div>
                         <div className="text-slate-400">
-                          Login: {u.last_login_at ? new Date(u.last_login_at).toLocaleDateString("en-IN") : "Never"}
+                          Login: {formatDisplayDate(u.last_login_at, "Never")}
                         </div>
                       </td>
 
@@ -737,13 +888,13 @@ export default function AdminUsers() {
                           {canEdit && (
                             <button
                               type="button"
-                              disabled={isSelf}
+                              disabled={isSelf || targetLockedForNonSuper}
                               onClick={() => handleOpenEdit(u)}
-                              title={isSelf ? "Self-modification is disabled by security policy" : "Edit Role & Permissions"}
+                              title={editDisabledReason}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                             >
                               <Edit3 size={12} />
-                              <span>Edit Access</span>
+                              <span>Edit</span>
                             </button>
                           )}
 
@@ -752,9 +903,12 @@ export default function AdminUsers() {
                               {u.account_status === "active" || u.account_status === "invited" ? (
                                 <button
                                   type="button"
-                                  disabled={!deactivateCheck.eligible}
-                                  onClick={() => setStatusTarget({ user: u, nextStatus: "deactivated" })}
-                                  title={deactivateCheck.reason || "Deactivate account"}
+                                  disabled={!deactivateCheck.eligible || targetLockedForNonSuper}
+                                  onClick={() => {
+                                    setStatusModalError(null);
+                                    setStatusTarget({ user: u, nextStatus: "deactivated" });
+                                  }}
+                                  title={deactivateDisabledReason}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                                 >
                                   <Ban size={12} />
@@ -763,32 +917,35 @@ export default function AdminUsers() {
                               ) : (
                                 <button
                                   type="button"
-                                  disabled={!reactivateCheck.eligible}
-                                  onClick={() => setStatusTarget({ user: u, nextStatus: "active" })}
-                                  title={reactivateCheck.reason || "Reactivate account"}
+                                  disabled={!reactivateCheck.eligible || targetLockedForNonSuper}
+                                  onClick={() => {
+                                    setStatusModalError(null);
+                                    setStatusTarget({ user: u, nextStatus: "active" });
+                                  }}
+                                  title={reactivateDisabledReason}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                                 >
                                   <UserCheck size={12} />
                                   <span>Reactivate</span>
                                 </button>
                               )}
-
-                              <button
-                                type="button"
-                                disabled={!deleteCheck.eligible}
-                                onClick={() => setDeleteTarget(u)}
-                                title={
-                                  deleteCheck.reason ||
-                                  (isLastSuper
-                                    ? "Cannot delete the last active Super Admin"
-                                    : "Permanently delete CRM account")
-                                }
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                              >
-                                <Trash2 size={12} />
-                                <span>Delete</span>
-                              </button>
                             </>
+                          )}
+
+                          {canDelete && (
+                            <button
+                              type="button"
+                              disabled={!deleteCheck.eligible || targetLockedForNonSuper}
+                              onClick={() => {
+                                setDeleteModalError(null);
+                                setDeleteTarget(u);
+                              }}
+                              title={deleteDisabledReason}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <Trash2 size={12} />
+                              <span>Delete</span>
+                            </button>
                           )}
                         </div>
                       </td>
@@ -825,21 +982,23 @@ export default function AdminUsers() {
                 <div className="font-mono text-[11px] text-slate-500 truncate">{inv.email}</div>
                 <div className="text-[11px] text-slate-600">
                   Role: <strong>{getRoleLabel(inv.role)}</strong> ·{" "}
-                  {new Date(inv.invited_at).toLocaleDateString("en-IN")}
+                  {formatDisplayDate(inv.invited_at || inv.created_at)}
                 </div>
               </div>
             ))}
           </div>
         </div>
       )}
+        </>
+      )}
 
-      {/* Invite User Modal */}
-      {isInviteOpen && (
+      {/* Add User Modal (Direct Provisioning + Email Invitation) */}
+      {isAddOpen && (
         <div
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setIsInviteOpen(false)}
+          onClick={() => !submittingAdd && setIsAddOpen(false)}
         >
           <div
             className="w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 space-y-5"
@@ -848,50 +1007,147 @@ export default function AdminUsers() {
             <div className="flex items-start justify-between pb-3 border-b border-slate-200">
               <div>
                 <h2 className="text-lg font-display font-black text-slate-900 m-0">
-                  Invite CRM Staff Member
+                  Add CRM Staff User
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Sends a Supabase Auth invitation email and assigns role + module permissions.
+                  Provision a CRM staff account directly with an initial password or dispatch an email invitation.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setIsInviteOpen(false)}
+                disabled={submittingAdd}
+                onClick={() => setIsAddOpen(false)}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleSendInvite} className="space-y-5">
+            {addModalError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-start gap-2">
+                <AlertTriangle size={15} className="shrink-0 text-rose-600 mt-0.5" />
+                <span>{addModalError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleCreateOrInviteUser} className="space-y-5">
+              {/* Provisioning Mode Tabs */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 p-1 bg-slate-100 rounded-xl border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddMode("direct");
+                    setAddModalError(null);
+                  }}
+                  className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    addMode === "direct"
+                      ? "bg-white text-slate-900 shadow-xs border border-slate-200"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  <KeyRound size={14} />
+                  <span>Create Account (Set Password)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddMode("invite");
+                    setAddModalError(null);
+                  }}
+                  className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    addMode === "invite"
+                      ? "bg-white text-slate-900 shadow-xs border border-slate-200"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  <Mail size={14} />
+                  <span>Send Email Invitation</span>
+                </button>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
-                    Full Name
+                    Full Name *
                   </label>
                   <input
                     type="text"
                     required
-                    value={inviteName}
-                    onChange={(e) => setInviteName(e.target.value)}
+                    value={addName}
+                    onChange={(e) => setAddName(e.target.value)}
                     placeholder="e.g. Ananya Rao"
                     className="w-full h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:bg-white focus:outline-hidden focus:border-blue-500"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
-                    Work / College Email
+                    Work / College Email *
                   </label>
                   <input
                     type="email"
                     required
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
+                    value={addEmail}
+                    onChange={(e) => setAddEmail(e.target.value)}
                     placeholder="coordinator@nationalcollege.edu"
                     className="w-full h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:bg-white focus:outline-hidden focus:border-blue-500"
                   />
                 </div>
               </div>
+
+              {addMode === "direct" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200/90">
+                  <div>
+                    <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                      Initial Password (Min 8 chars) *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showAddPassword ? "text" : "password"}
+                        required
+                        minLength={8}
+                        value={addPassword}
+                        onChange={(e) => setAddPassword(e.target.value)}
+                        placeholder="Enter initial password"
+                        autoComplete="new-password"
+                        className="w-full h-10 pl-3 pr-9 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 focus:outline-hidden focus:border-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowAddPassword((v) => !v)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                        aria-label={showAddPassword ? "Hide password" : "Show password"}
+                      >
+                        {showAddPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                      Confirm Password *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showAddConfirmPassword ? "text" : "password"}
+                        required
+                        minLength={8}
+                        value={addConfirmPassword}
+                        onChange={(e) => setAddConfirmPassword(e.target.value)}
+                        placeholder="Re-enter password"
+                        autoComplete="new-password"
+                        className="w-full h-10 pl-3 pr-9 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 focus:outline-hidden focus:border-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowAddConfirmPassword((v) => !v)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                        aria-label={showAddConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                      >
+                        {showAddConfirmPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold uppercase text-slate-700 mb-1.5">
@@ -900,16 +1156,21 @@ export default function AdminUsers() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {CANONICAL_ROLES.map((r) => {
                     const meta = ROLE_METADATA[r];
-                    const active = inviteRole === r;
+                    const active = addRole === r;
+                    const disabledRole = !isSuperAdmin && r === "super_admin";
                     return (
                       <button
                         key={r}
                         type="button"
-                        onClick={() => handleInviteRoleChange(r)}
-                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                          active
-                            ? "border-blue-600 bg-blue-50/70 ring-1 ring-blue-600"
-                            : "border-slate-200 bg-white hover:bg-slate-50"
+                        disabled={disabledRole}
+                        onClick={() => handleAddRoleChange(r)}
+                        title={disabledRole ? "Only Super Admins can assign the Super Admin role" : undefined}
+                        className={`p-3 rounded-xl border text-left transition-all ${
+                          disabledRole
+                            ? "border-slate-200 bg-slate-100 opacity-50 cursor-not-allowed"
+                            : active
+                            ? "border-blue-600 bg-blue-50/70 ring-1 ring-blue-600 cursor-pointer"
+                            : "border-slate-200 bg-white hover:bg-slate-50 cursor-pointer"
                         }`}
                       >
                         <div className="flex items-center justify-between">
@@ -925,13 +1186,13 @@ export default function AdminUsers() {
                 </div>
               </div>
 
-              {/* 11-Module Permission Matrix */}
+              {/* 13-Module Permission Matrix */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold uppercase text-slate-700">
-                    Module Permission Matrix ({invitePermSet.size} / {ALL_PERMISSIONS.length} enabled)
+                    Module Permission Matrix ({addPermSet.size} / {ALL_PERMISSIONS.length} enabled)
                   </span>
-                  {inviteRole === "super_admin" && (
+                  {addRole === "super_admin" && (
                     <span className="text-[11px] font-mono text-slate-500">
                       Super Admin always holds full permissions
                     </span>
@@ -950,11 +1211,20 @@ export default function AdminUsers() {
                       </div>
                       <div className="flex flex-wrap gap-2 pt-1">
                         {group.permissions.map((perm) => {
-                          const checked = invitePermSet.has(perm.key);
+                          const checked = addPermSet.has(perm.key);
+                          const actorBlocked = !isSuperAdmin && !permissions.has(perm.key);
+                          const checkboxDisabled = addRole === "super_admin" || actorBlocked;
                           return (
                             <label
                               key={perm.key}
-                              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
+                              title={
+                                actorBlocked
+                                  ? "Your account does not hold this permission to delegate it"
+                                  : undefined
+                              }
+                              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[11px] font-medium ${
+                                checkboxDisabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
+                              } ${
                                 checked
                                   ? "bg-white border-blue-300 text-blue-900"
                                   : "bg-slate-100 border-slate-200 text-slate-500"
@@ -963,8 +1233,8 @@ export default function AdminUsers() {
                               <input
                                 type="checkbox"
                                 checked={checked}
-                                disabled={inviteRole === "super_admin"}
-                                onChange={() => togglePermissionInSet(setInvitePermSet, perm.key)}
+                                disabled={checkboxDisabled}
+                                onChange={() => togglePermissionInSet(setAddPermSet, perm.key)}
                                 className="accent-blue-600"
                               />
                               <span>{perm.label}</span>
@@ -980,17 +1250,24 @@ export default function AdminUsers() {
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-200">
                 <button
                   type="button"
-                  onClick={() => setIsInviteOpen(false)}
+                  disabled={submittingAdd}
+                  onClick={() => setIsAddOpen(false)}
                   className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingInvite}
+                  disabled={submittingAdd}
                   className="px-5 py-2 rounded-xl bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
                 >
-                  {submittingInvite ? "Sending Invitation..." : "Send Invitation Email"}
+                  {submittingAdd
+                    ? addMode === "direct"
+                      ? "Creating Account..."
+                      : "Sending Invitation..."
+                    : addMode === "direct"
+                    ? "Create Active CRM User"
+                    : "Send Invitation Email"}
                 </button>
               </div>
             </form>
@@ -998,13 +1275,13 @@ export default function AdminUsers() {
         </div>
       )}
 
-      {/* Edit Role & Permissions Modal */}
+      {/* Edit User, Role & Permissions Modal */}
       {editTarget && (
         <div
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setEditTarget(null)}
+          onClick={() => !savingEdit && setEditTarget(null)}
         >
           <div
             className="w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 space-y-5"
@@ -1013,12 +1290,13 @@ export default function AdminUsers() {
             <div className="flex items-start justify-between pb-3 border-b border-slate-200">
               <div>
                 <h2 className="text-lg font-display font-black text-slate-900 m-0">
-                  Edit Role & Permissions: {editTarget.full_name || editTarget.email}
+                  Edit Staff Account & Permissions: {editTarget.full_name || editTarget.email}
                 </h2>
                 <p className="text-xs text-slate-500 font-mono mt-0.5">{editTarget.email}</p>
               </div>
               <button
                 type="button"
+                disabled={savingEdit}
                 onClick={() => setEditTarget(null)}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
@@ -1026,80 +1304,130 @@ export default function AdminUsers() {
               </button>
             </div>
 
-            {normalizeRole(editTarget.role) === "super_admin" &&
-              editTarget.account_status === "active" &&
-              activeSuperAdminCount <= 1 && (
-                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center gap-2">
-                  <Lock size={14} className="shrink-0 text-amber-600" />
-                  <span>
-                    This user is the last active Super Admin. Role demotion is blocked to prevent administrative lockout.
-                  </span>
-                </div>
-              )}
+            {editModalError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-start gap-2">
+                <AlertTriangle size={15} className="shrink-0 text-rose-600 mt-0.5" />
+                <span>{editModalError}</span>
+              </div>
+            )}
 
-            <div>
-              <label className="block text-xs font-bold uppercase text-slate-700 mb-1.5">
-                Assigned CRM Role
-              </label>
-              <select
-                value={editRole}
-                disabled={
-                  normalizeRole(editTarget.role) === "super_admin" &&
-                  editTarget.account_status === "active" &&
-                  activeSuperAdminCount <= 1
-                }
-                onChange={(e) => handleEditRoleChange(e.target.value as CanonicalCrmRole)}
-                className="w-full h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-900"
-              >
-                {CANONICAL_ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    {ROLE_METADATA[r].label} — {ROLE_METADATA[r].description}
-                  </option>
-                ))}
-              </select>
+            {editTargetLockedByNonSuper && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center gap-2">
+                <Lock size={14} className="shrink-0 text-amber-600" />
+                <span>Only a Super Admin can modify a Super Admin account.</span>
+              </div>
+            )}
+
+            {editTargetIsLastSuper && !editTargetLockedByNonSuper && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center gap-2">
+                <Lock size={14} className="shrink-0 text-amber-600" />
+                <span>
+                  This user is the last active Super Admin. Role demotion is blocked to prevent administrative lockout.
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-700 mb-1.5">
+                  Staff Full Name
+                </label>
+                <input
+                  type="text"
+                  value={editName}
+                  disabled={!canEditDetails || editTargetLockedByNonSuper}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="Enter full name"
+                  className="w-full h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-900 disabled:opacity-60"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-700 mb-1.5">
+                  Assigned CRM Role
+                </label>
+                <select
+                  value={editRole}
+                  disabled={!canEditDetails || editTargetLockedByNonSuper || editTargetIsLastSuper}
+                  onChange={(e) => handleEditRoleChange(e.target.value as CanonicalCrmRole)}
+                  className="w-full h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-900 disabled:opacity-60"
+                >
+                  {CANONICAL_ROLES.map((r) => (
+                    <option key={r} value={r} disabled={!isSuperAdmin && r === "super_admin"}>
+                      {ROLE_METADATA[r].label} — {ROLE_METADATA[r].description}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {PERMISSION_GROUPS.map((group) => (
-                <div
-                  key={group.id}
-                  className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2"
-                >
-                  <div>
-                    <div className="text-xs font-bold text-slate-900">{group.label}</div>
-                    <div className="text-[11px] text-slate-500">{group.description}</div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase text-slate-700">
+                  Effective Module Permissions ({editPermSet.size} / {ALL_PERMISSIONS.length})
+                </span>
+                {!canAssignPermissions && (
+                  <span className="text-[11px] font-mono text-amber-700">
+                    Read-only: missing Assign Permissions privilege
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {PERMISSION_GROUPS.map((group) => (
+                  <div
+                    key={group.id}
+                    className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2"
+                  >
+                    <div>
+                      <div className="text-xs font-bold text-slate-900">{group.label}</div>
+                      <div className="text-[11px] text-slate-500">{group.description}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {group.permissions.map((perm) => {
+                        const checked = editPermSet.has(perm.key);
+                        const actorBlocked = !isSuperAdmin && !permissions.has(perm.key);
+                        const checkboxDisabled =
+                          !canAssignPermissions ||
+                          editRole === "super_admin" ||
+                          editTargetLockedByNonSuper ||
+                          actorBlocked;
+                        return (
+                          <label
+                            key={perm.key}
+                            title={
+                              actorBlocked
+                                ? "Your account does not hold this permission to assign it"
+                                : undefined
+                            }
+                            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[11px] font-medium ${
+                              checkboxDisabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
+                            } ${
+                              checked
+                                ? "bg-white border-blue-300 text-blue-900"
+                                : "bg-slate-100 border-slate-200 text-slate-500"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={checkboxDisabled}
+                              onChange={() => togglePermissionInSet(setEditPermSet, perm.key)}
+                              className="accent-blue-600"
+                            />
+                            <span>{perm.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {group.permissions.map((perm) => {
-                      const checked = editPermSet.has(perm.key);
-                      return (
-                        <label
-                          key={perm.key}
-                          className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[11px] font-medium cursor-pointer ${
-                            checked
-                              ? "bg-white border-blue-300 text-blue-900"
-                              : "bg-slate-100 border-slate-200 text-slate-500"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={editRole === "super_admin"}
-                            onChange={() => togglePermissionInSet(setEditPermSet, perm.key)}
-                            className="accent-blue-600"
-                          />
-                          <span>{perm.label}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-200">
               <button
                 type="button"
+                disabled={savingEdit}
                 onClick={() => setEditTarget(null)}
                 className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
               >
@@ -1107,11 +1435,11 @@ export default function AdminUsers() {
               </button>
               <button
                 type="button"
-                disabled={savingEdit}
+                disabled={savingEdit || editTargetLockedByNonSuper}
                 onClick={handleSaveEdit}
                 className="px-5 py-2 rounded-xl bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
               >
-                {savingEdit ? "Saving..." : "Save Role & Permissions"}
+                {savingEdit ? "Saving..." : "Save Changes"}
               </button>
             </div>
           </div>
@@ -1124,7 +1452,7 @@ export default function AdminUsers() {
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setStatusTarget(null)}
+          onClick={() => !savingStatus && setStatusTarget(null)}
         >
           <div
             className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 space-y-4"
@@ -1156,9 +1484,17 @@ export default function AdminUsers() {
               </div>
             </div>
 
+            {statusModalError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-start gap-2">
+                <AlertTriangle size={15} className="shrink-0 text-rose-600 mt-0.5" />
+                <span>{statusModalError}</span>
+              </div>
+            )}
+
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
+                disabled={savingStatus}
                 onClick={() => setStatusTarget(null)}
                 className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
               >
@@ -1227,6 +1563,13 @@ export default function AdminUsers() {
                 </p>
               </div>
             </div>
+
+            {deleteModalError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-start gap-2">
+                <AlertTriangle size={15} className="shrink-0 text-rose-600 mt-0.5" />
+                <span>{deleteModalError}</span>
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
               <button

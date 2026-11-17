@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   ALL_PERMISSIONS,
   canAccessAdminRoute,
+  canDelegateRoleAndPermissions,
   getCrmDeactivateEligibility,
   getCrmDeleteEligibility,
   getCrmReactivateEligibility,
@@ -13,6 +14,7 @@ import {
   normalizeRole,
   resolveEffectivePermissions,
   validateCrmUserMutation,
+  validateNewCrmUserInput,
 } from "./rbac.ts";
 
 describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
@@ -383,5 +385,139 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
       }).eligible,
       true
     );
+  });
+
+  it("Granular dashboard:view, tickets:*, and user_management:view/delete permissions & custom overrides", () => {
+    const viewerPerms = resolveEffectivePermissions("viewer", "active");
+    assert.equal(viewerPerms.has("dashboard:view"), true);
+    assert.equal(viewerPerms.has("tickets:view"), true);
+    assert.equal(viewerPerms.has("tickets:manage"), false);
+    assert.equal(canAccessAdminRoute("/admin", viewerPerms, "active"), true);
+    assert.equal(canAccessAdminRoute("/admin/checkin", viewerPerms, "active"), true);
+
+    const customNoDash = resolveEffectivePermissions("viewer", "active", [
+      { permission_key: "dashboard:view", allowed: false },
+      { permission_key: "reports:view", allowed: false },
+      { permission_key: "tickets:view", allowed: false },
+      { permission_key: "visitor:view", allowed: false },
+      { permission_key: "user_management:view", allowed: true },
+    ]);
+    assert.equal(canAccessAdminRoute("/admin", customNoDash, "active"), false);
+    assert.equal(canAccessAdminRoute("/admin/checkin", customNoDash, "active"), false);
+    assert.equal(canAccessAdminRoute("/admin/users", customNoDash, "active"), true);
+    assert.equal(getDefaultAdminRoute("viewer", customNoDash), "/admin/esports-registrations");
+  });
+
+  it("Delegation anti-escalation & Add User validation (direct password + invite modes)", () => {
+    const crmAdminPerms = resolveEffectivePermissions("crm_admin", "active");
+
+    assert.equal(
+      canDelegateRoleAndPermissions({
+        actorIsSuperAdmin: false,
+        actorPermissions: crmAdminPerms,
+        targetRole: "super_admin",
+        selectedPermissions: crmAdminPerms,
+      }).ok,
+      false
+    );
+
+    const escalatedSet = new Set(crmAdminPerms);
+    escalatedSet.add("system_settings:manage");
+    assert.equal(
+      canDelegateRoleAndPermissions({
+        actorIsSuperAdmin: false,
+        actorPermissions: crmAdminPerms,
+        targetRole: "crm_admin",
+        selectedPermissions: escalatedSet,
+      }).ok,
+      false
+    );
+
+    const staffSubset = resolveEffectivePermissions("registration_staff", "active");
+    assert.equal(
+      canDelegateRoleAndPermissions({
+        actorIsSuperAdmin: false,
+        actorPermissions: crmAdminPerms,
+        targetRole: "registration_staff",
+        selectedPermissions: staffSubset,
+      }).ok,
+      true
+    );
+
+    // Direct user creation validation
+    assert.equal(
+      validateNewCrmUserInput({
+        mode: "direct",
+        fullName: "Ananya Rao",
+        email: "ananya@college.edu",
+        password: "short",
+        confirmPassword: "short",
+        role: "registration_staff",
+        actorIsSuperAdmin: true,
+        actorPermissions: resolveEffectivePermissions("super_admin", "active"),
+        selectedPermissions: staffSubset,
+      }).ok,
+      false
+    );
+
+    assert.equal(
+      validateNewCrmUserInput({
+        mode: "direct",
+        fullName: "Ananya Rao",
+        email: "ananya@college.edu",
+        password: "StrongPassword123!",
+        confirmPassword: "DifferentPassword123!",
+        role: "registration_staff",
+        actorIsSuperAdmin: true,
+        actorPermissions: resolveEffectivePermissions("super_admin", "active"),
+        selectedPermissions: staffSubset,
+      }).ok,
+      false
+    );
+
+    assert.equal(
+      validateNewCrmUserInput({
+        mode: "direct",
+        fullName: "Ananya Rao",
+        email: "ananya@college.edu",
+        password: "StrongPassword123!",
+        confirmPassword: "StrongPassword123!",
+        role: "registration_staff",
+        existingEmails: ["ANANYA@college.edu"],
+        actorIsSuperAdmin: true,
+        actorPermissions: resolveEffectivePermissions("super_admin", "active"),
+        selectedPermissions: staffSubset,
+      }).ok,
+      false
+    );
+
+    const validDirect = validateNewCrmUserInput({
+      mode: "direct",
+      fullName: "  Ananya Rao  ",
+      email: "  Ananya@College.EDU  ",
+      password: "StrongPassword123!",
+      confirmPassword: "StrongPassword123!",
+      role: "registration_staff",
+      existingEmails: ["other@college.edu"],
+      actorIsSuperAdmin: true,
+      actorPermissions: resolveEffectivePermissions("super_admin", "active"),
+      selectedPermissions: staffSubset,
+    });
+    assert.equal(validDirect.ok, true);
+    if (validDirect.ok) {
+      assert.equal(validDirect.normalizedEmail, "ananya@college.edu");
+      assert.equal(validDirect.normalizedName, "Ananya Rao");
+    }
+
+    const validInvite = validateNewCrmUserInput({
+      mode: "invite",
+      fullName: "Vikram Desai",
+      email: "vikram@college.edu",
+      role: "registration_staff",
+      actorIsSuperAdmin: true,
+      actorPermissions: resolveEffectivePermissions("super_admin", "active"),
+      selectedPermissions: staffSubset,
+    });
+    assert.equal(validInvite.ok, true);
   });
 });

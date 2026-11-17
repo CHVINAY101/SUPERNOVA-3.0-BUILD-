@@ -20,6 +20,12 @@ import {
   validateRegistrationStatusUpdate,
   validateSelectionUpdate,
 } from "@/lib/tournamentEngine";
+import {
+  filterEsportsPlayersDirectory,
+  flattenEsportsPlayersDirectory,
+  PLAYER_INSTITUTION_TYPES,
+} from "@/lib/esportsRegistrationControls";
+import { EsportsRegistrationControlPanel } from "@/components/admin/esports/EsportsRegistrationControlPanel";
 import { EMAIL_DELIVERY_ENABLED } from "@/lib/emailPayload";
 import type { Registration, RegistrationStatus, TeamStatusHistoryEntry, TicketRecord, TournamentSelectionStatus } from "@/types/database";
 import {
@@ -43,6 +49,9 @@ import {
   Smartphone,
   Trophy,
   History,
+  GraduationCap,
+  SlidersHorizontal,
+  Users,
 } from "lucide-react";
 
 export interface EsportsRegistrationItem {
@@ -70,6 +79,10 @@ export interface EsportsRegistrationItem {
     id: string;
     player_name: string;
     gamer_tag: string | null;
+    institution_type?: string | null;
+    institution_name?: string | null;
+    course_or_class?: string | null;
+    current_year_or_class?: string | null;
   }[];
 }
 
@@ -109,6 +122,13 @@ export default function AdminEsportsRegistrations() {
   const canExport = hasPermission("esports:export");
   const canResend = hasPermission("email_centre:resend");
 
+  const canManageGameControls = hasPermission([
+    "tournament:manage_games",
+    "esports:edit",
+    "system_settings:manage",
+  ]);
+
+  const [activeCrmTab, setActiveCrmTab] = useState<"teams" | "players" | "controls">("teams");
   const [registrations, setRegistrations] = useState<EsportsRegistrationItem[]>([]);
   const [historyByReg, setHistoryByReg] = useState<Record<string, TeamStatusHistoryEntry[]>>({});
   const [loading, setLoading] = useState(true);
@@ -118,6 +138,14 @@ export default function AdminEsportsRegistrations() {
   const [gameFilter, setGameFilter] = useState("all");
   const [rosterHealthFilter, setRosterHealthFilter] = useState<"all" | "valid" | "flagged">("all");
   const [viewScope, setViewScope] = useState<"active" | "archived" | "all">("active");
+
+  // Players & Educational Directory Filters
+  const [playerSearchQuery, setPlayerSearchQuery] = useState("");
+  const [playerGameFilter, setPlayerGameFilter] = useState("all");
+  const [playerInstTypeFilter, setPlayerInstTypeFilter] = useState("all");
+  const [playerInstNameFilter, setPlayerInstNameFilter] = useState("");
+  const [playerCourseFilter, setPlayerCourseFilter] = useState("");
+  const [playerYearFilter, setPlayerYearFilter] = useState("");
 
   // Selected for Drawer
   const [selectedReg, setSelectedReg] = useState<ProcessedEsportsRegistration | null>(null);
@@ -152,11 +180,7 @@ export default function AdminEsportsRegistrations() {
             title,
             team_size
           ),
-          players (
-            id,
-            player_name,
-            gamer_tag
-          )
+          players (*)
         `)
         .order("submitted_at", { ascending: false });
 
@@ -756,7 +780,9 @@ export default function AdminEsportsRegistrations() {
       const playerMatch = r.players.some(
         (p) =>
           p.player_name.toLowerCase().includes(q) ||
-          (p.gamer_tag && p.gamer_tag.toLowerCase().includes(q))
+          (p.gamer_tag && p.gamer_tag.toLowerCase().includes(q)) ||
+          (p.institution_name && p.institution_name.toLowerCase().includes(q)) ||
+          (p.course_or_class && p.course_or_class.toLowerCase().includes(q))
       );
 
       return (
@@ -770,7 +796,36 @@ export default function AdminEsportsRegistrations() {
         playerMatch
       );
     });
-  }, [processedRegistrations, viewScope, statusFilter, gameFilter, rosterHealthFilter, searchQuery]);
+  }, [processedRegistrations, viewScope, statusFilter, selectionFilter, gameFilter, rosterHealthFilter, searchQuery]);
+
+  // Flattened & Filtered Esports Players Educational Directory
+  const allFlattenedPlayers = useMemo(
+    () => flattenEsportsPlayersDirectory(registrations),
+    [registrations]
+  );
+
+  const filteredPlayersDirectory = useMemo(
+    () =>
+      filterEsportsPlayersDirectory(allFlattenedPlayers, {
+        searchQuery: playerSearchQuery,
+        game: playerGameFilter,
+        institutionType: playerInstTypeFilter,
+        institutionName: playerInstNameFilter,
+        courseOrClass: playerCourseFilter,
+        currentYearOrClass: playerYearFilter,
+        includeArchived: viewScope !== "active",
+      }),
+    [
+      allFlattenedPlayers,
+      playerSearchQuery,
+      playerGameFilter,
+      playerInstTypeFilter,
+      playerInstNameFilter,
+      playerCourseFilter,
+      playerYearFilter,
+      viewScope,
+    ]
+  );
 
   // Aggregate Metrics
   const metrics = useMemo(() => {
@@ -803,14 +858,14 @@ export default function AdminEsportsRegistrations() {
     return { totalActive, confirmedActive, pendingActive, flaggedActive, archivedCount, valorant, bgmi, freefire };
   }, [processedRegistrations]);
 
-  // Export CSV
-  const handleExportCSV = () => {
-    const sanitizeCsv = (val: string | number | null | undefined): string => {
-      const str = String(val ?? "");
-      const safe = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
-      return `"${safe.replace(/"/g, '""')}"`;
-    };
+  // Export CSV (Teams or Players Directory)
+  const sanitizeCsv = (val: string | number | null | undefined): string => {
+    const str = String(val ?? "");
+    const safe = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
 
+  const handleExportCSV = () => {
     const headers = [
       "Registration Ref",
       "Game",
@@ -866,6 +921,50 @@ export default function AdminEsportsRegistrations() {
     link.setAttribute(
       "download",
       `supernova_esports_registrations_${new Date().toISOString().slice(0, 10)}.csv`
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportPlayersCSV = () => {
+    const headers = [
+      "Player Name",
+      "In-Game ID",
+      "Game",
+      "Team Name",
+      "Registration Ref",
+      "Team Status",
+      "Institution Type",
+      "Institution Name",
+      "Course / Class",
+      "Current Year / Class",
+      "Submitted At",
+    ];
+
+    const rows = filteredPlayersDirectory.map((p) =>
+      [
+        sanitizeCsv(p.playerName),
+        sanitizeCsv(p.gamerTag || "N/A"),
+        sanitizeCsv(p.gameTitle),
+        sanitizeCsv(p.teamName),
+        sanitizeCsv(p.registrationRef),
+        sanitizeCsv(p.teamStatus),
+        sanitizeCsv(p.institutionType || "Legacy / Not Provided"),
+        sanitizeCsv(p.institutionName || "Legacy / Not Provided"),
+        sanitizeCsv(p.courseOrClass || "Legacy / Not Provided"),
+        sanitizeCsv(p.currentYearOrClass || "Legacy / Not Provided"),
+        sanitizeCsv(p.submittedAt),
+      ].join(",")
+    );
+
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute(
+      "download",
+      `supernova_esports_players_education_${new Date().toISOString().slice(0, 10)}.csv`
     );
     document.body.appendChild(link);
     link.click();
@@ -957,6 +1056,247 @@ export default function AdminEsportsRegistrations() {
         </div>
       )}
 
+      {/* Primary Sub-Navigation Tabs: Teams / Players & Education / Registration Control */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-1.5 inline-flex flex-wrap items-center gap-1 shadow-2xs">
+        <button
+          type="button"
+          onClick={() => setActiveCrmTab("teams")}
+          className={`px-3.5 py-2 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeCrmTab === "teams"
+              ? "bg-slate-900 text-white shadow-2xs"
+              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          }`}
+        >
+          <Users size={14} />
+          <span>Team Registrations ({metrics.totalActive})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveCrmTab("players")}
+          className={`px-3.5 py-2 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer ${
+            activeCrmTab === "players"
+              ? "bg-slate-900 text-white shadow-2xs"
+              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          }`}
+        >
+          <GraduationCap size={14} />
+          <span>Players &amp; Education ({allFlattenedPlayers.filter((p) => !p.isArchived).length})</span>
+        </button>
+
+        {canManageGameControls && (
+          <button
+            type="button"
+            onClick={() => setActiveCrmTab("controls")}
+            className={`px-3.5 py-2 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeCrmTab === "controls"
+                ? "bg-purple-700 text-white shadow-2xs"
+                : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            }`}
+          >
+            <SlidersHorizontal size={14} />
+            <span>Esports Registration Control</span>
+          </button>
+        )}
+      </div>
+
+      {/* TAB 3: GAME-WISE REGISTRATION CONTROL */}
+      {activeCrmTab === "controls" && (
+        <EsportsRegistrationControlPanel onUpdated={fetchRegistrations} />
+      )}
+
+      {/* TAB 2: PLAYERS & EDUCATIONAL DETAILS DIRECTORY */}
+      {activeCrmTab === "players" && (
+        <div className="space-y-4">
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-base font-display font-black text-slate-900 m-0">
+                  Esports Players &amp; Educational Details Directory
+                </h2>
+                <p className="text-xs text-slate-500 m-0">
+                  Search and filter individual players across VALORANT, BGMI, and FREE FIRE by school/college type, institution name, course/class, and year.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 font-mono">
+                  Showing <strong className="text-slate-900">{filteredPlayersDirectory.length}</strong> players
+                </span>
+                {canExport && (
+                  <button
+                    type="button"
+                    onClick={handleExportPlayersCSV}
+                    disabled={filteredPlayersDirectory.length === 0}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+                  >
+                    <Download size={13} />
+                    <span>Export Players CSV</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5 pt-2 border-t border-slate-100">
+              <div className="relative lg:col-span-2">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                <input
+                  type="search"
+                  value={playerSearchQuery}
+                  onChange={(e) => setPlayerSearchQuery(e.target.value)}
+                  placeholder="Search player, gamer ID, team, ref..."
+                  className="w-full h-9 pl-9 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:bg-white focus:outline-hidden focus:border-blue-500"
+                />
+              </div>
+
+              <select
+                value={playerGameFilter}
+                onChange={(e) => setPlayerGameFilter(e.target.value)}
+                className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800"
+              >
+                <option value="all">All Games</option>
+                <option value="valorant">VALORANT</option>
+                <option value="bgmi">BGMI</option>
+                <option value="free fire">FREE FIRE</option>
+              </select>
+
+              <select
+                value={playerInstTypeFilter}
+                onChange={(e) => setPlayerInstTypeFilter(e.target.value)}
+                className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800"
+              >
+                <option value="all">School / College / Other</option>
+                {PLAYER_INSTITUTION_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+                <option value="Legacy">Legacy / Not Provided</option>
+              </select>
+
+              <input
+                type="text"
+                value={playerInstNameFilter}
+                onChange={(e) => setPlayerInstNameFilter(e.target.value)}
+                placeholder="Filter Institution Name..."
+                className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:bg-white focus:outline-hidden focus:border-blue-500"
+              />
+
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={playerCourseFilter}
+                  onChange={(e) => setPlayerCourseFilter(e.target.value)}
+                  placeholder="Course / Class"
+                  className="h-9 px-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:bg-white focus:outline-hidden focus:border-blue-500"
+                />
+                <input
+                  type="text"
+                  value={playerYearFilter}
+                  onChange={(e) => setPlayerYearFilter(e.target.value)}
+                  placeholder="Year / Class"
+                  className="h-9 px-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:bg-white focus:outline-hidden focus:border-blue-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-2xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 uppercase font-mono tracking-wider text-[11px]">
+                    <th className="py-3 px-4 font-semibold">Player Name</th>
+                    <th className="py-3 px-4 font-semibold">Game</th>
+                    <th className="py-3 px-4 font-semibold">Team Name</th>
+                    <th className="py-3 px-4 font-semibold">Institution Type</th>
+                    <th className="py-3 px-4 font-semibold">Institution Name</th>
+                    <th className="py-3 px-4 font-semibold">Course / Class</th>
+                    <th className="py-3 px-4 font-semibold">Current Year / Class</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-500 font-mono">
+                        Loading player rosters...
+                      </td>
+                    </tr>
+                  ) : filteredPlayersDirectory.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-500">
+                        No esports players match your current educational filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredPlayersDirectory.map((player) => {
+                      const parentReg = processedRegistrations.find((r) => r.id === player.registrationId);
+                      return (
+                        <tr
+                          key={player.id}
+                          onClick={() => parentReg && setSelectedReg(parentReg)}
+                          className="hover:bg-slate-50/80 transition-colors cursor-pointer"
+                        >
+                          <td className="py-3 px-4">
+                            <span className="font-bold text-slate-900 block">{player.playerName}</span>
+                            <span className="text-[11px] font-mono text-slate-500">
+                              {player.gamerTag || "No In-Game ID"}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-semibold text-slate-800 whitespace-nowrap">
+                            {player.gameTitle}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="font-semibold text-blue-700 block">{player.teamName}</span>
+                            <span className="text-[10px] font-mono text-slate-400">
+                              {player.registrationRef} · {player.teamStatus}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {player.institutionType ? (
+                              <span
+                                className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-mono font-bold border ${
+                                  player.institutionType === "School"
+                                    ? "bg-amber-50 text-amber-800 border-amber-200"
+                                    : player.institutionType === "College"
+                                    ? "bg-blue-50 text-blue-800 border-blue-200"
+                                    : "bg-slate-100 text-slate-700 border-slate-200"
+                                }`}
+                              >
+                                {player.institutionType}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-mono text-slate-400">Legacy / Not Provided</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-slate-800">
+                            {player.institutionName || (
+                              <span className="text-[11px] font-mono text-slate-400">Legacy / Not Provided</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-slate-700">
+                            {player.courseOrClass || (
+                              <span className="text-[11px] font-mono text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-slate-700 whitespace-nowrap">
+                            {player.currentYearOrClass || (
+                              <span className="text-[11px] font-mono text-slate-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 1: EXISTING TEAM REGISTRATIONS VIEW */}
+      {activeCrmTab === "teams" && (
+        <>
       {/* Filter and Search Bar */}
       <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-2xs space-y-3.5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1266,6 +1606,8 @@ export default function AdminEsportsRegistrations() {
           </table>
         </div>
       </div>
+        </>
+      )}
 
       {/* =========================================================================
           REQUIREMENT 6: LARGE, PROFESSIONAL TEAM DETAIL DRAWER / MODAL
@@ -1416,28 +1758,48 @@ export default function AdminEsportsRegistrations() {
                     <table className="w-full text-left text-xs border-collapse">
                       <thead>
                         <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-500 font-mono text-[11px] uppercase">
-                          <th className="py-2.5 px-3 w-14">Slot</th>
-                          <th className="py-2.5 px-3">Player Name</th>
-                          <th className="py-2.5 px-3">In-Game Tag / ID</th>
+                          <th className="py-2.5 px-3 w-12">Slot</th>
+                          <th className="py-2.5 px-3">Player &amp; In-Game ID</th>
+                          <th className="py-2.5 px-3">Educational Details</th>
                           <th className="py-2.5 px-3">Visitor Ticket</th>
                           <th className="py-2.5 px-3 text-right">Role</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {selectedReg.players.map((p, idx) => (
-                          <tr key={p.id || idx} className="hover:bg-slate-50">
+                          <tr key={p.id || idx} className="hover:bg-slate-50 align-top">
                             <td className="py-2.5 px-3 font-mono font-bold text-slate-500">
                               #{idx + 1}
                             </td>
-                            <td className="py-2.5 px-3 font-semibold text-slate-900">
-                              {p.player_name}
-                            </td>
-                            <td className="py-2.5 px-3 font-mono text-slate-600">
-                              <span className="bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                            <td className="py-2.5 px-3">
+                              <span className="font-semibold text-slate-900 block">{p.player_name}</span>
+                              <span className="inline-block mt-0.5 text-[11px] font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
                                 {p.gamer_tag || "Not provided"}
                               </span>
                             </td>
-                            <td className="py-2.5 px-3 font-mono text-xs font-bold text-blue-700">
+                            <td className="py-2.5 px-3 text-[11px]">
+                              {p.institution_type || p.institution_name || p.course_or_class || p.current_year_or_class ? (
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {p.institution_type && (
+                                      <span className="px-1.5 py-0.2 rounded bg-blue-50 text-blue-800 border border-blue-200 font-mono text-[10px] font-bold">
+                                        {p.institution_type}
+                                      </span>
+                                    )}
+                                    <span className="font-semibold text-slate-800">
+                                      {p.institution_name || "—"}
+                                    </span>
+                                  </div>
+                                  <div className="text-slate-600">
+                                    {p.course_or_class || "—"}
+                                    {p.current_year_or_class ? ` · ${p.current_year_or_class}` : ""}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="font-mono text-slate-400">Legacy / Not Provided</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-xs font-bold text-blue-700 whitespace-nowrap">
                               <span className="bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
                                 {selectedReg.registration_ref}-P{idx + 1}
                               </span>

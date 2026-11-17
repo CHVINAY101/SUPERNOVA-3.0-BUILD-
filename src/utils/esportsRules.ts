@@ -1,3 +1,8 @@
+import {
+  validatePlayerEducation,
+  type PlayerEducationErrors,
+} from "../lib/esportsRegistrationControls.ts";
+
 /**
  * SUPERNOVA 3.0 — OFFICIAL ESPORTS TOURNAMENT RULES & ROSTER SPECIFICATIONS
  * 
@@ -95,6 +100,15 @@ export function formatRosterSpec(gameTitle: string, registeredCount: number): {
 export interface PlayerInput {
   name: string;
   inGameId: string;
+  institutionType?: string;
+  institutionName?: string;
+  courseOrClass?: string;
+  currentYearOrClass?: string;
+}
+
+export interface PlayerFieldErrors extends PlayerEducationErrors {
+  name?: string;
+  inGameId?: string;
 }
 
 export interface RosterValidationResult {
@@ -102,7 +116,11 @@ export interface RosterValidationResult {
   expectedSize: number;
   actualSize: number;
   errorMessage?: string;
-  playerErrors: Record<number, { name?: string; inGameId?: string }>;
+  playerErrors: Record<number, PlayerFieldErrors>;
+}
+
+export interface ValidateRosterOptions {
+  requireEducation?: boolean;
 }
 
 /**
@@ -110,11 +128,13 @@ export interface RosterValidationResult {
  */
 export function validateEsportsRoster(
   gameTitle: string,
-  players: PlayerInput[]
+  players: PlayerInput[],
+  options: ValidateRosterOptions = {}
 ): RosterValidationResult {
   const expectedSize = getOfficialTeamSize(gameTitle);
   const actualSize = players.length;
-  const playerErrors: Record<number, { name?: string; inGameId?: string }> = {};
+  const playerErrors: Record<number, PlayerFieldErrors> = {};
+  const requireEducation = Boolean(options.requireEducation);
 
   if (actualSize !== expectedSize) {
     return {
@@ -131,7 +151,7 @@ export function validateEsportsRoster(
     const p = players[i];
     const pName = p?.name?.trim() || "";
     const pId = p?.inGameId?.trim() || "";
-    const errors: { name?: string; inGameId?: string } = {};
+    const errors: PlayerFieldErrors = {};
 
     if (!pName) {
       errors.name = `Player ${i + 1} full name is required.`;
@@ -149,14 +169,49 @@ export function validateEsportsRoster(
       hasFieldErrors = true;
     }
 
-    if (errors.name || errors.inGameId) {
+    if (requireEducation) {
+      const eduErrors = validatePlayerEducation(
+        {
+          institutionType: p?.institutionType,
+          institutionName: p?.institutionName,
+          courseOrClass: p?.courseOrClass,
+          currentYearOrClass: p?.currentYearOrClass,
+        },
+        i
+      );
+      if (
+        eduErrors.institutionType ||
+        eduErrors.institutionName ||
+        eduErrors.courseOrClass ||
+        eduErrors.currentYearOrClass
+      ) {
+        Object.assign(errors, eduErrors);
+        hasFieldErrors = true;
+      }
+    }
+
+    if (
+      errors.name ||
+      errors.inGameId ||
+      errors.institutionType ||
+      errors.institutionName ||
+      errors.courseOrClass ||
+      errors.currentYearOrClass
+    ) {
       playerErrors[i] = errors;
     }
   }
 
   if (hasFieldErrors) {
     const firstError = Object.values(playerErrors)[0];
-    const msg = firstError?.name || firstError?.inGameId || "Please complete all player information.";
+    const msg =
+      firstError?.name ||
+      firstError?.inGameId ||
+      firstError?.institutionType ||
+      firstError?.institutionName ||
+      firstError?.courseOrClass ||
+      firstError?.currentYearOrClass ||
+      "Please complete all player information.";
     return {
       isValid: false,
       expectedSize,
@@ -172,4 +227,11 @@ export function validateEsportsRoster(
     actualSize,
     playerErrors: {},
   };
+}
+
+export function validateEsportsRosterWithEducation(
+  gameTitle: string,
+  players: PlayerInput[]
+): RosterValidationResult {
+  return validateEsportsRoster(gameTitle, players, { requireEducation: true });
 }

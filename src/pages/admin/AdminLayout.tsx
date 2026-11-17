@@ -102,8 +102,10 @@ export default function AdminLayout() {
   const canVerifyTicket = hasPermission([
     "visitor:view",
     "esports:view",
+    "entry:view",
     "entry:scan_visitor",
     "entry:scan_esports",
+    "tickets:view",
   ]);
   const isDedicatedOps = isDedicatedOperationsRole(role);
 

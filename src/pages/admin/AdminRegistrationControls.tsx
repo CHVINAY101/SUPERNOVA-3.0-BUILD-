@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
+import { EsportsRegistrationControlPanel } from "@/components/admin/esports/EsportsRegistrationControlPanel";
 import type { RegistrationControl } from "@/types/database";
 import { CheckCircle2, AlertCircle, Save, Calendar, Clock, RefreshCw, X } from "lucide-react";
 
@@ -304,6 +305,9 @@ export default function AdminRegistrationControls() {
           })}
         </div>
       )}
+
+      {/* Game-Wise Esports Registration Control Section */}
+      <EsportsRegistrationControlPanel onUpdated={fetchControls} />
     </div>
   );
 }

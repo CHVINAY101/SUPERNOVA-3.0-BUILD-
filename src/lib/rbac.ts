@@ -15,6 +15,7 @@ export type AdminRole = CanonicalCrmRole | LegacyAdminRole;
 export type AccountStatus = "invited" | "active" | "deactivated" | "revoked";
 
 export type PermissionKey =
+  | "dashboard:view"
   | "visitor:view"
   | "visitor:create"
   | "visitor:edit"
@@ -34,6 +35,8 @@ export type PermissionKey =
   | "entry:issue_wristband"
   | "entry:override_checkin"
   | "entry:manage_wristbands"
+  | "tickets:view"
+  | "tickets:manage"
   | "tournament:manage_games"
   | "tournament:select_teams"
   | "tournament:build_bracket"
@@ -66,9 +69,11 @@ export type PermissionKey =
   | "email_centre:resend"
   | "reports:view"
   | "reports:export"
+  | "user_management:view"
   | "user_management:invite"
   | "user_management:edit"
   | "user_management:deactivate"
+  | "user_management:delete"
   | "user_management:assign_permissions"
   | "system_settings:view"
   | "system_settings:manage";
@@ -81,6 +86,12 @@ export interface PermissionGroupDefinition {
 }
 
 export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
+  {
+    id: "dashboard",
+    label: "CRM Dashboard",
+    description: "Main command center overview and live festival telemetry",
+    permissions: [{ key: "dashboard:view", label: "View Dashboard" }],
+  },
   {
     id: "visitor",
     label: "Visitor Registration",
@@ -95,8 +106,8 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
   },
   {
     id: "entry",
-    label: "Event Entry & Wristbands",
-    description: "QR scanning, gate verification, check-in, wristbands, and overrides",
+    label: "Event Entry, Tickets & Wristbands",
+    description: "QR scanning, gate verification, ticket management, check-in, wristbands, and overrides",
     permissions: [
       { key: "entry:view", label: "View Entry Desk" },
       { key: "entry:scan_visitor", label: "Scan Visitor Passes" },
@@ -106,6 +117,8 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
       { key: "entry:issue_wristband", label: "Issue Wristbands" },
       { key: "entry:override_checkin", label: "Supervisor Override" },
       { key: "entry:manage_wristbands", label: "Configure Wristbands" },
+      { key: "tickets:view", label: "View Tickets" },
+      { key: "tickets:manage", label: "Issue / Manage Tickets" },
     ],
   },
   {
@@ -205,11 +218,13 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
   {
     id: "user_management",
     label: "User Management",
-    description: "Invite CRM staff, edit roles, and revoke user access",
+    description: "View staff directory, add/invite CRM users, edit roles, deactivate, or delete accounts",
     permissions: [
-      { key: "user_management:invite", label: "Invite" },
-      { key: "user_management:edit", label: "Edit" },
-      { key: "user_management:deactivate", label: "Deactivate / Revoke" },
+      { key: "user_management:view", label: "View Directory" },
+      { key: "user_management:invite", label: "Add / Invite Users" },
+      { key: "user_management:edit", label: "Edit User & Role" },
+      { key: "user_management:deactivate", label: "Deactivate / Reactivate" },
+      { key: "user_management:delete", label: "Delete Account" },
       { key: "user_management:assign_permissions", label: "Assign Permissions" },
     ],
   },
@@ -227,6 +242,21 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
 export const ALL_PERMISSIONS: PermissionKey[] = PERMISSION_GROUPS.flatMap((g) =>
   g.permissions.map((p) => p.key)
 );
+
+export const ROLE_PRIORITY: Record<string, number> = {
+  super_admin: 100,
+  crm_admin: 90,
+  event_admin: 85,
+  esports_manager: 80,
+  score_operator: 75,
+  esports_entry_staff: 70,
+  registration_staff: 65,
+  checkin_staff: 60,
+  match_conductor: 55,
+  content_manager: 50,
+  participation_manager: 20,
+  viewer: 10,
+};
 
 export const ROLE_METADATA: Record<
   CanonicalCrmRole,
@@ -311,6 +341,7 @@ export function getRoleLabel(role: string | null | undefined): string {
 export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]> = {
   super_admin: [...ALL_PERMISSIONS],
   crm_admin: [
+    "dashboard:view",
     "visitor:view",
     "visitor:create",
     "visitor:edit",
@@ -323,6 +354,8 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "entry:checkin_esports",
     "entry:issue_wristband",
     "entry:override_checkin",
+    "tickets:view",
+    "tickets:manage",
     "esports:view",
     "esports:create",
     "esports:edit",
@@ -371,14 +404,19 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "entry:scan_visitor",
     "entry:checkin_visitor",
     "entry:issue_wristband",
+    "tickets:view",
+    "tickets:manage",
   ],
   esports_entry_staff: [
     "entry:view",
     "entry:scan_esports",
     "entry:checkin_esports",
     "entry:issue_wristband",
+    "tickets:view",
+    "tickets:manage",
   ],
   esports_manager: [
+    "dashboard:view",
     "esports:view",
     "esports:create",
     "esports:edit",
@@ -397,6 +435,8 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "conductor:submit_result",
     "conductor:report_dispute",
     "entry:scan_esports",
+    "tickets:view",
+    "tickets:manage",
     "reports:view",
   ],
   match_conductor: [
@@ -407,6 +447,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "conductor:report_dispute",
   ],
   content_manager: [
+    "dashboard:view",
     "announcements:view",
     "announcements:create",
     "announcements:edit",
@@ -424,8 +465,10 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "social_links:edit",
   ],
   viewer: [
+    "dashboard:view",
     "visitor:view",
     "esports:view",
+    "tickets:view",
     "announcements:view",
     "gallery:view",
     "event_info:view",
@@ -487,7 +530,12 @@ export function hasCrmPermission(
  * A route is permitted if the user holds AT LEAST ONE of the listed permissions.
  */
 export const ROUTE_PERMISSIONS: { prefix: string; exact?: boolean; anyOf: PermissionKey[]; label: string }[] = [
-  { prefix: "/admin", exact: true, anyOf: ALL_PERMISSIONS, label: "Dashboard" },
+  {
+    prefix: "/admin",
+    exact: true,
+    anyOf: ["dashboard:view", "reports:view", "system_settings:view"],
+    label: "Dashboard",
+  },
   {
     prefix: "/admin/checkin",
     anyOf: [
@@ -496,6 +544,8 @@ export const ROUTE_PERMISSIONS: { prefix: string; exact?: boolean; anyOf: Permis
       "entry:checkin_visitor",
       "entry:scan_esports",
       "entry:checkin_esports",
+      "tickets:view",
+      "tickets:manage",
       "visitor:view",
       "visitor:edit",
     ],
@@ -548,9 +598,11 @@ export const ROUTE_PERMISSIONS: { prefix: string; exact?: boolean; anyOf: Permis
   {
     prefix: "/admin/users",
     anyOf: [
+      "user_management:view",
       "user_management:invite",
       "user_management:edit",
       "user_management:deactivate",
+      "user_management:delete",
       "user_management:assign_permissions",
     ],
     label: "User Management",
@@ -568,7 +620,8 @@ export function canAccessAdminRoute(
 
   const normalizedPath = pathname.replace(/\/+$/, "") || "/admin";
   if (normalizedPath === "/admin") {
-    return effectivePermissions.size > 0;
+    const dashRoute = ROUTE_PERMISSIONS.find((r) => r.exact && r.prefix === "/admin");
+    return Boolean(dashRoute?.anyOf.some((p) => effectivePermissions.has(p)));
   }
 
   // Match longest prefix first (excluding exact /admin)
@@ -604,7 +657,11 @@ export function getDefaultAdminRoute(
   if (canonical === "match_conductor") {
     return "/admin/conductor-matches";
   }
-  if (effectivePermissions.has("reports:view") || effectivePermissions.has("system_settings:view")) {
+  if (
+    effectivePermissions.has("dashboard:view") ||
+    effectivePermissions.has("reports:view") ||
+    effectivePermissions.has("system_settings:view")
+  ) {
     return "/admin";
   }
   const firstPermitted = ROUTE_PERMISSIONS.find(
@@ -719,4 +776,86 @@ export function validateCrmUserMutation(
   }
 
   return { ok: true };
+}
+
+export const CRM_EMAIL_REGEX =
+  /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/;
+
+export function canDelegateRoleAndPermissions(params: {
+  actorIsSuperAdmin: boolean;
+  actorPermissions: Set<PermissionKey>;
+  targetRole: string | null | undefined;
+  selectedPermissions: Set<PermissionKey>;
+}): { ok: true } | { ok: false; error: string } {
+  if (params.actorIsSuperAdmin) return { ok: true };
+  const canonical = normalizeRole(params.targetRole);
+  if (!canonical) {
+    return { ok: false, error: "Invalid CRM role specified." };
+  }
+  if (canonical === "super_admin") {
+    return { ok: false, error: "Only a Super Admin can assign or create Super Admin accounts." };
+  }
+  for (const perm of params.selectedPermissions) {
+    if (!params.actorPermissions.has(perm)) {
+      return {
+        ok: false,
+        error: `Cannot grant "${perm}" because your own CRM account does not hold it.`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+export function validateNewCrmUserInput(params: {
+  mode: "direct" | "invite";
+  fullName: string;
+  email: string;
+  password?: string;
+  confirmPassword?: string;
+  role: string;
+  existingEmails?: string[];
+  actorIsSuperAdmin: boolean;
+  actorPermissions: Set<PermissionKey>;
+  selectedPermissions: Set<PermissionKey>;
+}): { ok: true; normalizedEmail: string; normalizedName: string } | { ok: false; error: string } {
+  const normalizedName = params.fullName.trim();
+  const normalizedEmail = params.email.trim().toLowerCase();
+
+  if (normalizedName.length < 2 || normalizedName.length > 120) {
+    return { ok: false, error: "Full Name must be between 2 and 120 characters." };
+  }
+  if (!CRM_EMAIL_REGEX.test(normalizedEmail) || normalizedEmail.length > 254) {
+    return { ok: false, error: "Please enter a valid work or college email address." };
+  }
+  if (
+    params.existingEmails?.some((e) => e.trim().toLowerCase() === normalizedEmail)
+  ) {
+    return {
+      ok: false,
+      error: `A CRM account with email ${normalizedEmail} already exists.`,
+    };
+  }
+  if (!normalizeRole(params.role)) {
+    return { ok: false, error: "Please select a valid CRM operational role." };
+  }
+  if (params.mode === "direct") {
+    const pwd = params.password || "";
+    const confirmPwd = params.confirmPassword ?? pwd;
+    if (pwd.length < 8) {
+      return { ok: false, error: "Initial password must be at least 8 characters long." };
+    }
+    if (pwd !== confirmPwd) {
+      return { ok: false, error: "Passwords do not match." };
+    }
+  }
+
+  const delegationCheck = canDelegateRoleAndPermissions({
+    actorIsSuperAdmin: params.actorIsSuperAdmin,
+    actorPermissions: params.actorPermissions,
+    targetRole: params.role,
+    selectedPermissions: params.selectedPermissions,
+  });
+  if (!delegationCheck.ok) return delegationCheck;
+
+  return { ok: true, normalizedEmail, normalizedName };
 }

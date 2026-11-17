@@ -1,9 +1,10 @@
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import type { AdminRole, AccountStatus } from "@/types/database";
 import {
   ALL_PERMISSIONS,
+  ROLE_PRIORITY,
   canAccessAdminRoute,
   hasCrmPermission,
   normalizeRole,
@@ -69,20 +70,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<AdminRole | null>(null);
   const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
   const [permissions, setPermissions] = useState<Set<PermissionKey>>(new Set());
+  const sessionRef = useRef<Session | null>(null);
+  const lastFocusSyncRef = useRef<number>(0);
 
-  const applyUnauthenticatedState = () => {
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  const applyUnauthenticatedState = useCallback(() => {
     setIsAdmin(false);
     setRole(null);
     setAccountStatus(null);
     setPermissions(new Set());
-  };
+  }, []);
 
   /**
    * Authoritative database RBAC verification.
    * Prefers `get_my_crm_access()` SECURITY DEFINER RPC, with safe fallback when
    * earlier database schemas are active. Immediately blocks deactivated/revoked/invited users.
    */
-  const verifyAdminStatus = async (
+  const verifyAdminStatus = useCallback(async (
     userSession: Session | null
   ): Promise<{
     isAdmin: boolean;
@@ -145,12 +152,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data: roles, error: rolesError } = await supabase
           .from("user_roles")
           .select("role")
-          .eq("user_id", userId)
-          .limit(1);
+          .eq("user_id", userId);
 
-        if (!rolesError && roles && roles.length > 0 && roles[0].role) {
-          resolvedRole = roles[0].role as AdminRole;
-          hasLegacyAdmin = true;
+        if (!rolesError && Array.isArray(roles) && roles.length > 0) {
+          let bestRole: string | null = null;
+          let bestScore = -1;
+          for (const entry of roles) {
+            const candidate = String(entry.role || "");
+            const score = ROLE_PRIORITY[candidate] ?? 0;
+            if (candidate && score > bestScore) {
+              bestScore = score;
+              bestRole = candidate;
+            }
+          }
+          if (bestRole) {
+            resolvedRole = bestRole as AdminRole;
+            hasLegacyAdmin = true;
+          }
         }
       } catch {
         // ignore
@@ -185,12 +203,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // ignore
       }
 
-      // Only inspect metadata if no role was found AND account is not blocked
+      // Only inspect server-controlled app_metadata (never user-writable user_metadata)
       if (!hasLegacyAdmin && resolvedStatus === "active") {
         const appMetadata = userSession.user.app_metadata || {};
-        const userMetadata = userSession.user.user_metadata || {};
-        const assignedRole = String(appMetadata.role || userMetadata.role || "");
-        const isExplicitAdmin = Boolean(appMetadata.is_admin || userMetadata.is_admin);
+        const assignedRole = String(appMetadata.role || "");
+        const isExplicitAdmin = Boolean(appMetadata.is_admin);
 
         if (VALID_ROLES.includes(assignedRole as AdminRole)) {
           resolvedRole = assignedRole as AdminRole;
@@ -225,7 +242,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accountStatus: hasRole || resolvedStatus !== "active" ? resolvedStatus : null,
       permissions: effectiveSet,
     };
-  };
+  }, [applyUnauthenticatedState]);
 
   useEffect(() => {
     let isMounted = true;
@@ -266,11 +283,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (isMounted) setLoading(false);
     });
 
+    const handleWindowFocus = () => {
+      const current = sessionRef.current;
+      if (!current) return;
+      const now = Date.now();
+      if (now - lastFocusSyncRef.current < 15000) return;
+      lastFocusSyncRef.current = now;
+      void verifyAdminStatus(current);
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", handleWindowFocus);
+    }
+
     return () => {
       isMounted = false;
       listener.subscription.unsubscribe();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", handleWindowFocus);
+      }
     };
-  }, []);
+  }, [applyUnauthenticatedState, verifyAdminStatus]);
+
+  // Live RBAC & account status synchronization for the signed-in user
+  const activeUserId = session?.user?.id ?? null;
+  useEffect(() => {
+    if (!activeUserId) return;
+
+    const channel = supabase
+      .channel(`auth-rbac-sync-${activeUserId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "profiles", filter: `id=eq.${activeUserId}` },
+        () => {
+          if (sessionRef.current) void verifyAdminStatus(sessionRef.current);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "user_roles", filter: `user_id=eq.${activeUserId}` },
+        () => {
+          if (sessionRef.current) void verifyAdminStatus(sessionRef.current);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "crm_user_permissions",
+          filter: `user_id=eq.${activeUserId}`,
+        },
+        () => {
+          if (sessionRef.current) void verifyAdminStatus(sessionRef.current);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [activeUserId, verifyAdminStatus]);
 
   const signIn = async (email: string, password: string): Promise<SignInResult> => {
     setLoading(true);

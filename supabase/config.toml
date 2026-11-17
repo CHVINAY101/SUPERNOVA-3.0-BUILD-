@@ -3,8 +3,11 @@ project_id = "cirreovughlncadrbvcn"
 [functions.send-crm-email]
 verify_jwt = true
 
+# Caller JWT + active CRM role/permissions are strictly verified inside the function
+# via supabase.auth.getUser(token) + authoritative DB RBAC lookup. Keeping verify_jwt = false
+# avoids API gateway ES256/publishable-key pre-flight rejections and guarantees CORS headers.
 [functions.manage-crm-users]
-verify_jwt = true
+verify_jwt = false
 
 # Supports both authenticated admin resends / participation / esports emails
 # (validated via userClient.auth.getUser() + has_crm_permission inside the function)
