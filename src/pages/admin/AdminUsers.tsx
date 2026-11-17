@@ -138,12 +138,99 @@ export default function AdminUsers() {
   const canDeactivate = isSuperAdmin || hasPermission("user_management:deactivate");
   const canDelete = isSuperAdmin || hasPermission(["user_management:delete", "user_management:deactivate"]);
 
+  const invokeManageCrmUsers = useCallback(
+    async (
+      body: Record<string, unknown>
+    ): Promise<{ data: any; error: any; statusCode?: number }> => {
+      const apiKey = (
+        import.meta.env.VITE_SUPABASE_ANON_KEY ||
+        import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+        ""
+      ).trim();
+
+      let accessToken: string | null = null;
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        let activeSession = sessionData?.session ?? null;
+        if (
+          !activeSession?.access_token ||
+          (activeSession.expires_at && activeSession.expires_at * 1000 - Date.now() < 60_000)
+        ) {
+          const refreshed = await supabase.auth.refreshSession();
+          if (refreshed.data?.session) {
+            activeSession = refreshed.data.session;
+          }
+        }
+        accessToken = activeSession?.access_token ?? null;
+      } catch {
+        accessToken = null;
+      }
+
+      if (!accessToken) {
+        return {
+          data: { ok: false, error: "Your CRM session has expired. Please sign in again." },
+          error: { message: "Unauthorized: Missing or expired CRM session token", context: { status: 401 } },
+          statusCode: 401,
+        };
+      }
+
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${accessToken}`,
+      };
+      if (apiKey) {
+        headers.apikey = apiKey;
+      }
+
+      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
+        headers,
+        body,
+      });
+
+      let statusCode =
+        typeof (error as any)?.context?.status === "number"
+          ? (error as any).context.status
+          : undefined;
+
+      // When Edge Function is undeployed, browser CORS preflight fails with FunctionsFetchError
+      // ("Failed to send a request to the Edge Function"). Perform a read-only probe so the
+      // UI shows the accurate HTTP status (e.g. 404 NOT_FOUND) cleanly.
+      if (
+        error &&
+        statusCode === undefined &&
+        String(error?.message || "").includes("Failed to send a request to the Edge Function")
+      ) {
+        const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || "").replace(/\/+$/, "");
+        if (supabaseUrl) {
+          try {
+            const probeRes = await fetch(`${supabaseUrl}/functions/v1/manage-crm-users`, {
+              method: "POST",
+              headers: {
+                ...(apiKey ? { apikey: apiKey } : {}),
+                "Content-Type": "application/json",
+              },
+              body: "{}",
+            });
+            statusCode = probeRes.status;
+          } catch {
+            // Browser/network blocked probe as well
+          }
+        }
+      }
+
+      return { data, error, statusCode };
+    },
+    []
+  );
+
   const extractFnDetails = async (
     err: any,
-    data: any
+    data: any,
+    fallbackStatusCode?: number
   ): Promise<{ message: string; statusCode?: number }> => {
     const statusCode =
-      typeof err?.context?.status === "number" ? err.context.status : undefined;
+      typeof err?.context?.status === "number"
+        ? err.context.status
+        : fallbackStatusCode;
 
     if (data?.error) {
       return { message: String(data.error), statusCode };
@@ -160,7 +247,18 @@ export default function AdminUsers() {
           return { message: String(body.message), statusCode };
         }
       } catch {
-        // ignore non-JSON body
+        if (typeof err.context.text === "function") {
+          try {
+            const clonedTxt =
+              typeof err.context.clone === "function" ? err.context.clone() : err.context;
+            const textBody = await clonedTxt.text();
+            if (textBody) {
+              return { message: textBody.slice(0, 300), statusCode };
+            }
+          } catch {
+            // ignore non-text body
+          }
+        }
       }
     }
     return {
@@ -169,8 +267,12 @@ export default function AdminUsers() {
     };
   };
 
-  const extractFnError = async (err: any, data: any): Promise<string> => {
-    const { message } = await extractFnDetails(err, data);
+  const extractFnError = async (
+    err: any,
+    data: any,
+    fallbackStatusCode?: number
+  ): Promise<string> => {
+    const { message } = await extractFnDetails(err, data, fallbackStatusCode);
     return message;
   };
 
@@ -178,8 +280,8 @@ export default function AdminUsers() {
     setLoading(true);
     setBackendError(null);
     try {
-      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
-        body: { action: "list_users" },
+      const { data, error, statusCode: probedStatus } = await invokeManageCrmUsers({
+        action: "list_users",
       });
 
       if (!error && data?.ok) {
@@ -189,7 +291,7 @@ export default function AdminUsers() {
         return;
       }
 
-      const { message, statusCode } = await extractFnDetails(error, data);
+      const { message, statusCode } = await extractFnDetails(error, data, probedStatus);
       const isNotDeployedOrUnreachable =
         statusCode === 404 ||
         message.includes("404") ||
@@ -230,7 +332,7 @@ export default function AdminUsers() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [invokeManageCrmUsers]);
 
   useEffect(() => {
     fetchUsers();
@@ -352,21 +454,19 @@ export default function AdminUsers() {
           ? `${window.location.origin}/admin/login?type=invite`
           : undefined;
 
-      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
-        body: {
-          action: addMode === "direct" ? "create_user" : "invite_user",
-          mode: addMode,
-          fullName: validation.normalizedName,
-          email: validation.normalizedEmail,
-          ...(addMode === "direct" ? { password: addPassword } : { redirectTo }),
-          role: addRole,
-          overrides: overridesObj,
-          customPermissions: overridesObj,
-        },
+      const { data, error, statusCode } = await invokeManageCrmUsers({
+        action: addMode === "direct" ? "create_user" : "invite_user",
+        mode: addMode,
+        fullName: validation.normalizedName,
+        email: validation.normalizedEmail,
+        ...(addMode === "direct" ? { password: addPassword } : { redirectTo }),
+        role: addRole,
+        overrides: overridesObj,
+        customPermissions: overridesObj,
       });
 
       if (error || !data?.ok) {
-        throw new Error(await extractFnError(error, data));
+        throw new Error(await extractFnError(error, data, statusCode));
       }
 
       setStatusMsg({
@@ -432,11 +532,14 @@ export default function AdminUsers() {
     }
 
     if (canEditDetails || canAssignPermissions) {
+      const permissionsToValidate = canAssignPermissions
+        ? editPermSet
+        : new Set<PermissionKey>(ROLE_DEFAULT_PERMISSIONS[editRole] || []);
       const delegationCheck = canDelegateRoleAndPermissions({
         actorIsSuperAdmin: isSuperAdmin,
         actorPermissions: permissions,
         targetRole: editRole,
-        selectedPermissions: editPermSet,
+        selectedPermissions: permissionsToValidate,
       });
       if (!delegationCheck.ok) {
         setEditModalError(delegationCheck.error);
@@ -448,17 +551,15 @@ export default function AdminUsers() {
     try {
       const overridesObj = computeOverridesFromSet(editRole, editPermSet);
 
-      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
-        body: {
-          action: "update_user",
-          targetUserId: editTarget.user_id,
-          ...(canEditDetails ? { fullName: trimmedName, role: editRole } : {}),
-          ...(canAssignPermissions ? { overrides: overridesObj } : {}),
-        },
+      const { data, error, statusCode } = await invokeManageCrmUsers({
+        action: "update_user",
+        targetUserId: editTarget.user_id,
+        ...(canEditDetails ? { fullName: trimmedName, role: editRole } : {}),
+        ...(canAssignPermissions ? { overrides: overridesObj } : {}),
       });
 
       if (error || !data?.ok) {
-        throw new Error(await extractFnError(error, data));
+        throw new Error(await extractFnError(error, data, statusCode));
       }
 
       setStatusMsg({
@@ -499,16 +600,14 @@ export default function AdminUsers() {
     setSavingStatus(true);
     setStatusMsg(null);
     try {
-      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
-        body: {
-          action: "update_user_status",
-          targetUserId: statusTarget.user.user_id,
-          accountStatus: statusTarget.nextStatus,
-        },
+      const { data, error, statusCode } = await invokeManageCrmUsers({
+        action: "update_user_status",
+        targetUserId: statusTarget.user.user_id,
+        accountStatus: statusTarget.nextStatus,
       });
 
       if (error || !data?.ok) {
-        throw new Error(await extractFnError(error, data));
+        throw new Error(await extractFnError(error, data, statusCode));
       }
 
       setStatusMsg({
@@ -549,15 +648,13 @@ export default function AdminUsers() {
     setDeletingUser(true);
     setStatusMsg(null);
     try {
-      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
-        body: {
-          action: "delete_user",
-          targetUserId: deleteTarget.user_id,
-        },
+      const { data, error, statusCode } = await invokeManageCrmUsers({
+        action: "delete_user",
+        targetUserId: deleteTarget.user_id,
       });
 
       if (error || !data?.ok) {
-        throw new Error(await extractFnError(error, data));
+        throw new Error(await extractFnError(error, data, statusCode));
       }
 
       setStatusMsg({

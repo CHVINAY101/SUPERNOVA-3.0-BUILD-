@@ -1,10 +1,14 @@
 -- ==============================================================================
--- SUPERNOVA 3.0 — COMPLETE STANDALONE CRM USER MANAGEMENT & RBAC REPAIR
--- Migration: 20261124000000_complete_crm_user_management_and_rbac_repair.sql
--- Targets: https://cirreovughlncadrbvcn.supabase.co
--- Idempotent & Self-Contained: Safe to apply directly on production databases
--- regardless of whether 20261113 or 20261121 were previously executed.
--- Preserves all existing users, roles, registrations, check-ins, matches, and audit logs.
+-- SUPERNOVA 3.0 — BROWSER-ONLY CRM USER MANAGEMENT & RBAC SETUP (CRM_SETUP.sql)
+-- Target Supabase Project: cirreovughlncadrbvcn (https://cirreovughlncadrbvcn.supabase.co)
+--
+-- SAFE FOR PRODUCTION:
+--   * Idempotent: Safe to run multiple times in Supabase Dashboard -> SQL Editor.
+--   * Preserves ALL existing users, roles, permissions, registrations, tickets,
+--     check-ins, esports matches, and historical audit logs.
+--   * Enforces fail-closed RBAC across all helper functions, triggers, RPCs, and
+--     RLS policies.
+--   * Does NOT reset tables, disable RLS, or alter visitor/ticket/gate RPCs.
 -- ==============================================================================
 
 -- ------------------------------------------------------------------------------
@@ -59,7 +63,10 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_status text := coalesce(NEW.raw_app_meta_data->>'crm_initial_status', 'active');
+  v_status text := coalesce(
+    NEW.raw_app_meta_data->>'crm_initial_status',
+    CASE WHEN NEW.invited_at IS NOT NULL THEN 'invited' ELSE 'active' END
+  );
   v_name text := coalesce(nullif(trim(NEW.raw_user_meta_data->>'full_name'), ''), split_part(NEW.email, '@', 1));
 BEGIN
   IF v_status NOT IN ('invited', 'active', 'deactivated', 'revoked') THEN
@@ -111,6 +118,7 @@ ALTER TABLE public.user_roles
   ADD COLUMN IF NOT EXISTS assigned_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 
+ALTER TABLE public.user_roles DROP CONSTRAINT IF EXISTS user_roles_role_check;
 ALTER TABLE public.user_roles
   ADD CONSTRAINT user_roles_role_check
   CHECK (role IN (
@@ -129,7 +137,7 @@ ALTER TABLE public.user_roles
   ));
 
 -- ------------------------------------------------------------------------------
--- 3. Ensure Granular Permissions & Invitations Tables Exist
+-- 3. Ensure Granular Permissions, Invitations & Email Audit Tables Exist
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.crm_user_permissions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -188,6 +196,7 @@ BEGIN
   END LOOP;
 END $$;
 
+ALTER TABLE public.crm_invitations DROP CONSTRAINT IF EXISTS crm_invitations_role_check;
 ALTER TABLE public.crm_invitations
   ADD CONSTRAINT crm_invitations_role_check
   CHECK (role IN (
@@ -236,12 +245,13 @@ BEFORE INSERT ON public.crm_invitations
 FOR EACH ROW EXECUTE FUNCTION public._sync_crm_invitation_timestamps();
 
 -- ------------------------------------------------------------------------------
--- 4. Core RBAC Functions (SECURITY DEFINER, search_path = public)
+-- 4. Core Fail-Closed RBAC Functions (SECURITY DEFINER, search_path = public)
 -- ------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.normalize_crm_role(p_role text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
+SET search_path = public
 AS $$
   SELECT CASE p_role
     WHEN 'super_admin' THEN 'super_admin'
@@ -264,6 +274,7 @@ CREATE OR REPLACE FUNCTION public.role_default_permissions(p_role text)
 RETURNS text[]
 LANGUAGE sql
 IMMUTABLE
+SET search_path = public
 AS $$
   SELECT CASE public.normalize_crm_role(p_role)
     WHEN 'super_admin' THEN ARRAY[
@@ -335,6 +346,19 @@ AS $$
   END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.crm_is_valid_permission_key(p_permission text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public
+AS $$
+  SELECT p_permission IS NOT NULL
+    AND p_permission = ANY(public.role_default_permissions('super_admin'));
+$$;
+
+-- Preserves the original administrator scope of is_admin():
+-- ONLY active administrator roles (super_admin, crm_admin, event_admin).
+-- Requires an existing profile with account_status = 'active' (fail-closed).
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS boolean
 LANGUAGE sql
@@ -345,12 +369,14 @@ AS $$
   SELECT EXISTS (
     SELECT 1
     FROM public.user_roles ur
-    LEFT JOIN public.profiles p ON p.id = ur.user_id
+    JOIN public.profiles p ON p.id = ur.user_id
     WHERE ur.user_id = auth.uid()
-      AND coalesce(p.account_status, 'active') = 'active'
+      AND ur.role IN ('super_admin', 'crm_admin', 'event_admin')
+      AND p.account_status = 'active'
   );
 $$;
 
+-- Active Super Admin check (requires existing profile with account_status = 'active')
 CREATE OR REPLACE FUNCTION public.is_super_admin()
 RETURNS boolean
 LANGUAGE sql
@@ -361,13 +387,14 @@ AS $$
   SELECT EXISTS (
     SELECT 1
     FROM public.user_roles ur
-    LEFT JOIN public.profiles p ON p.id = ur.user_id
+    JOIN public.profiles p ON p.id = ur.user_id
     WHERE ur.user_id = auth.uid()
       AND ur.role = 'super_admin'
-      AND coalesce(p.account_status, 'active') = 'active'
+      AND p.account_status = 'active'
   );
 $$;
 
+-- Fail-closed permission check (requires existing profile, account_status = 'active', and valid CRM role)
 CREATE OR REPLACE FUNCTION public.has_crm_permission(p_permission text)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -382,14 +409,14 @@ DECLARE
   v_override boolean;
   v_defaults text[];
 BEGIN
-  IF v_uid IS NULL THEN
+  IF v_uid IS NULL OR NOT public.crm_is_valid_permission_key(p_permission) THEN
     RETURN false;
   END IF;
 
-  SELECT coalesce(p.account_status, 'active'), ur.role
+  SELECT p.account_status, ur.role
   INTO v_status, v_role
   FROM public.user_roles ur
-  LEFT JOIN public.profiles p ON p.id = ur.user_id
+  JOIN public.profiles p ON p.id = ur.user_id
   WHERE ur.user_id = v_uid
   ORDER BY CASE ur.role
     WHEN 'super_admin' THEN 100
@@ -408,7 +435,7 @@ BEGIN
   END DESC
   LIMIT 1;
 
-  IF v_role IS NULL OR v_status <> 'active' THEN
+  IF NOT FOUND OR v_role IS NULL OR public.normalize_crm_role(v_role) IS NULL OR v_status IS DISTINCT FROM 'active' THEN
     RETURN false;
   END IF;
 
@@ -460,10 +487,10 @@ BEGIN
     );
   END IF;
 
-  SELECT coalesce(p.account_status, 'active'), p.email, coalesce(p.full_name, p.display_name), ur.role
+  SELECT p.account_status, p.email, coalesce(p.full_name, p.display_name), ur.role
   INTO v_status, v_email, v_full_name, v_role
   FROM public.user_roles ur
-  LEFT JOIN public.profiles p ON p.id = ur.user_id
+  JOIN public.profiles p ON p.id = ur.user_id
   WHERE ur.user_id = v_uid
   ORDER BY CASE ur.role
     WHEN 'super_admin' THEN 100
@@ -482,7 +509,7 @@ BEGIN
   END DESC
   LIMIT 1;
 
-  IF v_role IS NULL THEN
+  IF NOT FOUND OR v_role IS NULL OR public.normalize_crm_role(v_role) IS NULL THEN
     SELECT p.account_status, p.email, coalesce(p.full_name, p.display_name)
     INTO v_status, v_email, v_full_name
     FROM public.profiles p
@@ -494,7 +521,7 @@ BEGIN
       'email', v_email,
       'full_name', v_full_name,
       'role', NULL,
-      'account_status', coalesce(v_status, 'active'),
+      'account_status', coalesce(v_status, 'revoked'),
       'is_active', false,
       'is_super_admin', false,
       'permissions', '[]'::jsonb,
@@ -503,14 +530,14 @@ BEGIN
     );
   END IF;
 
-  IF v_status <> 'active' THEN
+  IF v_status IS DISTINCT FROM 'active' THEN
     RETURN jsonb_build_object(
       'authenticated', true,
       'user_id', v_uid,
       'email', v_email,
       'full_name', v_full_name,
       'role', v_role,
-      'account_status', v_status,
+      'account_status', coalesce(v_status, 'revoked'),
       'is_active', false,
       'is_super_admin', false,
       'permissions', '[]'::jsonb,
@@ -537,6 +564,9 @@ BEGIN
       FROM public.crm_user_permissions
       WHERE user_id = v_uid
     LOOP
+      IF NOT public.crm_is_valid_permission_key(v_ov.permission_key) THEN
+        CONTINUE;
+      END IF;
       IF v_ov.allowed THEN
         IF NOT (v_ov.permission_key = ANY(v_effective)) THEN
           v_effective := array_append(v_effective, v_ov.permission_key);
@@ -563,6 +593,7 @@ BEGIN
 END;
 $$;
 
+-- Validates invitation status = 'pending' and expires_at > now() before activating profile
 CREATE OR REPLACE FUNCTION public.accept_crm_invite()
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -573,21 +604,72 @@ DECLARE
   v_uid uuid := auth.uid();
   v_email text;
   v_status text;
+  v_has_role boolean := false;
+  v_invite record;
 BEGIN
   IF v_uid IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'error', 'Not authenticated');
   END IF;
 
   SELECT lower(email) INTO v_email FROM auth.users WHERE id = v_uid;
-  SELECT account_status INTO v_status FROM public.profiles WHERE id = v_uid;
+  IF v_email IS NULL OR v_email = '' THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'Authenticated user email record not found');
+  END IF;
+
+  SELECT account_status INTO v_status
+  FROM public.profiles
+  WHERE id = v_uid
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_status IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'CRM staff profile not found');
+  END IF;
 
   IF v_status IN ('deactivated', 'revoked') THEN
     RETURN jsonb_build_object('ok', false, 'error', 'Account is deactivated or revoked');
   END IF;
 
-  PERFORM set_config('app.crm_self_activate', 'true', true);
+  IF v_status NOT IN ('invited', 'active') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'Invalid account status');
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.user_roles ur
+    WHERE ur.user_id = v_uid
+      AND public.normalize_crm_role(ur.role) IS NOT NULL
+  ) INTO v_has_role;
+
+  IF NOT v_has_role THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'No CRM staff role assigned to this account');
+  END IF;
 
   IF v_status = 'invited' THEN
+    UPDATE public.crm_invitations
+    SET status = 'expired'
+    WHERE lower(email) = v_email
+      AND status = 'pending'
+      AND expires_at <= now();
+
+    SELECT id, role, expires_at
+    INTO v_invite
+    FROM public.crm_invitations
+    WHERE lower(email) = v_email
+      AND status = 'pending'
+      AND expires_at > now()
+    ORDER BY created_at DESC
+    LIMIT 1
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object(
+        'ok', false,
+        'error', 'No valid pending invitation found or your CRM invitation has expired.'
+      );
+    END IF;
+
+    PERFORM set_config('app.crm_self_activate', 'true', true);
+
     UPDATE public.profiles
     SET
       account_status = 'active',
@@ -598,14 +680,22 @@ BEGIN
 
     UPDATE public.crm_invitations
     SET status = 'accepted', accepted_at = now()
-    WHERE lower(email) = v_email AND status = 'pending';
+    WHERE id = v_invite.id;
 
     INSERT INTO public.audit_logs (actor_id, action, entity_type, entity_id, metadata)
-    VALUES (v_uid, 'crm_invite_accepted', 'profiles', v_uid, jsonb_build_object('email', v_email, 'activated_at', now()));
+    VALUES (
+      v_uid,
+      'crm_invite_accepted',
+      'profiles',
+      v_uid,
+      jsonb_build_object('email', v_email, 'invitation_id', v_invite.id, 'activated_at', now())
+    );
   ELSE
+    PERFORM set_config('app.crm_self_activate', 'true', true);
+
     UPDATE public.profiles
     SET last_login_at = now(), updated_at = now()
-    WHERE id = v_uid;
+    WHERE id = v_uid AND account_status = 'active';
   END IF;
 
   RETURN jsonb_build_object('ok', true);
@@ -647,6 +737,54 @@ AS $$
     OR public.has_crm_permission('tickets:manage');
 $$;
 
+CREATE OR REPLACE FUNCTION public.is_content_admin()
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT public.has_crm_permission('event_info:edit')
+    OR public.has_crm_permission('announcements:edit')
+    OR public.has_crm_permission('gallery:edit')
+    OR public.has_crm_permission('system_settings:manage');
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_checkin_staff()
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT public.has_crm_permission('entry:checkin_visitor')
+    OR public.has_crm_permission('entry:checkin_esports')
+    OR public.has_crm_permission('visitor:edit')
+    OR public.has_crm_permission('esports:edit');
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_score_operator()
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT public.has_crm_permission('tournament:confirm_results')
+    OR public.has_crm_permission('esports:edit');
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_match_conductor()
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT public.has_crm_permission('conductor:view_assigned')
+    OR public.has_crm_permission('conductor:submit_result');
+$$;
+
 CREATE OR REPLACE FUNCTION public.has_any_user_management_permission()
 RETURNS boolean
 LANGUAGE sql
@@ -663,6 +801,80 @@ AS $$
     OR public.has_crm_permission('user_management:assign_permissions');
 $$;
 
+CREATE OR REPLACE FUNCTION public._gate_has_perm(p_perm text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT CASE
+    WHEN auth.uid() IS NULL THEN false
+    ELSE coalesce(public.has_crm_permission(p_perm), false)
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION public._gate_is_entry_staff()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT CASE
+    WHEN auth.uid() IS NULL THEN false
+    ELSE coalesce(public.is_entry_staff(), false)
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION public._can_perform_checkin(
+  p_subject_type text,
+  p_require_override boolean DEFAULT false
+)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN false;
+  END IF;
+
+  IF p_require_override THEN
+    RETURN public.has_crm_permission('entry:override_checkin');
+  END IF;
+
+  IF p_subject_type = 'visitor' THEN
+    RETURN public.has_crm_permission('entry:checkin_visitor')
+        OR public.has_crm_permission('visitor:edit');
+  ELSIF p_subject_type = 'esports_player' THEN
+    RETURN public.has_crm_permission('entry:checkin_esports')
+        OR public.has_crm_permission('esports:edit');
+  ELSE
+    RETURN public.has_crm_permission('entry:checkin_visitor')
+        OR public.has_crm_permission('esports:edit');
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public._esports_has_perm(p_perm text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT CASE
+    WHEN auth.uid() IS NULL THEN false
+    ELSE coalesce(public.has_crm_permission(p_perm), false)
+  END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.normalize_crm_role(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.role_default_permissions(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.crm_is_valid_permission_key(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.is_admin() FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.is_super_admin() FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.has_crm_permission(text) FROM PUBLIC, anon;
@@ -670,7 +882,15 @@ REVOKE EXECUTE ON FUNCTION public.get_my_crm_access() FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.accept_crm_invite() FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.record_crm_login() FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.is_entry_staff() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_content_admin() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_checkin_staff() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_score_operator() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.is_match_conductor() FROM PUBLIC, anon;
 REVOKE EXECUTE ON FUNCTION public.has_any_user_management_permission() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public._gate_has_perm(text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public._gate_is_entry_staff() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public._can_perform_checkin(text, boolean) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public._esports_has_perm(text) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.is_super_admin() TO authenticated;
@@ -679,10 +899,18 @@ GRANT EXECUTE ON FUNCTION public.get_my_crm_access() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.accept_crm_invite() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.record_crm_login() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.is_entry_staff() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_content_admin() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_checkin_staff() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_score_operator() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_match_conductor() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.has_any_user_management_permission() TO authenticated;
+GRANT EXECUTE ON FUNCTION public._gate_has_perm(text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public._gate_is_entry_staff() TO authenticated;
+-- Matches RLS policy runs for anon & authenticated; _esports_has_perm returns false immediately when auth.uid() IS NULL
+GRANT EXECUTE ON FUNCTION public._esports_has_perm(text) TO anon, authenticated;
 
 -- ------------------------------------------------------------------------------
--- 5. Database-Enforced Self-Edit & Last-Super-Admin Protection Triggers
+-- 5. Concurrency-Safe Database Guards (Self-Edit & Last-Super-Admin Lock)
 -- ------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.guard_crm_role_mutation()
 RETURNS trigger
@@ -709,13 +937,19 @@ BEGIN
   END IF;
 
   IF TG_OP IN ('UPDATE', 'DELETE') AND OLD.role = 'super_admin' THEN
-    SELECT coalesce(account_status, 'active') INTO v_target_status FROM public.profiles WHERE id = OLD.user_id;
-    IF coalesce(v_target_status, 'active') = 'active' AND (TG_OP = 'DELETE' OR NEW.role <> 'super_admin') THEN
+    PERFORM pg_advisory_xact_lock(hashtext('crm_super_admin_guard'));
+
+    SELECT account_status INTO v_target_status
+    FROM public.profiles
+    WHERE id = OLD.user_id
+    FOR UPDATE;
+
+    IF v_target_status = 'active' AND (TG_OP = 'DELETE' OR NEW.role <> 'super_admin') THEN
       SELECT count(DISTINCT ur.user_id) INTO v_active_super_count
       FROM public.user_roles ur
-      LEFT JOIN public.profiles p ON p.id = ur.user_id
+      JOIN public.profiles p ON p.id = ur.user_id
       WHERE ur.role = 'super_admin'
-        AND coalesce(p.account_status, 'active') = 'active'
+        AND p.account_status = 'active'
         AND ur.user_id <> OLD.user_id;
 
       IF v_active_super_count < 1 THEN
@@ -764,6 +998,10 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  IF NOT public.crm_is_valid_permission_key(NEW.permission_key) THEN
+    RAISE EXCEPTION 'Invalid CRM permission key: %', NEW.permission_key USING ERRCODE = '22023';
+  END IF;
+
   NEW.updated_at := now();
   RETURN NEW;
 END;
@@ -798,6 +1036,8 @@ BEGIN
     END IF;
 
     IF OLD.account_status = 'active' AND NEW.account_status <> 'active' THEN
+      PERFORM pg_advisory_xact_lock(hashtext('crm_super_admin_guard'));
+
       SELECT EXISTS (
         SELECT 1 FROM public.user_roles WHERE user_id = OLD.id AND role = 'super_admin'
       ) INTO v_is_super;
@@ -805,9 +1045,9 @@ BEGIN
       IF v_is_super THEN
         SELECT count(DISTINCT ur.user_id) INTO v_active_super_count
         FROM public.user_roles ur
-        LEFT JOIN public.profiles p ON p.id = ur.user_id
+        JOIN public.profiles p ON p.id = ur.user_id
         WHERE ur.role = 'super_admin'
-          AND coalesce(p.account_status, 'active') = 'active'
+          AND p.account_status = 'active'
           AND ur.user_id <> OLD.id;
 
         IF v_active_super_count < 1 THEN
@@ -857,7 +1097,9 @@ BEGIN
     END IF;
   END IF;
 
-  IF coalesce(OLD.account_status, 'active') = 'active' THEN
+  IF OLD.account_status = 'active' THEN
+    PERFORM pg_advisory_xact_lock(hashtext('crm_super_admin_guard'));
+
     SELECT EXISTS (
       SELECT 1 FROM public.user_roles WHERE user_id = OLD.id AND role = 'super_admin'
     ) INTO v_is_super;
@@ -865,9 +1107,9 @@ BEGIN
     IF v_is_super THEN
       SELECT count(DISTINCT ur.user_id) INTO v_active_super_count
       FROM public.user_roles ur
-      LEFT JOIN public.profiles p ON p.id = ur.user_id
+      JOIN public.profiles p ON p.id = ur.user_id
       WHERE ur.role = 'super_admin'
-        AND coalesce(p.account_status, 'active') = 'active'
+        AND p.account_status = 'active'
         AND ur.user_id <> OLD.id;
 
       IF v_active_super_count < 1 THEN
@@ -901,7 +1143,566 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------------------------
--- 6. Preserve Historical Event Data on Permanent Staff Deletion (ON DELETE SET NULL)
+-- 6. Service-Role-Only Atomic CRM User Management RPCs
+--    (Single-transaction role/permission/status/delete mutations with lock)
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.crm_admin_provision_user_tx(
+  p_actor_id uuid,
+  p_target_user_id uuid,
+  p_email text,
+  p_full_name text,
+  p_role text,
+  p_mode text,
+  p_overrides jsonb DEFAULT '[]'::jsonb,
+  p_now timestamptz DEFAULT now()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_jwt_role text := coalesce(current_setting('request.jwt.claim.role', true), '');
+  v_clean_email text := lower(trim(coalesce(p_email, '')));
+  v_clean_name text := trim(coalesce(p_full_name, ''));
+  v_next_status text := CASE WHEN p_mode = 'direct' THEN 'active' ELSE 'invited' END;
+  v_canonical_role text := public.normalize_crm_role(p_role);
+  v_ov jsonb;
+  v_perm_key text;
+  v_allowed boolean;
+  v_ov_count integer := 0;
+BEGIN
+  IF v_jwt_role <> 'service_role' AND auth.uid() IS NOT NULL THEN
+    RAISE EXCEPTION 'Forbidden: service_role required.' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_actor_id IS NULL OR p_target_user_id IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Actor and target user IDs are required.');
+  END IF;
+  IF v_canonical_role IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Invalid CRM role specified.');
+  END IF;
+  IF p_mode NOT IN ('direct', 'invite') THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Invalid provisioning mode.');
+  END IF;
+  IF v_clean_email = '' OR length(v_clean_name) NOT BETWEEN 2 AND 120 THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Valid email and full name (2-120 chars) required.');
+  END IF;
+
+  INSERT INTO public.profiles (
+    id, email, full_name, display_name, account_status, invited_by, invited_at, activated_at, updated_at
+  )
+  VALUES (
+    p_target_user_id,
+    v_clean_email,
+    v_clean_name,
+    v_clean_name,
+    v_next_status,
+    p_actor_id,
+    p_now,
+    CASE WHEN p_mode = 'direct' THEN p_now ELSE NULL END,
+    p_now
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    full_name = EXCLUDED.full_name,
+    display_name = EXCLUDED.display_name,
+    account_status = EXCLUDED.account_status,
+    invited_by = EXCLUDED.invited_by,
+    invited_at = EXCLUDED.invited_at,
+    activated_at = EXCLUDED.activated_at,
+    deactivated_at = NULL,
+    revoked_at = NULL,
+    updated_at = p_now;
+
+  DELETE FROM public.user_roles WHERE user_id = p_target_user_id;
+  INSERT INTO public.user_roles (user_id, role, assigned_by, updated_at)
+  VALUES (p_target_user_id, p_role, p_actor_id, p_now);
+
+  DELETE FROM public.crm_user_permissions WHERE user_id = p_target_user_id;
+
+  IF v_canonical_role <> 'super_admin' AND p_overrides IS NOT NULL AND jsonb_typeof(p_overrides) = 'array' THEN
+    FOR v_ov IN SELECT value FROM jsonb_array_elements(p_overrides)
+    LOOP
+      v_perm_key := trim(coalesce(v_ov->>'permission_key', ''));
+      IF NOT public.crm_is_valid_permission_key(v_perm_key) THEN
+        RAISE EXCEPTION 'Invalid CRM permission key: %', v_perm_key USING ERRCODE = '22023';
+      END IF;
+      v_allowed := coalesce((v_ov->>'allowed')::boolean, false);
+      INSERT INTO public.crm_user_permissions (user_id, permission_key, allowed, updated_by, updated_at)
+      VALUES (p_target_user_id, v_perm_key, v_allowed, p_actor_id, p_now)
+      ON CONFLICT (user_id, permission_key) DO UPDATE SET
+        allowed = EXCLUDED.allowed,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = p_now;
+      v_ov_count := v_ov_count + 1;
+    END LOOP;
+  END IF;
+
+  UPDATE public.crm_invitations
+  SET status = 'revoked'
+  WHERE lower(email) = v_clean_email
+    AND status = 'pending';
+
+  IF p_mode = 'invite' THEN
+    INSERT INTO public.crm_invitations (
+      email, full_name, role, permission_overrides, status, invited_by, invited_at, created_at
+    )
+    VALUES (
+      v_clean_email,
+      v_clean_name,
+      p_role,
+      coalesce(p_overrides, '[]'::jsonb),
+      'pending',
+      p_actor_id,
+      p_now,
+      p_now
+    );
+  END IF;
+
+  INSERT INTO public.audit_logs (actor_id, action, entity_type, entity_id, metadata)
+  VALUES (
+    p_actor_id,
+    CASE WHEN p_mode = 'direct' THEN 'crm_user_created' ELSE 'crm_user_invited' END,
+    'user_roles',
+    p_target_user_id,
+    jsonb_build_object(
+      'email', v_clean_email,
+      'full_name', v_clean_name,
+      'role', p_role,
+      'mode', p_mode,
+      'status', v_next_status,
+      'overrides_count', v_ov_count
+    )
+  );
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'userId', p_target_user_id,
+    'email', v_clean_email,
+    'fullName', v_clean_name,
+    'role', p_role,
+    'mode', p_mode,
+    'status', v_next_status
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.crm_admin_update_user_tx(
+  p_actor_id uuid,
+  p_target_user_id uuid,
+  p_full_name text DEFAULT NULL,
+  p_update_name boolean DEFAULT false,
+  p_role text DEFAULT NULL,
+  p_update_role boolean DEFAULT false,
+  p_overrides jsonb DEFAULT '[]'::jsonb,
+  p_update_overrides boolean DEFAULT false,
+  p_audit_action text DEFAULT 'crm_user_updated',
+  p_now timestamptz DEFAULT now()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_jwt_role text := coalesce(current_setting('request.jwt.claim.role', true), '');
+  v_prof public.profiles%ROWTYPE;
+  v_current_role text;
+  v_next_role text;
+  v_canonical_next text;
+  v_clean_name text;
+  v_active_super_count integer;
+  v_ov jsonb;
+  v_perm_key text;
+  v_allowed boolean;
+  v_result_overrides jsonb := '[]'::jsonb;
+BEGIN
+  IF v_jwt_role <> 'service_role' AND auth.uid() IS NOT NULL THEN
+    RAISE EXCEPTION 'Forbidden: service_role required.' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_actor_id IS NULL OR p_target_user_id IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Actor and target user IDs are required.');
+  END IF;
+  IF p_actor_id = p_target_user_id THEN
+    RETURN jsonb_build_object('ok', false, 'status', 403, 'error', 'Security policy violation: You cannot modify your own account.');
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('crm_super_admin_guard'));
+
+  SELECT * INTO v_prof
+  FROM public.profiles
+  WHERE id = p_target_user_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_prof.account_status IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 404, 'error', 'Target user is not a confirmed CRM staff account.');
+  END IF;
+
+  SELECT ur.role INTO v_current_role
+  FROM public.user_roles ur
+  WHERE ur.user_id = p_target_user_id
+  ORDER BY CASE ur.role
+    WHEN 'super_admin' THEN 100
+    WHEN 'crm_admin' THEN 90
+    WHEN 'event_admin' THEN 85
+    WHEN 'esports_manager' THEN 80
+    WHEN 'score_operator' THEN 75
+    WHEN 'esports_entry_staff' THEN 70
+    WHEN 'registration_staff' THEN 65
+    WHEN 'checkin_staff' THEN 60
+    WHEN 'match_conductor' THEN 55
+    WHEN 'content_manager' THEN 50
+    WHEN 'participation_manager' THEN 20
+    WHEN 'viewer' THEN 10
+    ELSE 0
+  END DESC
+  LIMIT 1
+  FOR UPDATE;
+
+  IF v_current_role IS NULL OR public.normalize_crm_role(v_current_role) IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 404, 'error', 'Target user has no confirmed CRM staff role.');
+  END IF;
+
+  v_next_role := CASE WHEN p_update_role THEN trim(coalesce(p_role, '')) ELSE v_current_role END;
+  v_canonical_next := public.normalize_crm_role(v_next_role);
+  IF v_canonical_next IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Invalid CRM role specified.');
+  END IF;
+
+  IF p_update_name THEN
+    v_clean_name := trim(coalesce(p_full_name, ''));
+    IF length(v_clean_name) NOT BETWEEN 2 AND 120 THEN
+      RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Full name must be between 2 and 120 characters.');
+    END IF;
+  ELSE
+    v_clean_name := v_prof.full_name;
+  END IF;
+
+  IF v_prof.account_status = 'active'
+     AND public.normalize_crm_role(v_current_role) = 'super_admin'
+     AND v_canonical_next <> 'super_admin' THEN
+    SELECT count(DISTINCT ur.user_id) INTO v_active_super_count
+    FROM public.user_roles ur
+    JOIN public.profiles p ON p.id = ur.user_id
+    WHERE ur.role = 'super_admin'
+      AND p.account_status = 'active'
+      AND ur.user_id <> p_target_user_id;
+
+    IF v_active_super_count < 1 THEN
+      RETURN jsonb_build_object('ok', false, 'status', 409, 'error', 'Cannot demote the last active Super Admin.');
+    END IF;
+  END IF;
+
+  IF p_update_name THEN
+    UPDATE public.profiles
+    SET
+      full_name = v_clean_name,
+      display_name = v_clean_name,
+      updated_at = p_now
+    WHERE id = p_target_user_id;
+  END IF;
+
+  IF p_update_role AND v_next_role IS DISTINCT FROM v_current_role THEN
+    DELETE FROM public.user_roles WHERE user_id = p_target_user_id;
+    INSERT INTO public.user_roles (user_id, role, assigned_by, updated_at)
+    VALUES (p_target_user_id, v_next_role, p_actor_id, p_now);
+  END IF;
+
+  IF p_update_overrides OR v_canonical_next = 'super_admin' THEN
+    DELETE FROM public.crm_user_permissions WHERE user_id = p_target_user_id;
+    IF v_canonical_next <> 'super_admin' AND p_overrides IS NOT NULL AND jsonb_typeof(p_overrides) = 'array' THEN
+      FOR v_ov IN SELECT value FROM jsonb_array_elements(p_overrides)
+      LOOP
+        v_perm_key := trim(coalesce(v_ov->>'permission_key', ''));
+        IF NOT public.crm_is_valid_permission_key(v_perm_key) THEN
+          RAISE EXCEPTION 'Invalid CRM permission key: %', v_perm_key USING ERRCODE = '22023';
+        END IF;
+        v_allowed := coalesce((v_ov->>'allowed')::boolean, false);
+        INSERT INTO public.crm_user_permissions (user_id, permission_key, allowed, updated_by, updated_at)
+        VALUES (p_target_user_id, v_perm_key, v_allowed, p_actor_id, p_now)
+        ON CONFLICT (user_id, permission_key) DO UPDATE SET
+          allowed = EXCLUDED.allowed,
+          updated_by = EXCLUDED.updated_by,
+          updated_at = p_now;
+      END LOOP;
+    END IF;
+  END IF;
+
+  SELECT coalesce(
+    jsonb_agg(jsonb_build_object('permission_key', cup.permission_key, 'allowed', cup.allowed) ORDER BY cup.permission_key),
+    '[]'::jsonb
+  )
+  INTO v_result_overrides
+  FROM public.crm_user_permissions cup
+  WHERE cup.user_id = p_target_user_id;
+
+  INSERT INTO public.audit_logs (actor_id, action, entity_type, entity_id, metadata)
+  VALUES (
+    p_actor_id,
+    coalesce(nullif(trim(p_audit_action), ''), 'crm_user_updated'),
+    'profiles',
+    p_target_user_id,
+    jsonb_build_object(
+      'full_name', v_clean_name,
+      'previous_role', v_current_role,
+      'next_role', v_next_role,
+      'overrides', v_result_overrides
+    )
+  );
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'userId', p_target_user_id,
+    'fullName', v_clean_name,
+    'role', v_next_role,
+    'overrides', v_result_overrides
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.crm_admin_update_status_tx(
+  p_actor_id uuid,
+  p_target_user_id uuid,
+  p_next_status text,
+  p_now timestamptz DEFAULT now()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_jwt_role text := coalesce(current_setting('request.jwt.claim.role', true), '');
+  v_prof public.profiles%ROWTYPE;
+  v_current_role text;
+  v_active_super_count integer;
+BEGIN
+  IF v_jwt_role <> 'service_role' AND auth.uid() IS NOT NULL THEN
+    RAISE EXCEPTION 'Forbidden: service_role required.' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_actor_id IS NULL OR p_target_user_id IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Actor and target user IDs are required.');
+  END IF;
+  IF p_actor_id = p_target_user_id THEN
+    RETURN jsonb_build_object('ok', false, 'status', 403, 'error', 'Security policy violation: You cannot deactivate or revoke your own account.');
+  END IF;
+  IF p_next_status NOT IN ('invited', 'active', 'deactivated', 'revoked') THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Invalid account status.');
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('crm_super_admin_guard'));
+
+  SELECT * INTO v_prof
+  FROM public.profiles
+  WHERE id = p_target_user_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_prof.account_status IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 404, 'error', 'Target user is not a confirmed CRM staff account.');
+  END IF;
+
+  SELECT ur.role INTO v_current_role
+  FROM public.user_roles ur
+  WHERE ur.user_id = p_target_user_id
+  ORDER BY CASE ur.role
+    WHEN 'super_admin' THEN 100
+    WHEN 'crm_admin' THEN 90
+    WHEN 'event_admin' THEN 85
+    WHEN 'esports_manager' THEN 80
+    WHEN 'score_operator' THEN 75
+    WHEN 'esports_entry_staff' THEN 70
+    WHEN 'registration_staff' THEN 65
+    WHEN 'checkin_staff' THEN 60
+    WHEN 'match_conductor' THEN 55
+    WHEN 'content_manager' THEN 50
+    WHEN 'participation_manager' THEN 20
+    WHEN 'viewer' THEN 10
+    ELSE 0
+  END DESC
+  LIMIT 1
+  FOR UPDATE;
+
+  IF v_current_role IS NULL OR public.normalize_crm_role(v_current_role) IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 404, 'error', 'Target user has no confirmed CRM staff role.');
+  END IF;
+
+  IF v_prof.account_status = 'active'
+     AND p_next_status <> 'active'
+     AND public.normalize_crm_role(v_current_role) = 'super_admin' THEN
+    SELECT count(DISTINCT ur.user_id) INTO v_active_super_count
+    FROM public.user_roles ur
+    JOIN public.profiles p ON p.id = ur.user_id
+    WHERE ur.role = 'super_admin'
+      AND p.account_status = 'active'
+      AND ur.user_id <> p_target_user_id;
+
+    IF v_active_super_count < 1 THEN
+      RETURN jsonb_build_object('ok', false, 'status', 409, 'error', 'Cannot deactivate or revoke the last active Super Admin.');
+    END IF;
+  END IF;
+
+  UPDATE public.profiles
+  SET
+    account_status = p_next_status,
+    deactivated_at = CASE
+      WHEN p_next_status = 'deactivated' THEN p_now
+      WHEN p_next_status = 'active' THEN NULL
+      ELSE deactivated_at
+    END,
+    revoked_at = CASE
+      WHEN p_next_status = 'revoked' THEN p_now
+      ELSE revoked_at
+    END,
+    activated_at = CASE
+      WHEN p_next_status = 'active' THEN p_now
+      ELSE activated_at
+    END,
+    updated_at = p_now
+  WHERE id = p_target_user_id;
+
+  IF p_next_status = 'revoked' AND v_prof.email IS NOT NULL THEN
+    UPDATE public.crm_invitations
+    SET status = 'revoked'
+    WHERE lower(email) = lower(v_prof.email)
+      AND status = 'pending';
+  END IF;
+
+  INSERT INTO public.audit_logs (actor_id, action, entity_type, entity_id, metadata)
+  VALUES (
+    p_actor_id,
+    'crm_user_status_' || p_next_status,
+    'profiles',
+    p_target_user_id,
+    jsonb_build_object(
+      'email', v_prof.email,
+      'previous_status', v_prof.account_status,
+      'next_status', p_next_status,
+      'updated_at', p_now
+    )
+  );
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'userId', p_target_user_id,
+    'email', v_prof.email,
+    'accountStatus', p_next_status
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.crm_admin_delete_user_tx(
+  p_actor_id uuid,
+  p_target_user_id uuid,
+  p_now timestamptz DEFAULT now()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_jwt_role text := coalesce(current_setting('request.jwt.claim.role', true), '');
+  v_prof public.profiles%ROWTYPE;
+  v_roles text[];
+  v_active_super_count integer;
+BEGIN
+  IF v_jwt_role <> 'service_role' AND auth.uid() IS NOT NULL THEN
+    RAISE EXCEPTION 'Forbidden: service_role required.' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_actor_id IS NULL OR p_target_user_id IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'Actor and target user IDs are required.');
+  END IF;
+  IF p_actor_id = p_target_user_id THEN
+    RETURN jsonb_build_object('ok', false, 'status', 403, 'error', 'Security policy violation: You cannot permanently delete your own account.');
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('crm_super_admin_guard'));
+
+  SELECT * INTO v_prof
+  FROM public.profiles
+  WHERE id = p_target_user_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_prof.account_status IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 404, 'error', 'Target user is not a confirmed CRM staff account.');
+  END IF;
+
+  SELECT array_agg(ur.role) INTO v_roles
+  FROM public.user_roles ur
+  WHERE ur.user_id = p_target_user_id;
+
+  IF v_roles IS NULL OR array_length(v_roles, 1) IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'status', 404, 'error', 'Target user has no confirmed CRM staff role.');
+  END IF;
+
+  IF v_prof.account_status = 'active' AND 'super_admin' = ANY(v_roles) THEN
+    SELECT count(DISTINCT ur.user_id) INTO v_active_super_count
+    FROM public.user_roles ur
+    JOIN public.profiles p ON p.id = ur.user_id
+    WHERE ur.role = 'super_admin'
+      AND p.account_status = 'active'
+      AND ur.user_id <> p_target_user_id;
+
+    IF v_active_super_count < 1 THEN
+      RETURN jsonb_build_object('ok', false, 'status', 409, 'error', 'Cannot permanently delete the last active Super Admin.');
+    END IF;
+  END IF;
+
+  IF v_prof.email IS NOT NULL THEN
+    UPDATE public.crm_invitations
+    SET status = 'revoked'
+    WHERE lower(email) = lower(v_prof.email)
+      AND status = 'pending';
+  END IF;
+
+  INSERT INTO public.audit_logs (actor_id, action, entity_type, entity_id, metadata)
+  VALUES (
+    p_actor_id,
+    'crm_user_deleted',
+    'profiles',
+    p_target_user_id,
+    jsonb_build_object(
+      'deleted_user_id', p_target_user_id,
+      'deleted_email', v_prof.email,
+      'deleted_name', coalesce(v_prof.full_name, v_prof.display_name),
+      'deleted_roles', v_roles,
+      'deleted_at', p_now,
+      'historical_data_preserved', true
+    )
+  );
+
+  DELETE FROM public.crm_user_permissions WHERE user_id = p_target_user_id;
+  DELETE FROM public.user_roles WHERE user_id = p_target_user_id;
+  DELETE FROM public.profiles WHERE id = p_target_user_id;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'deletedUserId', p_target_user_id,
+    'email', v_prof.email,
+    'deletedRoles', v_roles
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.crm_admin_provision_user_tx(uuid, uuid, text, text, text, text, jsonb, timestamptz) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.crm_admin_update_user_tx(uuid, uuid, text, boolean, text, boolean, jsonb, boolean, text, timestamptz) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.crm_admin_update_status_tx(uuid, uuid, text, timestamptz) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.crm_admin_delete_user_tx(uuid, uuid, timestamptz) FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.crm_admin_provision_user_tx(uuid, uuid, text, text, text, text, jsonb, timestamptz) TO service_role;
+GRANT EXECUTE ON FUNCTION public.crm_admin_update_user_tx(uuid, uuid, text, boolean, text, boolean, jsonb, boolean, text, timestamptz) TO service_role;
+GRANT EXECUTE ON FUNCTION public.crm_admin_update_status_tx(uuid, uuid, text, timestamptz) TO service_role;
+GRANT EXECUTE ON FUNCTION public.crm_admin_delete_user_tx(uuid, uuid, timestamptz) TO service_role;
+
+-- ------------------------------------------------------------------------------
+-- 7. Individually Reviewed Staff-Reference FKs (Preserve Historical Records)
+--    ONLY updates the 7 legacy nullable operational metadata columns originally
+--    defined without ON DELETE SET NULL so permanent staff deletion does not
+--    fail with FK 23503. Leaves audit_logs and all other FKs untouched.
 -- ------------------------------------------------------------------------------
 DO $$
 DECLARE
@@ -920,11 +1721,16 @@ BEGIN
       AND c.contype = 'f'
       AND c.confrelid = 'auth.users'::regclass
       AND array_length(c.conkey, 1) = 1
+      AND att.attnotnull = false
       AND c.confdeltype IN ('a', 'r')
-      AND NOT (
-        (rel.relname = 'profiles' AND att.attname = 'id')
-        OR (rel.relname = 'user_roles' AND att.attname = 'user_id')
-        OR (rel.relname = 'crm_user_permissions' AND att.attname = 'user_id')
+      AND (rel.relname, att.attname) IN (
+        ('event_settings', 'updated_by'),
+        ('site_content', 'updated_by'),
+        ('announcements', 'author_id'),
+        ('check_ins', 'checked_in_by'),
+        ('registration_controls', 'updated_by'),
+        ('institutions', 'updated_by'),
+        ('media_items', 'created_by')
       )
   LOOP
     EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT IF EXISTS %I', r.table_name, r.conname);
@@ -938,83 +1744,320 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------------------------
--- 7. Remove `OR public.is_admin()` RBAC Bypasses from Gate & Ticket Helpers/RLS
+-- 8. Explicit Anon Revocation & Permission-Scoped RLS Across All Tables
+--    Ensures restricted is_admin() and fail-closed permission checks lock down
+--    every table cleanly for active staff while blocking deactivated/viewer users.
 -- ------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public._gate_has_perm(p_perm text)
-RETURNS boolean
-LANGUAGE plpgsql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_allowed boolean := false;
-BEGIN
-  IF auth.uid() IS NULL THEN
-    RETURN false;
-  END IF;
+REVOKE ALL ON public.user_roles FROM anon;
+REVOKE ALL ON public.profiles FROM anon;
+REVOKE ALL ON public.crm_user_permissions FROM anon;
+REVOKE ALL ON public.crm_invitations FROM anon;
 
-  SELECT public.has_crm_permission(p_perm) INTO v_allowed;
-  RETURN coalesce(v_allowed, false);
-END;
-$$;
+GRANT SELECT, UPDATE, DELETE ON public.profiles TO authenticated;
+GRANT ALL ON public.profiles TO service_role;
 
-REVOKE ALL ON FUNCTION public._gate_has_perm(text) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public._gate_has_perm(text) TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.user_roles TO authenticated;
+GRANT ALL ON public.user_roles TO service_role;
 
-CREATE OR REPLACE FUNCTION public._gate_is_entry_staff()
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT CASE
-    WHEN auth.uid() IS NULL THEN false
-    ELSE public.is_entry_staff()
-  END;
-$$;
+-- profiles
+DROP POLICY IF EXISTS "select_own_profile" ON public.profiles;
+DROP POLICY IF EXISTS "super_admin_read_profiles" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_select_rbac" ON public.profiles;
+CREATE POLICY "profiles_select_rbac"
+ON public.profiles FOR SELECT
+TO authenticated
+USING (
+  id = (select auth.uid())
+  OR public.is_super_admin()
+  OR (
+    public.has_any_user_management_permission()
+    AND NOT EXISTS (
+      SELECT 1 FROM public.user_roles ur_super
+      WHERE ur_super.user_id = public.profiles.id
+        AND ur_super.role = 'super_admin'
+    )
+  )
+  OR (
+    (
+      public.has_crm_permission('tournament:assign_conductors')
+      OR public.has_crm_permission('tournament:manage_games')
+      OR public.has_crm_permission('esports:edit')
+    )
+    AND account_status = 'active'
+    AND EXISTS (
+      SELECT 1 FROM public.user_roles ur_ops
+      WHERE ur_ops.user_id = public.profiles.id
+        AND ur_ops.role IN ('match_conductor', 'esports_manager', 'crm_admin', 'event_admin', 'super_admin')
+    )
+  )
+);
 
-REVOKE ALL ON FUNCTION public._gate_is_entry_staff() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public._gate_is_entry_staff() TO authenticated;
-
-CREATE OR REPLACE FUNCTION public._can_perform_checkin(
-  p_subject_type text,
-  p_require_override boolean DEFAULT false
+DROP POLICY IF EXISTS "update_own_profile" ON public.profiles;
+DROP POLICY IF EXISTS "super_admin_update_profiles" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_update_rbac" ON public.profiles;
+CREATE POLICY "profiles_update_rbac"
+ON public.profiles FOR UPDATE
+TO authenticated
+USING (
+  (id = (select auth.uid()) AND account_status = 'active')
+  OR public.is_super_admin()
 )
-RETURNS boolean
-LANGUAGE plpgsql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-BEGIN
-  IF auth.uid() IS NULL THEN
-    RETURN false;
-  END IF;
+WITH CHECK (
+  (id = (select auth.uid()) AND account_status = 'active')
+  OR public.is_super_admin()
+);
 
-  IF p_require_override THEN
-    RETURN public.has_crm_permission('entry:override_checkin');
-  END IF;
+DROP POLICY IF EXISTS "profiles_delete_rbac" ON public.profiles;
+CREATE POLICY "profiles_delete_rbac"
+ON public.profiles FOR DELETE
+TO authenticated
+USING (public.is_super_admin() AND id <> (select auth.uid()));
 
-  IF p_subject_type = 'visitor' THEN
-    RETURN public.has_crm_permission('entry:checkin_visitor')
-        OR public.has_crm_permission('visitor:edit');
-  ELSIF p_subject_type = 'esports_player' THEN
-    RETURN public.has_crm_permission('entry:checkin_esports')
-        OR public.has_crm_permission('esports:edit');
-  ELSE
-    RETURN public.has_crm_permission('entry:checkin_visitor')
-        OR public.has_crm_permission('esports:edit');
-  END IF;
-END;
-$$;
+-- user_roles
+DROP POLICY IF EXISTS "admin_manage_roles_select" ON public.user_roles;
+DROP POLICY IF EXISTS "admin_insert_role" ON public.user_roles;
+DROP POLICY IF EXISTS "admin_update_role" ON public.user_roles;
+DROP POLICY IF EXISTS "admin_delete_role" ON public.user_roles;
+DROP POLICY IF EXISTS "user_roles_select_rbac" ON public.user_roles;
+DROP POLICY IF EXISTS "user_roles_insert_rbac" ON public.user_roles;
+DROP POLICY IF EXISTS "user_roles_update_rbac" ON public.user_roles;
+DROP POLICY IF EXISTS "user_roles_delete_rbac" ON public.user_roles;
 
-REVOKE ALL ON FUNCTION public._can_perform_checkin(text, boolean) FROM PUBLIC, anon, authenticated;
+CREATE POLICY "user_roles_select_rbac"
+ON public.user_roles FOR SELECT
+TO authenticated
+USING (
+  user_id = (select auth.uid())
+  OR public.is_super_admin()
+  OR (
+    public.has_any_user_management_permission()
+    AND role <> 'super_admin'
+  )
+  OR (
+    (
+      public.has_crm_permission('tournament:assign_conductors')
+      OR public.has_crm_permission('tournament:manage_games')
+      OR public.has_crm_permission('esports:edit')
+    )
+    AND role IN ('match_conductor', 'esports_manager', 'crm_admin', 'event_admin', 'super_admin')
+  )
+);
 
+CREATE POLICY "user_roles_insert_rbac"
+ON public.user_roles FOR INSERT
+TO authenticated
+WITH CHECK (public.is_super_admin() AND user_id <> (select auth.uid()));
+
+CREATE POLICY "user_roles_update_rbac"
+ON public.user_roles FOR UPDATE
+TO authenticated
+USING (public.is_super_admin() AND user_id <> (select auth.uid()))
+WITH CHECK (public.is_super_admin() AND user_id <> (select auth.uid()));
+
+CREATE POLICY "user_roles_delete_rbac"
+ON public.user_roles FOR DELETE
+TO authenticated
+USING (public.is_super_admin() AND user_id <> (select auth.uid()));
+
+-- crm_user_permissions
+DROP POLICY IF EXISTS "crm_permissions_select_rbac" ON public.crm_user_permissions;
+CREATE POLICY "crm_permissions_select_rbac"
+ON public.crm_user_permissions FOR SELECT
+TO authenticated
+USING (
+  user_id = (select auth.uid())
+  OR public.is_super_admin()
+  OR (
+    public.has_any_user_management_permission()
+    AND NOT EXISTS (
+      SELECT 1 FROM public.user_roles ur_super
+      WHERE ur_super.user_id = public.crm_user_permissions.user_id
+        AND ur_super.role = 'super_admin'
+    )
+  )
+);
+
+DROP POLICY IF EXISTS "crm_permissions_write_rbac" ON public.crm_user_permissions;
+CREATE POLICY "crm_permissions_write_rbac"
+ON public.crm_user_permissions FOR ALL
+TO authenticated
+USING (public.is_super_admin() AND user_id <> (select auth.uid()))
+WITH CHECK (public.is_super_admin() AND user_id <> (select auth.uid()));
+
+-- crm_invitations
+DROP POLICY IF EXISTS "crm_invitations_rbac" ON public.crm_invitations;
+DROP POLICY IF EXISTS "crm_invitations_select_rbac" ON public.crm_invitations;
+DROP POLICY IF EXISTS "crm_invitations_write_rbac" ON public.crm_invitations;
+
+CREATE POLICY "crm_invitations_select_rbac"
+ON public.crm_invitations FOR SELECT
+TO authenticated
+USING (
+  public.is_super_admin()
+  OR (
+    public.has_any_user_management_permission()
+    AND role <> 'super_admin'
+  )
+);
+
+CREATE POLICY "crm_invitations_write_rbac"
+ON public.crm_invitations FOR ALL
+TO authenticated
+USING (public.is_super_admin())
+WITH CHECK (public.is_super_admin());
+
+-- Gate, Tickets, Registrations, Players, Content, Settings, Emails & Audit RLS
 DO $$
 BEGIN
+  -- visitor_registrations
+  IF to_regclass('public.visitor_registrations') IS NOT NULL THEN
+    REVOKE SELECT, UPDATE, DELETE ON public.visitor_registrations FROM anon;
+    GRANT INSERT ON public.visitor_registrations TO anon, authenticated;
+
+    DROP POLICY IF EXISTS "staff_read_visitor_registrations_gate" ON public.visitor_registrations;
+    DROP POLICY IF EXISTS "admin_read_visitor_registrations" ON public.visitor_registrations;
+    CREATE POLICY "admin_read_visitor_registrations"
+    ON public.visitor_registrations FOR SELECT
+    TO authenticated
+    USING (
+      public.has_crm_permission('visitor:view')
+      OR public.has_crm_permission('entry:scan_visitor')
+      OR public.has_crm_permission('entry:checkin_visitor')
+      OR public.has_crm_permission('reports:view')
+    );
+
+    DROP POLICY IF EXISTS "admin_update_visitor_registrations" ON public.visitor_registrations;
+    CREATE POLICY "admin_update_visitor_registrations"
+    ON public.visitor_registrations FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('visitor:edit') OR public.has_crm_permission('entry:checkin_visitor'))
+    WITH CHECK (public.has_crm_permission('visitor:edit') OR public.has_crm_permission('entry:checkin_visitor'));
+
+    DROP POLICY IF EXISTS "admin_delete_visitor_registrations" ON public.visitor_registrations;
+    CREATE POLICY "admin_delete_visitor_registrations"
+    ON public.visitor_registrations FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('visitor:delete'));
+  END IF;
+
+  -- participation_registrations (legacy historical table if present)
+  IF to_regclass('public.participation_registrations') IS NOT NULL THEN
+    REVOKE SELECT, UPDATE, DELETE ON public.participation_registrations FROM anon;
+
+    DROP POLICY IF EXISTS "admin_read_participation_registrations" ON public.participation_registrations;
+    CREATE POLICY "admin_read_participation_registrations"
+    ON public.participation_registrations FOR SELECT
+    TO authenticated
+    USING (public.is_admin() OR public.has_crm_permission('reports:view'));
+
+    DROP POLICY IF EXISTS "admin_update_participation_registrations" ON public.participation_registrations;
+    CREATE POLICY "admin_update_participation_registrations"
+    ON public.participation_registrations FOR UPDATE
+    TO authenticated
+    USING (public.is_admin())
+    WITH CHECK (public.is_admin());
+
+    DROP POLICY IF EXISTS "admin_delete_participation_registrations" ON public.participation_registrations;
+    CREATE POLICY "admin_delete_participation_registrations"
+    ON public.participation_registrations FOR DELETE
+    TO authenticated
+    USING (public.is_admin());
+  END IF;
+
+  -- registrations (Esports teams)
+  IF to_regclass('public.registrations') IS NOT NULL THEN
+    REVOKE SELECT, UPDATE, DELETE ON public.registrations FROM anon;
+    GRANT INSERT ON public.registrations TO anon, authenticated;
+
+    DROP POLICY IF EXISTS "staff_read_registrations_gate" ON public.registrations;
+    DROP POLICY IF EXISTS "admin_read_registrations" ON public.registrations;
+    CREATE POLICY "admin_read_registrations"
+    ON public.registrations FOR SELECT
+    TO authenticated
+    USING (
+      public.has_crm_permission('esports:view')
+      OR public.has_crm_permission('entry:scan_esports')
+      OR public.has_crm_permission('entry:checkin_esports')
+      OR public.has_crm_permission('tournament:select_teams')
+      OR public.has_crm_permission('conductor:view_assigned')
+      OR public.has_crm_permission('reports:view')
+    );
+
+    DROP POLICY IF EXISTS "admin_update_registrations" ON public.registrations;
+    CREATE POLICY "admin_update_registrations"
+    ON public.registrations FOR UPDATE
+    TO authenticated
+    USING (
+      public.has_crm_permission('esports:edit')
+      OR public.has_crm_permission('esports:approve')
+      OR public.has_crm_permission('esports:reject')
+      OR public.has_crm_permission('tournament:select_teams')
+      OR public.has_crm_permission('entry:checkin_esports')
+    )
+    WITH CHECK (
+      public.has_crm_permission('esports:edit')
+      OR public.has_crm_permission('esports:approve')
+      OR public.has_crm_permission('esports:reject')
+      OR public.has_crm_permission('tournament:select_teams')
+      OR public.has_crm_permission('entry:checkin_esports')
+    );
+
+    DROP POLICY IF EXISTS "admin_delete_registrations" ON public.registrations;
+    CREATE POLICY "admin_delete_registrations"
+    ON public.registrations FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('esports:edit'));
+  END IF;
+
+  -- players
+  IF to_regclass('public.players') IS NOT NULL THEN
+    REVOKE ALL ON public.players FROM anon;
+
+    DROP POLICY IF EXISTS "staff_read_players_gate" ON public.players;
+    DROP POLICY IF EXISTS "admin_read_players" ON public.players;
+    CREATE POLICY "admin_read_players"
+    ON public.players FOR SELECT
+    TO authenticated
+    USING (
+      public.has_crm_permission('esports:view')
+      OR public.has_crm_permission('entry:scan_esports')
+      OR public.has_crm_permission('entry:checkin_esports')
+      OR public.has_crm_permission('conductor:verify_roster')
+      OR public.has_crm_permission('reports:view')
+    );
+
+    DROP POLICY IF EXISTS "admin_insert_player" ON public.players;
+    CREATE POLICY "admin_insert_player"
+    ON public.players FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('esports:create') OR public.has_crm_permission('esports:edit'));
+
+    DROP POLICY IF EXISTS "admin_update_player" ON public.players;
+    CREATE POLICY "admin_update_player"
+    ON public.players FOR UPDATE
+    TO authenticated
+    USING (
+      public.has_crm_permission('esports:edit')
+      OR public.has_crm_permission('entry:checkin_esports')
+      OR public.has_crm_permission('conductor:verify_roster')
+    )
+    WITH CHECK (
+      public.has_crm_permission('esports:edit')
+      OR public.has_crm_permission('entry:checkin_esports')
+      OR public.has_crm_permission('conductor:verify_roster')
+    );
+
+    DROP POLICY IF EXISTS "admin_delete_player" ON public.players;
+    CREATE POLICY "admin_delete_player"
+    ON public.players FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('esports:edit'));
+  END IF;
+
+  -- tickets
   IF to_regclass('public.tickets') IS NOT NULL THEN
+    REVOKE ALL ON public.tickets FROM anon;
+
     DROP POLICY IF EXISTS "staff_read_tickets" ON public.tickets;
     CREATE POLICY "staff_read_tickets"
     ON public.tickets FOR SELECT
@@ -1046,9 +2089,13 @@ BEGIN
     );
   END IF;
 
+  -- check_ins
   IF to_regclass('public.check_ins') IS NOT NULL THEN
+    REVOKE ALL ON public.check_ins FROM anon;
+
     DROP POLICY IF EXISTS "checkin_staff_read_check_ins" ON public.check_ins;
-    CREATE POLICY "checkin_staff_read_check_ins"
+    DROP POLICY IF EXISTS "admin_read_checkins" ON public.check_ins;
+    CREATE POLICY "admin_read_checkins"
     ON public.check_ins FOR SELECT
     TO authenticated
     USING (
@@ -1059,57 +2106,43 @@ BEGIN
     );
 
     DROP POLICY IF EXISTS "checkin_staff_insert_check_ins" ON public.check_ins;
-    CREATE POLICY "checkin_staff_insert_check_ins"
+    DROP POLICY IF EXISTS "admin_insert_checkin" ON public.check_ins;
+    CREATE POLICY "admin_insert_checkin"
     ON public.check_ins FOR INSERT
     TO authenticated
     WITH CHECK (
       public.has_crm_permission('entry:checkin_visitor')
       OR public.has_crm_permission('entry:checkin_esports')
+      OR public.has_crm_permission('entry:override_checkin')
       OR public.has_crm_permission('visitor:edit')
       OR public.has_crm_permission('esports:edit')
     );
-  END IF;
 
-  IF to_regclass('public.visitor_registrations') IS NOT NULL THEN
-    DROP POLICY IF EXISTS "staff_read_visitor_registrations_gate" ON public.visitor_registrations;
-    CREATE POLICY "staff_read_visitor_registrations_gate"
-    ON public.visitor_registrations FOR SELECT
+    DROP POLICY IF EXISTS "admin_update_checkin" ON public.check_ins;
+    CREATE POLICY "admin_update_checkin"
+    ON public.check_ins FOR UPDATE
     TO authenticated
     USING (
-      public.has_crm_permission('entry:scan_visitor')
-      OR public.has_crm_permission('entry:checkin_visitor')
-      OR public.has_crm_permission('visitor:view')
-      OR public.has_crm_permission('reports:view')
+      public.has_crm_permission('entry:override_checkin')
+      OR public.has_crm_permission('visitor:edit')
+      OR public.has_crm_permission('esports:edit')
+    )
+    WITH CHECK (
+      public.has_crm_permission('entry:override_checkin')
+      OR public.has_crm_permission('visitor:edit')
+      OR public.has_crm_permission('esports:edit')
     );
-  END IF;
 
-  IF to_regclass('public.registrations') IS NOT NULL THEN
-    DROP POLICY IF EXISTS "staff_read_registrations_gate" ON public.registrations;
-    CREATE POLICY "staff_read_registrations_gate"
-    ON public.registrations FOR SELECT
+    DROP POLICY IF EXISTS "admin_delete_checkin" ON public.check_ins;
+    CREATE POLICY "admin_delete_checkin"
+    ON public.check_ins FOR DELETE
     TO authenticated
-    USING (
-      public.has_crm_permission('entry:scan_esports')
-      OR public.has_crm_permission('entry:checkin_esports')
-      OR public.has_crm_permission('esports:view')
-      OR public.has_crm_permission('reports:view')
-    );
+    USING (public.has_crm_permission('visitor:delete') OR public.has_crm_permission('entry:override_checkin'));
   END IF;
 
-  IF to_regclass('public.players') IS NOT NULL THEN
-    DROP POLICY IF EXISTS "staff_read_players_gate" ON public.players;
-    CREATE POLICY "staff_read_players_gate"
-    ON public.players FOR SELECT
-    TO authenticated
-    USING (
-      public.has_crm_permission('entry:scan_esports')
-      OR public.has_crm_permission('entry:checkin_esports')
-      OR public.has_crm_permission('esports:view')
-      OR public.has_crm_permission('reports:view')
-    );
-  END IF;
-
+  -- wristband_categories
   IF to_regclass('public.wristband_categories') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "wristband_categories_select" ON public.wristband_categories;
     DROP POLICY IF EXISTS "staff_read_wristband_categories" ON public.wristband_categories;
     CREATE POLICY "staff_read_wristband_categories"
     ON public.wristband_categories FOR SELECT
@@ -1120,6 +2153,7 @@ BEGIN
       OR public.has_crm_permission('reports:view')
     );
 
+    DROP POLICY IF EXISTS "wristband_categories_manage" ON public.wristband_categories;
     DROP POLICY IF EXISTS "admin_manage_wristband_categories" ON public.wristband_categories;
     CREATE POLICY "admin_manage_wristband_categories"
     ON public.wristband_categories FOR ALL
@@ -1128,7 +2162,9 @@ BEGIN
     WITH CHECK (public.has_crm_permission('entry:manage_wristbands'));
   END IF;
 
+  -- wristband_issuances
   IF to_regclass('public.wristband_issuances') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "wristband_issuances_select" ON public.wristband_issuances;
     DROP POLICY IF EXISTS "staff_read_wristband_issuances" ON public.wristband_issuances;
     CREATE POLICY "staff_read_wristband_issuances"
     ON public.wristband_issuances FOR SELECT
@@ -1138,12 +2174,14 @@ BEGIN
       OR public.has_crm_permission('reports:view')
     );
 
+    DROP POLICY IF EXISTS "wristband_issuances_insert" ON public.wristband_issuances;
     DROP POLICY IF EXISTS "staff_write_wristband_issuances" ON public.wristband_issuances;
     CREATE POLICY "staff_write_wristband_issuances"
     ON public.wristband_issuances FOR INSERT
     TO authenticated
     WITH CHECK (public.has_crm_permission('entry:issue_wristband'));
 
+    DROP POLICY IF EXISTS "wristband_issuances_update" ON public.wristband_issuances;
     DROP POLICY IF EXISTS "staff_update_wristband_issuances" ON public.wristband_issuances;
     CREATE POLICY "staff_update_wristband_issuances"
     ON public.wristband_issuances FOR UPDATE
@@ -1151,675 +2189,448 @@ BEGIN
     USING (public.has_crm_permission('entry:issue_wristband'))
     WITH CHECK (public.has_crm_permission('entry:issue_wristband'));
   END IF;
-END $$;
 
--- ------------------------------------------------------------------------------
--- 8. Remove `OR public.is_admin()` Bypasses Inside Ticket & Gate RPCs
--- ------------------------------------------------------------------------------
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public' AND p.proname = '_issue_ticket_internal'
-  ) THEN
-    EXECUTE $fn$
-    CREATE OR REPLACE FUNCTION public.issue_ticket_for_registration(
-      p_category text,
-      p_registration_id uuid
-    )
-    RETURNS jsonb
-    LANGUAGE plpgsql
-    SECURITY DEFINER
-    SET search_path = public
-    AS $body$
-    BEGIN
-      IF auth.uid() IS NULL THEN
-        RETURN jsonb_build_object('ok', false, 'error', 'Authentication required.');
-      END IF;
+  -- announcements
+  IF to_regclass('public.announcements') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "public_read_published_announcements" ON public.announcements;
+    DROP POLICY IF EXISTS "admin_read_all_announcements" ON public.announcements;
+    DROP POLICY IF EXISTS "announcements_select_policy" ON public.announcements;
+    CREATE POLICY "announcements_select_policy"
+    ON public.announcements FOR SELECT
+    TO anon, authenticated
+    USING (is_published = true OR (auth.role() = 'authenticated' AND public.has_crm_permission('announcements:view')));
 
-      IF p_category = 'visitor' THEN
-        IF NOT (
-          public.has_crm_permission('visitor:edit')
-          OR public.has_crm_permission('visitor:create')
-          OR public.has_crm_permission('entry:checkin_visitor')
-          OR public.has_crm_permission('tickets:manage')
-        ) THEN
-          RETURN jsonb_build_object('ok', false, 'error', 'Forbidden: visitor ticket permission required.');
-        END IF;
-      ELSIF p_category = 'esports' THEN
-        IF NOT (
-          public.has_crm_permission('esports:approve')
-          OR public.has_crm_permission('esports:edit')
-          OR public.has_crm_permission('entry:checkin_esports')
-          OR public.has_crm_permission('tickets:manage')
-        ) THEN
-          RETURN jsonb_build_object('ok', false, 'error', 'Forbidden: esports approval or ticket permission required.');
-        END IF;
-      ELSE
-        RETURN jsonb_build_object('ok', false, 'error', 'Invalid or discontinued registration category.');
-      END IF;
+    DROP POLICY IF EXISTS "admin_insert_announcement" ON public.announcements;
+    CREATE POLICY "admin_insert_announcement"
+    ON public.announcements FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('announcements:create'));
 
-      RETURN public._issue_ticket_internal(p_category, p_registration_id);
-    END;
-    $body$;
-    $fn$;
+    DROP POLICY IF EXISTS "admin_update_announcement" ON public.announcements;
+    CREATE POLICY "admin_update_announcement"
+    ON public.announcements FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('announcements:edit') OR public.has_crm_permission('announcements:publish'))
+    WITH CHECK (public.has_crm_permission('announcements:edit') OR public.has_crm_permission('announcements:publish'));
 
-    REVOKE ALL ON FUNCTION public.issue_ticket_for_registration(text, uuid) FROM PUBLIC, anon;
-    GRANT EXECUTE ON FUNCTION public.issue_ticket_for_registration(text, uuid) TO authenticated;
+    DROP POLICY IF EXISTS "admin_delete_announcement" ON public.announcements;
+    CREATE POLICY "admin_delete_announcement"
+    ON public.announcements FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('announcements:delete'));
   END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public' AND p.proname = '_issue_ticket_internal'
-  ) AND EXISTS (
-    SELECT 1 FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public' AND p.proname = '_is_registration_archived'
-  ) AND to_regclass('public.tickets') IS NOT NULL THEN
-    EXECUTE $fn$
-    CREATE OR REPLACE FUNCTION public.verify_gate_ticket(
-      p_query text,
-      p_qr_token text DEFAULT NULL,
-      p_event_day text DEFAULT '2026-11-20'
-    )
-    RETURNS jsonb
-    LANGUAGE plpgsql
-    SECURITY DEFINER
-    SET search_path = public
-    AS $body$
-    DECLARE
-      v_uid uuid := auth.uid();
-      v_clean_query text := trim(coalesce(p_query, ''));
-      v_clean_token text := nullif(trim(coalesce(p_qr_token, '')), '');
-      v_event_day text := CASE WHEN trim(coalesce(p_event_day, '')) = '2026-11-21' THEN '2026-11-21' ELSE '2026-11-20' END;
-      v_tkt public.tickets%ROWTYPE;
-      v_reg_status text;
-      v_archived_at timestamptz;
-      v_admin_notes text;
-      v_existing_ci record;
-      v_verdict text := 'INVALID';
-      v_reason text := 'Ticket not found.';
-    BEGIN
-      IF v_uid IS NULL THEN
-        RETURN jsonb_build_object('ok', false, 'verdict', 'INVALID', 'can_check_in', false, 'error', 'Authentication required.');
-      END IF;
+  -- gallery_items
+  IF to_regclass('public.gallery_items') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "public_read_published_gallery" ON public.gallery_items;
+    DROP POLICY IF EXISTS "admin_read_all_gallery" ON public.gallery_items;
+    DROP POLICY IF EXISTS "gallery_items_select_policy" ON public.gallery_items;
+    CREATE POLICY "gallery_items_select_policy"
+    ON public.gallery_items FOR SELECT
+    TO anon, authenticated
+    USING (is_published = true OR (auth.role() = 'authenticated' AND public.has_crm_permission('gallery:view')));
 
-      IF NOT (
-        public.is_entry_staff()
-        OR public.has_crm_permission('visitor:view')
-        OR public.has_crm_permission('esports:view')
-      ) THEN
-        RETURN jsonb_build_object('ok', false, 'verdict', 'INVALID', 'can_check_in', false, 'error', 'Forbidden: Gate verification permission required.');
-      END IF;
+    DROP POLICY IF EXISTS "admin_insert_gallery" ON public.gallery_items;
+    CREATE POLICY "admin_insert_gallery"
+    ON public.gallery_items FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('gallery:upload'));
 
-      IF v_clean_query = '' AND v_clean_token IS NULL THEN
-        RETURN jsonb_build_object('ok', false, 'verdict', 'INVALID', 'can_check_in', false, 'reason', 'Ticket reference or QR token is required.');
-      END IF;
+    DROP POLICY IF EXISTS "admin_update_gallery" ON public.gallery_items;
+    CREATE POLICY "admin_update_gallery"
+    ON public.gallery_items FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('gallery:edit'))
+    WITH CHECK (public.has_crm_permission('gallery:edit'));
 
-      IF v_clean_token IS NOT NULL THEN
-        SELECT * INTO v_tkt FROM public.tickets WHERE qr_token = v_clean_token LIMIT 1;
-      ELSIF v_clean_query ~ '^[a-fA-F0-9]{32,128}$' THEN
-        SELECT * INTO v_tkt FROM public.tickets WHERE qr_token = lower(v_clean_query) LIMIT 1;
-      END IF;
+    DROP POLICY IF EXISTS "admin_delete_gallery" ON public.gallery_items;
+    CREATE POLICY "admin_delete_gallery"
+    ON public.gallery_items FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('gallery:delete'));
+  END IF;
 
-      IF v_tkt.id IS NULL AND v_clean_query <> '' THEN
-        SELECT * INTO v_tkt
-        FROM public.tickets
-        WHERE upper(ticket_ref) = upper(v_clean_query)
-           OR upper(registration_ref) = upper(v_clean_query)
-        LIMIT 1;
-      END IF;
+  -- site_content
+  IF to_regclass('public.site_content') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "public_read_published_content" ON public.site_content;
+    DROP POLICY IF EXISTS "admin_read_all_content" ON public.site_content;
+    DROP POLICY IF EXISTS "site_content_select_policy" ON public.site_content;
+    CREATE POLICY "site_content_select_policy"
+    ON public.site_content FOR SELECT
+    TO anon, authenticated
+    USING (is_published = true OR (auth.role() = 'authenticated' AND public.has_crm_permission('event_info:view')));
 
-      IF v_tkt.id IS NULL AND v_clean_query <> '' AND v_clean_token IS NULL AND v_clean_query !~ '^[a-fA-F0-9]{32,128}$' THEN
-        DECLARE
-          v_fb_vis record;
-          v_fb_esp record;
-          v_fb_plr record;
-          v_fb_res jsonb;
-        BEGIN
-          SELECT id, registration_ref, status, archived_at, admin_notes INTO v_fb_vis
-          FROM public.visitor_registrations
-          WHERE upper(registration_ref) = upper(v_clean_query)
-             OR upper(coalesce(ticket_ref, '')) = upper(v_clean_query)
-          LIMIT 1;
+    DROP POLICY IF EXISTS "admin_insert_content" ON public.site_content;
+    CREATE POLICY "admin_insert_content"
+    ON public.site_content FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('event_info:create'));
 
-          IF FOUND THEN
-            IF public._is_registration_archived(v_fb_vis.archived_at, v_fb_vis.admin_notes) THEN
-              RETURN jsonb_build_object('ok', true, 'verdict', 'INVALID', 'can_check_in', false, 'reason', 'Visitor registration ' || v_fb_vis.registration_ref || ' is archived or revoked.');
-            ELSIF v_fb_vis.status <> 'confirmed' THEN
-              RETURN jsonb_build_object('ok', true, 'verdict', 'INVALID', 'can_check_in', false, 'reason', 'Visitor registration ' || v_fb_vis.registration_ref || ' status is "' || v_fb_vis.status || '" (not confirmed).');
-            ELSE
-              v_fb_res := public._issue_ticket_internal('visitor', v_fb_vis.id);
-              SELECT * INTO v_tkt FROM public.tickets WHERE registration_category = 'visitor' AND registration_id = v_fb_vis.id LIMIT 1;
-            END IF;
-          ELSE
-            SELECT id, registration_id INTO v_fb_plr
-            FROM public.players
-            WHERE upper(coalesce(player_ticket_ref, '')) = upper(v_clean_query)
-               OR upper(coalesce(visitor_ticket_ref, '')) = upper(v_clean_query)
-            LIMIT 1;
+    DROP POLICY IF EXISTS "admin_update_content" ON public.site_content;
+    CREATE POLICY "admin_update_content"
+    ON public.site_content FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:publish'))
+    WITH CHECK (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:publish'));
 
-            SELECT id, registration_ref, status, archived_at, admin_notes INTO v_fb_esp
-            FROM public.registrations
-            WHERE (v_fb_plr.registration_id IS NOT NULL AND id = v_fb_plr.registration_id)
-               OR upper(registration_ref) = upper(v_clean_query)
-               OR upper(coalesce(captain_ticket_ref, '')) = upper(v_clean_query)
-            LIMIT 1;
+    DROP POLICY IF EXISTS "admin_delete_content" ON public.site_content;
+    CREATE POLICY "admin_delete_content"
+    ON public.site_content FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit'));
+  END IF;
 
-            IF FOUND THEN
-              IF public._is_registration_archived(v_fb_esp.archived_at, v_fb_esp.admin_notes) THEN
-                RETURN jsonb_build_object('ok', true, 'verdict', 'INVALID', 'can_check_in', false, 'reason', 'Esports registration ' || v_fb_esp.registration_ref || ' is archived or revoked.');
-              ELSIF v_fb_esp.status <> 'confirmed' THEN
-                RETURN jsonb_build_object('ok', true, 'verdict', 'INVALID', 'can_check_in', false, 'reason', 'Esports registration ' || v_fb_esp.registration_ref || ' status is "' || v_fb_esp.status || '" (not confirmed).');
-              ELSE
-                v_fb_res := public._issue_ticket_internal('esports', v_fb_esp.id);
-                SELECT * INTO v_tkt FROM public.tickets WHERE registration_category = 'esports' AND registration_id = v_fb_esp.id LIMIT 1;
-              END IF;
-            END IF;
-          END IF;
-        END;
-      END IF;
+  -- schedule_items
+  IF to_regclass('public.schedule_items') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "public_read_published_schedule" ON public.schedule_items;
+    DROP POLICY IF EXISTS "admin_read_all_schedule" ON public.schedule_items;
+    DROP POLICY IF EXISTS "schedule_items_select_policy" ON public.schedule_items;
+    CREATE POLICY "schedule_items_select_policy"
+    ON public.schedule_items FOR SELECT
+    TO anon, authenticated
+    USING (is_published = true OR (auth.role() = 'authenticated' AND public.has_crm_permission('event_info:view')));
 
-      IF v_tkt.id IS NULL THEN
-        RETURN jsonb_build_object(
-          'ok', true,
-          'verdict', 'INVALID',
-          'can_check_in', false,
-          'reason', 'No issued ticket matches this ticket number or QR token.'
-        );
-      END IF;
+    DROP POLICY IF EXISTS "admin_insert_schedule" ON public.schedule_items;
+    CREATE POLICY "admin_insert_schedule"
+    ON public.schedule_items FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('event_info:create'));
 
-      IF v_tkt.registration_category = 'participation' THEN
-        RETURN jsonb_build_object(
-          'ok', true,
-          'verdict', 'INVALID',
-          'can_check_in', false,
-          'reason', 'Participation tickets have been discontinued.'
-        );
-      END IF;
+    DROP POLICY IF EXISTS "admin_update_schedule" ON public.schedule_items;
+    CREATE POLICY "admin_update_schedule"
+    ON public.schedule_items FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:publish'))
+    WITH CHECK (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:publish'));
 
-      IF v_tkt.registration_category = 'visitor' AND NOT (
-        public.has_crm_permission('entry:scan_visitor')
-        OR public.has_crm_permission('entry:checkin_visitor')
-        OR public.has_crm_permission('visitor:view')
-        OR public.has_crm_permission('tickets:view')
-        OR public.has_crm_permission('tickets:manage')
-      ) THEN
-        RETURN jsonb_build_object('ok', false, 'verdict', 'INVALID', 'can_check_in', false, 'error', 'Forbidden: You do not have permission to verify visitor passes.');
-      ELSIF v_tkt.registration_category = 'esports' AND NOT (
-        public.has_crm_permission('entry:scan_esports')
-        OR public.has_crm_permission('entry:checkin_esports')
-        OR public.has_crm_permission('esports:view')
-        OR public.has_crm_permission('tickets:view')
-        OR public.has_crm_permission('tickets:manage')
-      ) THEN
-        RETURN jsonb_build_object('ok', false, 'verdict', 'INVALID', 'can_check_in', false, 'error', 'Forbidden: You do not have permission to verify esports passes.');
-      END IF;
+    DROP POLICY IF EXISTS "admin_delete_schedule" ON public.schedule_items;
+    CREATE POLICY "admin_delete_schedule"
+    ON public.schedule_items FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit'));
+  END IF;
 
-      IF v_clean_token IS NOT NULL AND v_tkt.qr_token <> v_clean_token THEN
-        RETURN jsonb_build_object(
-          'ok', true,
-          'verdict', 'INVALID',
-          'can_check_in', false,
-          'reason', 'QR token mismatch. Reject potential forged ticket.'
-        );
-      END IF;
+  -- faq_items
+  IF to_regclass('public.faq_items') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "public_read_published_faqs" ON public.faq_items;
+    DROP POLICY IF EXISTS "admin_read_all_faqs" ON public.faq_items;
+    DROP POLICY IF EXISTS "faq_items_select_policy" ON public.faq_items;
+    CREATE POLICY "faq_items_select_policy"
+    ON public.faq_items FOR SELECT
+    TO anon, authenticated
+    USING (is_published = true OR (auth.role() = 'authenticated' AND public.has_crm_permission('event_info:view')));
 
-      IF v_clean_query <> '' AND v_clean_query !~ '^[a-fA-F0-9]{32,128}$'
-         AND upper(v_tkt.ticket_ref) <> upper(v_clean_query)
-         AND upper(v_tkt.registration_ref) <> upper(v_clean_query)
-      THEN
-        RETURN jsonb_build_object(
-          'ok', true,
-          'verdict', 'INVALID',
-          'can_check_in', false,
-          'reason', 'Ticket reference mismatch against QR token.'
-        );
-      END IF;
+    DROP POLICY IF EXISTS "admin_insert_faq" ON public.faq_items;
+    CREATE POLICY "admin_insert_faq"
+    ON public.faq_items FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('event_info:create'));
 
-      IF v_tkt.registration_category = 'visitor' THEN
-        SELECT status, archived_at, admin_notes INTO v_reg_status, v_archived_at, v_admin_notes
-        FROM public.visitor_registrations WHERE id = v_tkt.registration_id;
-      ELSE
-        SELECT status, archived_at, admin_notes INTO v_reg_status, v_archived_at, v_admin_notes
-        FROM public.registrations WHERE id = v_tkt.registration_id;
-      END IF;
+    DROP POLICY IF EXISTS "admin_update_faq" ON public.faq_items;
+    CREATE POLICY "admin_update_faq"
+    ON public.faq_items FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:publish'))
+    WITH CHECK (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:publish'));
 
-      SELECT checked_in_at, coalesce(checked_in_by_email, checked_in_by::text) AS staff_ref
-      INTO v_existing_ci
-      FROM public.check_ins
-      WHERE event_day = v_event_day
-        AND coalesce(is_override, false) = false
+    DROP POLICY IF EXISTS "admin_delete_faq" ON public.faq_items;
+    CREATE POLICY "admin_delete_faq"
+    ON public.faq_items FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit'));
+  END IF;
+
+  -- sponsors
+  IF to_regclass('public.sponsors') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "public_read_published_sponsors" ON public.sponsors;
+    DROP POLICY IF EXISTS "admin_read_all_sponsors" ON public.sponsors;
+    DROP POLICY IF EXISTS "sponsors_select_policy" ON public.sponsors;
+    CREATE POLICY "sponsors_select_policy"
+    ON public.sponsors FOR SELECT
+    TO anon, authenticated
+    USING (is_published = true OR (auth.role() = 'authenticated' AND public.has_crm_permission('event_info:view')));
+
+    DROP POLICY IF EXISTS "admin_insert_sponsor" ON public.sponsors;
+    CREATE POLICY "admin_insert_sponsor"
+    ON public.sponsors FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('event_info:create'));
+
+    DROP POLICY IF EXISTS "admin_update_sponsor" ON public.sponsors;
+    CREATE POLICY "admin_update_sponsor"
+    ON public.sponsors FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:publish'))
+    WITH CHECK (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:publish'));
+
+    DROP POLICY IF EXISTS "admin_delete_sponsor" ON public.sponsors;
+    CREATE POLICY "admin_delete_sponsor"
+    ON public.sponsors FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit'));
+  END IF;
+
+  -- games
+  IF to_regclass('public.games') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "public_read_published_games" ON public.games;
+    DROP POLICY IF EXISTS "admin_read_all_games" ON public.games;
+    DROP POLICY IF EXISTS "anon_read_open_games" ON public.games;
+    DROP POLICY IF EXISTS "games_select_policy" ON public.games;
+    CREATE POLICY "games_select_policy"
+    ON public.games FOR SELECT
+    TO anon, authenticated
+    USING (
+      (is_published = true AND is_active = true)
+      OR (
+        auth.role() = 'authenticated'
         AND (
-          ticket_id = v_tkt.id
-          OR upper(coalesce(ticket_ref, '')) = upper(v_tkt.ticket_ref)
-          OR upper(coalesce(ticket_ref, '')) = upper(v_tkt.registration_ref)
-          OR (v_tkt.registration_category = 'visitor' AND visitor_registration_id = v_tkt.registration_id)
+          public.has_crm_permission('event_info:view')
+          OR public.has_crm_permission('esports:view')
+          OR public.has_crm_permission('tournament:manage_games')
         )
-      ORDER BY checked_in_at DESC
-      LIMIT 1;
+      )
+    );
 
-      IF v_tkt.status <> 'active' THEN
-        v_verdict := 'INVALID';
-        v_reason := 'Ticket status is "' || v_tkt.status || '".';
-      ELSIF v_reg_status IS NULL OR public._is_registration_archived(v_archived_at, v_admin_notes) THEN
-        v_verdict := 'INVALID';
-        v_reason := 'Associated registration is missing or archived.';
-      ELSIF v_reg_status <> 'confirmed' THEN
-        v_verdict := 'INVALID';
-        v_reason := 'Associated registration status is "' || v_reg_status || '" (not confirmed).';
-      ELSIF v_existing_ci.checked_in_at IS NOT NULL THEN
-        v_verdict := 'ALREADY USED';
-        v_reason := 'Ticket already checked in on ' || v_event_day || ' at ' || to_char(v_existing_ci.checked_in_at AT TIME ZONE 'Asia/Kolkata', 'DD Mon YYYY HH12:MI AM') || ' IST.';
-      ELSE
-        v_verdict := 'VALID';
-        v_reason := 'Authentic confirmed ticket eligible for gate admission on ' || v_event_day || '.';
-      END IF;
+    DROP POLICY IF EXISTS "admin_insert_game" ON public.games;
+    CREATE POLICY "admin_insert_game"
+    ON public.games FOR INSERT
+    TO authenticated
+    WITH CHECK (
+      public.has_crm_permission('event_info:create')
+      OR public.has_crm_permission('tournament:manage_games')
+      OR public.has_crm_permission('esports:edit')
+    );
 
-      RETURN jsonb_build_object(
-        'ok', true,
-        'verdict', v_verdict,
-        'can_check_in', (v_verdict = 'VALID'),
-        'reason', v_reason,
-        'ticket', jsonb_build_object(
-          'id', v_tkt.id,
-          'ticket_ref', v_tkt.ticket_ref,
-          'registration_id', v_tkt.registration_id,
-          'registration_category', v_tkt.registration_category,
-          'registration_ref', v_tkt.registration_ref,
-          'display_name', v_tkt.display_name,
-          'subtitle', v_tkt.subtitle,
-          'institution', v_tkt.institution,
-          'metadata', v_tkt.metadata,
-          'status', v_tkt.status,
-          'registration_status', coalesce(v_reg_status, 'unknown'),
-          'issued_at', v_tkt.issued_at,
-          'checked_in_at', v_existing_ci.checked_in_at,
-          'checked_in_by', CASE WHEN v_existing_ci.checked_in_at IS NOT NULL THEN v_tkt.checked_in_by ELSE NULL END,
-          'checked_in_by_email', v_existing_ci.staff_ref
-        )
-      );
-    END;
-    $body$;
-    $fn$;
+    DROP POLICY IF EXISTS "admin_update_game" ON public.games;
+    DROP POLICY IF EXISTS "admin_update_games_rbac" ON public.games;
+    CREATE POLICY "admin_update_games_rbac"
+    ON public.games FOR UPDATE
+    TO authenticated
+    USING (
+      public.has_crm_permission('event_info:edit')
+      OR public.has_crm_permission('tournament:manage_games')
+      OR public.has_crm_permission('esports:edit')
+      OR public.has_crm_permission('system_settings:manage')
+    )
+    WITH CHECK (
+      public.has_crm_permission('event_info:edit')
+      OR public.has_crm_permission('tournament:manage_games')
+      OR public.has_crm_permission('esports:edit')
+      OR public.has_crm_permission('system_settings:manage')
+    );
 
-    REVOKE ALL ON FUNCTION public.verify_gate_ticket(text, text, text) FROM PUBLIC, anon;
-    GRANT EXECUTE ON FUNCTION public.verify_gate_ticket(text, text, text) TO authenticated;
+    DROP POLICY IF EXISTS "admin_delete_game" ON public.games;
+    CREATE POLICY "admin_delete_game"
+    ON public.games FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('tournament:manage_games'));
   END IF;
 
-  IF to_regclass('public.visitor_registrations') IS NOT NULL
-     AND to_regclass('public.registration_controls') IS NOT NULL THEN
-    EXECUTE $fn$
-    CREATE OR REPLACE FUNCTION public.submit_visitor_registration_v2(
-      p_full_name text,
-      p_email text,
-      p_phone text DEFAULT NULL,
-      p_institution text DEFAULT NULL,
-      p_visitor_category text DEFAULT 'Student Visitor',
-      p_student_class text DEFAULT NULL,
-      p_student_id text DEFAULT NULL,
-      p_designation text DEFAULT NULL,
-      p_esports_interest boolean DEFAULT false,
-      p_preferred_game text DEFAULT NULL,
-      p_esports_intent text DEFAULT NULL,
-      p_in_game_id text DEFAULT NULL,
-      p_team_name text DEFAULT NULL,
-      p_competition_notes text DEFAULT NULL,
-      p_days_attending text DEFAULT 'Both',
-      p_consent boolean DEFAULT true,
-      p_website text DEFAULT '',
-      p_registration_source text DEFAULT 'public'
-    )
-    RETURNS text
-    LANGUAGE plpgsql
-    SECURITY DEFINER
-    SET search_path = public
-    AS $body$
-    DECLARE
-      v_uid uuid := auth.uid();
-      v_email text := lower(trim(coalesce(p_email, '')));
-      v_raw_phone text := nullif(regexp_replace(coalesce(p_phone, ''), '[\s\-+()]', '', 'g'), '');
-      v_name text := trim(coalesce(p_full_name, ''));
-      v_raw_cat text := lower(trim(coalesce(p_visitor_category, '')));
-      v_clean_cat text;
-      v_student_class text := nullif(trim(coalesce(p_student_class, '')), '');
-      v_designation text := nullif(trim(coalesce(p_designation, '')), '');
-      v_institution text := nullif(trim(coalesce(p_institution, '')), '');
-      v_source text := CASE WHEN lower(trim(coalesce(p_registration_source, 'public'))) = 'walk_in' THEN 'walk_in' ELSE 'public' END;
-      v_ref text;
-      v_existing_walkin_ref text;
-      v_ctrl record;
-      v_actor_email text;
-      v_meta jsonb := '{}'::jsonb;
-    BEGIN
-      IF v_source = 'walk_in' THEN
-        IF v_uid IS NULL OR NOT (
-          public.has_crm_permission('visitor:create')
-          OR public.has_crm_permission('entry:checkin_visitor')
-        ) THEN
-          RAISE EXCEPTION 'Forbidden: Authorized visitor creation or gate entry permission required for walk-in registration.';
-        END IF;
-      ELSE
-        SELECT is_open, closed_message, opens_at, closes_at INTO v_ctrl
-        FROM public.registration_controls
-        WHERE form_type = 'visitor';
+  -- institutions
+  IF to_regclass('public.institutions') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "admin_manage_institutions" ON public.institutions;
+    DROP POLICY IF EXISTS "institutions_admin_write" ON public.institutions;
+    CREATE POLICY "institutions_admin_write"
+    ON public.institutions FOR ALL
+    TO authenticated
+    USING (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:create'))
+    WITH CHECK (public.has_crm_permission('event_info:edit') OR public.has_crm_permission('event_info:create'));
+  END IF;
 
-        IF FOUND THEN
-          IF v_ctrl.is_open IS NOT TRUE THEN
-            RAISE EXCEPTION 'Registrations are closed: %', coalesce(v_ctrl.closed_message, 'Visitor registrations are currently closed.');
-          END IF;
-          IF v_ctrl.opens_at IS NOT NULL AND now() < v_ctrl.opens_at THEN
-            RAISE EXCEPTION 'Registrations have not opened yet.';
-          END IF;
-          IF v_ctrl.closes_at IS NOT NULL AND now() > v_ctrl.closes_at THEN
-            RAISE EXCEPTION 'Registrations have closed.';
-          END IF;
-        END IF;
-      END IF;
+  -- event_settings
+  IF to_regclass('public.event_settings') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "public_read_published_settings" ON public.event_settings;
+    DROP POLICY IF EXISTS "admin_read_all_settings" ON public.event_settings;
+    DROP POLICY IF EXISTS "event_settings_select_policy" ON public.event_settings;
+    CREATE POLICY "event_settings_select_policy"
+    ON public.event_settings FOR SELECT
+    TO anon, authenticated
+    USING (
+      is_published = true
+      OR (
+        auth.role() = 'authenticated'
+        AND (public.has_crm_permission('system_settings:view') OR public.has_crm_permission('social_links:view'))
+      )
+    );
 
-      IF coalesce(p_website, '') <> '' THEN
-        RAISE EXCEPTION 'Submission rejected';
-      END IF;
-      IF p_consent IS NOT TRUE THEN
-        RAISE EXCEPTION 'Consent is required';
-      END IF;
+    DROP POLICY IF EXISTS "admin_insert_settings" ON public.event_settings;
+    CREATE POLICY "admin_insert_settings"
+    ON public.event_settings FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('system_settings:manage'));
 
-      IF v_raw_cat IN ('student', 'student visitor', 'school student', 'college student')
-         OR v_raw_cat LIKE '%student%' THEN
-        v_clean_cat := 'Student Visitor';
-      ELSIF v_raw_cat IN (
-          'faculty',
-          'faculty / staff',
-          'faculty & institutional delegates',
-          'faculty and institutional delegates',
-          'teacher or educator',
-          'institutional delegate'
+    DROP POLICY IF EXISTS "admin_update_settings" ON public.event_settings;
+    CREATE POLICY "admin_update_settings"
+    ON public.event_settings FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('system_settings:manage') OR (category = 'social' AND public.has_crm_permission('social_links:edit')))
+    WITH CHECK (public.has_crm_permission('system_settings:manage') OR (category = 'social' AND public.has_crm_permission('social_links:edit')));
+
+    DROP POLICY IF EXISTS "admin_delete_settings" ON public.event_settings;
+    CREATE POLICY "admin_delete_settings"
+    ON public.event_settings FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('system_settings:manage'));
+  END IF;
+
+  -- registration_controls
+  IF to_regclass('public.registration_controls') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "admin_update_registration_controls" ON public.registration_controls;
+    CREATE POLICY "admin_update_registration_controls"
+    ON public.registration_controls FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('system_settings:manage'))
+    WITH CHECK (public.has_crm_permission('system_settings:manage'));
+  END IF;
+
+  -- crm_emails
+  IF to_regclass('public.crm_emails') IS NOT NULL THEN
+    REVOKE ALL ON public.crm_emails FROM anon;
+
+    DROP POLICY IF EXISTS "Admins can view CRM emails" ON public.crm_emails;
+    CREATE POLICY "Admins can view CRM emails"
+    ON public.crm_emails FOR SELECT
+    TO authenticated
+    USING (public.has_crm_permission('email_centre:view'));
+
+    DROP POLICY IF EXISTS "Admins can insert CRM emails" ON public.crm_emails;
+    CREATE POLICY "Admins can insert CRM emails"
+    ON public.crm_emails FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('email_centre:send') OR public.has_crm_permission('email_centre:resend'));
+
+    DROP POLICY IF EXISTS "Admins can update CRM emails" ON public.crm_emails;
+    CREATE POLICY "Admins can update CRM emails"
+    ON public.crm_emails FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('email_centre:send') OR public.has_crm_permission('email_centre:resend'))
+    WITH CHECK (public.has_crm_permission('email_centre:send') OR public.has_crm_permission('email_centre:resend'));
+  END IF;
+
+  -- audit_logs: only system_settings:view (plus esports match/tournament audit timeline) may SELECT;
+  -- only active admins or active operational staff with export/checkin/esports-edit may INSERT with actor_id = auth.uid()
+  IF to_regclass('public.audit_logs') IS NOT NULL THEN
+    REVOKE ALL ON public.audit_logs FROM anon;
+    GRANT SELECT, INSERT ON public.audit_logs TO authenticated;
+
+    DROP POLICY IF EXISTS "admin_read_audit_logs" ON public.audit_logs;
+    CREATE POLICY "admin_read_audit_logs"
+    ON public.audit_logs FOR SELECT
+    TO authenticated
+    USING (
+      public.has_crm_permission('system_settings:view')
+      OR (
+        entity_type IN ('matches', 'tournaments')
+        AND (
+          public.has_crm_permission('tournament:confirm_results')
+          OR public.has_crm_permission('esports:view')
         )
-        OR v_raw_cat LIKE '%faculty%'
-        OR v_raw_cat LIKE '%delegate%'
-        OR v_raw_cat LIKE '%teacher%'
-        OR v_raw_cat LIKE '%educator%' THEN
-        v_clean_cat := 'Faculty & Institutional Delegates';
-      ELSIF v_raw_cat IN ('general', 'general visitor', 'walk-in visitor')
-         OR v_raw_cat LIKE '%general%'
-         OR (v_source = 'walk_in' AND v_raw_cat LIKE '%walk%') THEN
-        v_clean_cat := 'General Visitor';
-      ELSE
-        RAISE EXCEPTION 'Please select a valid visitor category (Student Visitor, Faculty & Institutional Delegates, or General Visitor).';
-      END IF;
-
-      IF length(v_name) NOT BETWEEN 2 AND 120 THEN
-        RAISE EXCEPTION 'Full Name is mandatory (2 to 120 characters).';
-      END IF;
-      IF length(v_email) > 254 OR v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' THEN
-        RAISE EXCEPTION 'A valid Email Address is mandatory.';
-      END IF;
-
-      IF v_clean_cat = 'Student Visitor' THEN
-        IF v_student_class IS NULL OR length(v_student_class) NOT BETWEEN 1 AND 120 THEN
-          RAISE EXCEPTION 'Class / Course is mandatory for Student Visitor registrations.';
-        END IF;
-        IF v_institution IS NULL OR length(v_institution) NOT BETWEEN 2 AND 150 THEN
-          RAISE EXCEPTION 'College / Institution Name is mandatory for Student Visitor registrations.';
-        END IF;
-        v_designation := NULL;
-      ELSIF v_clean_cat = 'Faculty & Institutional Delegates' THEN
-        IF v_designation IS NULL OR length(v_designation) NOT BETWEEN 2 AND 120 THEN
-          RAISE EXCEPTION 'Designation / Role is mandatory for Faculty & Institutional Delegates.';
-        END IF;
-        IF v_institution IS NULL OR length(v_institution) NOT BETWEEN 2 AND 150 THEN
-          RAISE EXCEPTION 'College / Institution Name is mandatory for Faculty & Institutional Delegates.';
-        END IF;
-        v_student_class := NULL;
-      ELSE
-        v_student_class := NULL;
-        v_designation := NULL;
-        IF v_institution IS NOT NULL AND length(v_institution) NOT BETWEEN 2 AND 150 THEN
-          RAISE EXCEPTION 'College / Institution Name must be between 2 and 150 characters when provided.';
-        END IF;
-      END IF;
-
-      IF v_raw_phone IS NOT NULL AND v_raw_phone !~ '^[0-9]{10,15}$' THEN
-        RAISE EXCEPTION 'Invalid phone number format.';
-      END IF;
-
-      IF v_source = 'walk_in' THEN
-        SELECT registration_ref INTO v_existing_walkin_ref
-        FROM public.visitor_registrations
-        WHERE lower(email) = v_email
-          AND lower(trim(full_name)) = lower(v_name)
-          AND registration_source = 'walk_in'
-          AND archived_at IS NULL
-          AND submitted_at > now() - interval '5 minutes'
-        ORDER BY submitted_at DESC
-        LIMIT 1;
-
-        IF v_existing_walkin_ref IS NOT NULL THEN
-          RETURN v_existing_walkin_ref;
-        END IF;
-      END IF;
-
-      IF v_source = 'public' AND (SELECT count(*) FROM public.visitor_registrations
-          WHERE lower(email) = v_email AND submitted_at > now() - interval '1 hour') >= 5 THEN
-        RAISE EXCEPTION 'Too many submissions. Please try again later';
-      END IF;
-
-      IF EXISTS (SELECT 1 FROM public.visitor_registrations WHERE lower(email) = v_email AND archived_at IS NULL) THEN
-        RAISE EXCEPTION 'A visitor registration already exists for this email address.';
-      END IF;
-
-      IF v_source = 'walk_in' THEN
-        SELECT coalesce(
-          nullif(trim(coalesce(auth.jwt() ->> 'email', '')), ''),
-          (SELECT u.email FROM auth.users u WHERE u.id = v_uid),
-          'gate-staff@supernova'
-        ) INTO v_actor_email;
-      END IF;
-
-      v_meta := jsonb_build_object(
-        'visitor_category', v_clean_cat,
-        'student_class', v_student_class,
-        'designation', v_designation,
-        'institution', v_institution,
-        'registration_source', v_source,
-        'esports_interest', coalesce(p_esports_interest, false),
-        'preferred_game', nullif(trim(coalesce(p_preferred_game, '')), ''),
-        'esports_intent', nullif(trim(coalesce(p_esports_intent, '')), ''),
-        'in_game_id', nullif(trim(coalesce(p_in_game_id, '')), ''),
-        'team_name', nullif(trim(coalesce(p_team_name, '')), ''),
-        'competition_notes', nullif(trim(coalesce(p_competition_notes, '')), ''),
-        'days_attending', coalesce(nullif(trim(coalesce(p_days_attending, '')), ''), 'Both')
-      );
-
-      INSERT INTO public.visitor_registrations (
-        full_name,
-        email,
-        phone,
-        institution,
-        visitor_category,
-        visitor_count,
-        student_class,
-        student_id,
-        designation,
-        esports_interest,
-        preferred_game,
-        esports_intent,
-        in_game_id,
-        team_name,
-        competition_notes,
-        days_attending,
-        registration_source,
-        admin_notes,
-        metadata,
-        status,
-        consent_given
       )
-      VALUES (
-        v_name,
-        v_email,
-        v_raw_phone,
-        v_institution,
-        v_clean_cat,
-        1,
-        v_student_class,
-        NULL,
-        v_designation,
-        coalesce(p_esports_interest, false),
-        nullif(trim(coalesce(p_preferred_game, '')), ''),
-        nullif(trim(coalesce(p_esports_intent, '')), ''),
-        nullif(trim(coalesce(p_in_game_id, '')), ''),
-        nullif(trim(coalesce(p_team_name, '')), ''),
-        nullif(trim(coalesce(p_competition_notes, '')), ''),
-        coalesce(nullif(trim(coalesce(p_days_attending, '')), ''), 'Both'),
-        v_source,
-        CASE WHEN v_source = 'walk_in' THEN '[WALK_IN] Registered at Gate Entry by ' || coalesce(v_actor_email, 'staff') ELSE NULL END,
-        v_meta,
-        'confirmed',
-        true
+    );
+
+    DROP POLICY IF EXISTS "admin_insert_audit_log" ON public.audit_logs;
+    CREATE POLICY "admin_insert_audit_log"
+    ON public.audit_logs FOR INSERT
+    TO authenticated
+    WITH CHECK (
+      actor_id = (select auth.uid())
+      AND (
+        public.is_admin()
+        OR public.has_crm_permission('entry:checkin_visitor')
+        OR public.has_crm_permission('entry:checkin_esports')
+        OR public.has_crm_permission('visitor:export')
+        OR public.has_crm_permission('esports:export')
+        OR public.has_crm_permission('reports:export')
+        OR public.has_crm_permission('esports:edit')
       )
-      RETURNING registration_ref INTO v_ref;
+    );
+  END IF;
 
-      RETURN v_ref;
-    END;
-    $body$;
-    $fn$;
+  -- media_items
+  IF to_regclass('public.media_items') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "admin_insert_media_items" ON public.media_items;
+    CREATE POLICY "admin_insert_media_items"
+    ON public.media_items FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('gallery:upload'));
 
-    REVOKE EXECUTE ON FUNCTION public.submit_visitor_registration_v2(text, text, text, text, text, text, text, text, boolean, text, text, text, text, text, text, boolean, text, text) FROM PUBLIC;
-    GRANT EXECUTE ON FUNCTION public.submit_visitor_registration_v2(text, text, text, text, text, text, text, text, boolean, text, text, text, text, text, text, boolean, text, text) TO anon, authenticated;
+    DROP POLICY IF EXISTS "admin_update_media_items" ON public.media_items;
+    CREATE POLICY "admin_update_media_items"
+    ON public.media_items FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('gallery:edit'))
+    WITH CHECK (public.has_crm_permission('gallery:edit'));
+
+    DROP POLICY IF EXISTS "admin_delete_media_items" ON public.media_items;
+    CREATE POLICY "admin_delete_media_items"
+    ON public.media_items FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('gallery:delete'));
+  END IF;
+
+  -- form_options
+  IF to_regclass('public.form_options') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "admin_insert_form_options" ON public.form_options;
+    CREATE POLICY "admin_insert_form_options"
+    ON public.form_options FOR INSERT
+    TO authenticated
+    WITH CHECK (public.has_crm_permission('system_settings:manage'));
+
+    DROP POLICY IF EXISTS "admin_update_form_options" ON public.form_options;
+    CREATE POLICY "admin_update_form_options"
+    ON public.form_options FOR UPDATE
+    TO authenticated
+    USING (public.has_crm_permission('system_settings:manage'))
+    WITH CHECK (public.has_crm_permission('system_settings:manage'));
+
+    DROP POLICY IF EXISTS "admin_delete_form_options" ON public.form_options;
+    CREATE POLICY "admin_delete_form_options"
+    ON public.form_options FOR DELETE
+    TO authenticated
+    USING (public.has_crm_permission('system_settings:manage'));
+  END IF;
+
+  -- nas_archives
+  IF to_regclass('public.nas_archives') IS NOT NULL THEN
+    REVOKE ALL ON public.nas_archives FROM anon;
+    DROP POLICY IF EXISTS "Admins can view and manage nas_archives" ON public.nas_archives;
+    CREATE POLICY "Admins can view and manage nas_archives"
+    ON public.nas_archives FOR ALL
+    TO authenticated
+    USING (
+      public.has_crm_permission('email_centre:view')
+      OR public.has_crm_permission('reports:view')
+      OR public.has_crm_permission('visitor:export')
+      OR public.has_crm_permission('esports:export')
+    )
+    WITH CHECK (
+      public.has_crm_permission('email_centre:send')
+      OR public.has_crm_permission('system_settings:manage')
+    );
+  END IF;
+
+  -- storage.objects policies for site-media bucket
+  IF to_regclass('storage.objects') IS NOT NULL THEN
+    DROP POLICY IF EXISTS "admin_upload_site_media" ON storage.objects;
+    CREATE POLICY "admin_upload_site_media"
+    ON storage.objects FOR INSERT
+    TO authenticated
+    WITH CHECK (bucket_id = 'site-media' AND public.has_crm_permission('gallery:upload'));
+
+    DROP POLICY IF EXISTS "admin_update_site_media" ON storage.objects;
+    CREATE POLICY "admin_update_site_media"
+    ON storage.objects FOR UPDATE
+    TO authenticated
+    USING (bucket_id = 'site-media' AND public.has_crm_permission('gallery:edit'))
+    WITH CHECK (bucket_id = 'site-media' AND public.has_crm_permission('gallery:edit'));
+
+    DROP POLICY IF EXISTS "admin_delete_site_media" ON storage.objects;
+    CREATE POLICY "admin_delete_site_media"
+    ON storage.objects FOR DELETE
+    TO authenticated
+    USING (bucket_id = 'site-media' AND public.has_crm_permission('gallery:delete'));
   END IF;
 END $$;
-
--- ------------------------------------------------------------------------------
--- 9. Strict RLS Policies & Grants for Staff Lifecycle Tables
--- ------------------------------------------------------------------------------
-REVOKE ALL ON public.user_roles FROM anon;
-REVOKE ALL ON public.profiles FROM anon;
-REVOKE ALL ON public.crm_user_permissions FROM anon;
-REVOKE ALL ON public.crm_invitations FROM anon;
-
-GRANT SELECT, UPDATE, DELETE ON public.profiles TO authenticated;
-GRANT ALL ON public.profiles TO service_role;
-
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.user_roles TO authenticated;
-GRANT ALL ON public.user_roles TO service_role;
-
-DROP POLICY IF EXISTS "select_own_profile" ON public.profiles;
-DROP POLICY IF EXISTS "super_admin_read_profiles" ON public.profiles;
-DROP POLICY IF EXISTS "profiles_select_rbac" ON public.profiles;
-CREATE POLICY "profiles_select_rbac"
-ON public.profiles FOR SELECT
-TO authenticated
-USING (
-  id = (select auth.uid())
-  OR public.is_super_admin()
-  OR (
-    public.has_any_user_management_permission()
-    AND NOT EXISTS (
-      SELECT 1 FROM public.user_roles ur_super
-      WHERE ur_super.user_id = public.profiles.id
-        AND ur_super.role = 'super_admin'
-    )
-  )
-);
-
-DROP POLICY IF EXISTS "update_own_profile" ON public.profiles;
-DROP POLICY IF EXISTS "super_admin_update_profiles" ON public.profiles;
-DROP POLICY IF EXISTS "profiles_update_rbac" ON public.profiles;
-CREATE POLICY "profiles_update_rbac"
-ON public.profiles FOR UPDATE
-TO authenticated
-USING (id = (select auth.uid()) OR public.is_super_admin())
-WITH CHECK (id = (select auth.uid()) OR public.is_super_admin());
-
-DROP POLICY IF EXISTS "profiles_delete_rbac" ON public.profiles;
-CREATE POLICY "profiles_delete_rbac"
-ON public.profiles FOR DELETE
-TO authenticated
-USING (public.is_super_admin() AND id <> (select auth.uid()));
-
-DROP POLICY IF EXISTS "admin_manage_roles_select" ON public.user_roles;
-DROP POLICY IF EXISTS "admin_insert_role" ON public.user_roles;
-DROP POLICY IF EXISTS "admin_update_role" ON public.user_roles;
-DROP POLICY IF EXISTS "admin_delete_role" ON public.user_roles;
-DROP POLICY IF EXISTS "user_roles_select_rbac" ON public.user_roles;
-DROP POLICY IF EXISTS "user_roles_insert_rbac" ON public.user_roles;
-DROP POLICY IF EXISTS "user_roles_update_rbac" ON public.user_roles;
-DROP POLICY IF EXISTS "user_roles_delete_rbac" ON public.user_roles;
-
-CREATE POLICY "user_roles_select_rbac"
-ON public.user_roles FOR SELECT
-TO authenticated
-USING (
-  user_id = (select auth.uid())
-  OR public.is_super_admin()
-  OR (
-    public.has_any_user_management_permission()
-    AND role <> 'super_admin'
-  )
-);
-
-CREATE POLICY "user_roles_insert_rbac"
-ON public.user_roles FOR INSERT
-TO authenticated
-WITH CHECK (public.is_super_admin() AND user_id <> (select auth.uid()));
-
-CREATE POLICY "user_roles_update_rbac"
-ON public.user_roles FOR UPDATE
-TO authenticated
-USING (public.is_super_admin() AND user_id <> (select auth.uid()))
-WITH CHECK (public.is_super_admin() AND user_id <> (select auth.uid()));
-
-CREATE POLICY "user_roles_delete_rbac"
-ON public.user_roles FOR DELETE
-TO authenticated
-USING (public.is_super_admin() AND user_id <> (select auth.uid()));
-
-DROP POLICY IF EXISTS "crm_permissions_select_rbac" ON public.crm_user_permissions;
-CREATE POLICY "crm_permissions_select_rbac"
-ON public.crm_user_permissions FOR SELECT
-TO authenticated
-USING (
-  user_id = (select auth.uid())
-  OR public.is_super_admin()
-  OR (
-    public.has_any_user_management_permission()
-    AND NOT EXISTS (
-      SELECT 1 FROM public.user_roles ur_super
-      WHERE ur_super.user_id = public.crm_user_permissions.user_id
-        AND ur_super.role = 'super_admin'
-    )
-  )
-);
-
-DROP POLICY IF EXISTS "crm_permissions_write_rbac" ON public.crm_user_permissions;
-CREATE POLICY "crm_permissions_write_rbac"
-ON public.crm_user_permissions FOR ALL
-TO authenticated
-USING (public.is_super_admin() AND user_id <> (select auth.uid()))
-WITH CHECK (public.is_super_admin() AND user_id <> (select auth.uid()));
-
-DROP POLICY IF EXISTS "crm_invitations_rbac" ON public.crm_invitations;
-DROP POLICY IF EXISTS "crm_invitations_select_rbac" ON public.crm_invitations;
-DROP POLICY IF EXISTS "crm_invitations_write_rbac" ON public.crm_invitations;
-
-CREATE POLICY "crm_invitations_select_rbac"
-ON public.crm_invitations FOR SELECT
-TO authenticated
-USING (
-  public.is_super_admin()
-  OR (
-    public.has_any_user_management_permission()
-    AND role <> 'super_admin'
-  )
-);
-
-CREATE POLICY "crm_invitations_write_rbac"
-ON public.crm_invitations FOR ALL
-TO authenticated
-USING (public.is_super_admin())
-WITH CHECK (public.is_super_admin());
 
 -- Ensure Realtime publication covers profiles, user_roles & crm_user_permissions
 DO $$
@@ -1843,3 +2654,4 @@ BEGIN
 END $$;
 
 NOTIFY pgrst, 'reload schema';
+
