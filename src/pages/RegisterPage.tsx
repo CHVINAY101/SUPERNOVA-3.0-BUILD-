@@ -12,9 +12,9 @@ import {
 } from "@/utils/esportsRules";
 import {
   PLAYER_INSTITUTION_TYPES,
-  computeGameRegistrationStats,
   getEducationSuggestionsForType,
   getGameClosedDisplayMessage,
+  normalizeEsportsGameAvailabilityList,
 } from "@/lib/esportsRegistrationControls";
 import {
   isValidEmail,
@@ -119,19 +119,21 @@ export const RegisterPage: React.FC = () => {
     let active = true;
     async function loadGames() {
       try {
-        const [{ data: gamesData, error }, { data: portalCtrl }] = await Promise.all([
-          supabase
-            .from("games")
-            .select("*")
-            .eq("is_active", true)
-            .eq("is_published", true)
-            .order("sort_order", { ascending: true }),
-          supabase
-            .from("registration_controls")
-            .select("is_open, opens_at, closes_at, closed_message")
-            .eq("form_type", "esports")
-            .maybeSingle(),
-        ]);
+        const [{ data: availRpcData, error: availRpcErr }, { data: gamesData, error }, { data: portalCtrl }] =
+          await Promise.all([
+            supabase.rpc("get_esports_registration_availability"),
+            supabase
+              .from("games")
+              .select("*")
+              .eq("is_active", true)
+              .eq("is_published", true)
+              .order("sort_order", { ascending: true }),
+            supabase
+              .from("registration_controls")
+              .select("is_open, opens_at, closes_at, closed_message")
+              .eq("form_type", "esports")
+              .maybeSingle(),
+          ]);
 
         if (!active) return;
 
@@ -144,64 +146,12 @@ export const RegisterPage: React.FC = () => {
           setPortalClosedNotice(null);
         }
 
-        if (!error && gamesData && gamesData.length > 0) {
-          const typedGames = gamesData as Game[];
-          setActiveGames(
-            typedGames.map((g) => ({
-              id: g.id,
-              title: g.title,
-              team_size: g.team_size ?? getOfficialTeamSize(g.title),
-            }))
-          );
+        const loadedGames = !error && Array.isArray(gamesData) ? (gamesData as Game[]) : [];
+        const rpcRows = !availRpcErr && Array.isArray(availRpcData) ? availRpcData : [];
 
-          // Select preferred game from URL (?type=esports&game=...) or first game immediately
-          const urlGameParam = (searchParams.get("game") || "").toLowerCase().trim();
-          let initialTarget = typedGames[0];
-          if (urlGameParam) {
-            const matched = typedGames.find(
-              (g) => g.title.toLowerCase().includes(urlGameParam) || g.id === urlGameParam
-            );
-            if (matched) initialTarget = matched;
-          } else {
-            const firstOpen = typedGames.find((g) => g.registration_open !== false);
-            if (firstOpen) initialTarget = firstOpen;
-          }
-
-          setSelectedGameId(initialTarget.id);
-          const requiredCount = getOfficialTeamSize(initialTarget.title, initialTarget.team_size);
-          setEspPlayers(
-            Array.from({ length: requiredCount }, (_, i) => ({
-              name: cachedPlayersRef.current[i]?.name || "",
-              inGameId: cachedPlayersRef.current[i]?.inGameId || "",
-              institutionType: cachedPlayersRef.current[i]?.institutionType || "",
-              institutionName: cachedPlayersRef.current[i]?.institutionName || "",
-              courseOrClass: cachedPlayersRef.current[i]?.courseOrClass || "",
-              currentYearOrClass: cachedPlayersRef.current[i]?.currentYearOrClass || "",
-            }))
-          );
-
-          // Non-blocking availability enrichment
-          const availMap: Record<string, EsportsGameAvailability> = {};
-          const hasGameControlCols = Object.prototype.hasOwnProperty.call(
-            typedGames[0],
-            "registration_open"
-          );
-
-          let loadedFromRpc = false;
-          if (hasGameControlCols) {
-            const { data: availData, error: availErr } = await supabase.rpc(
-              "get_esports_registration_availability"
-            );
-            if (!availErr && Array.isArray(availData) && availData.length > 0) {
-              for (const row of availData as EsportsGameAvailability[]) {
-                availMap[row.id] = row;
-              }
-              loadedFromRpc = true;
-            }
-          }
-
-          if (!loadedFromRpc) {
-            let regsList: Registration[] = [];
+        if (loadedGames.length > 0 || rpcRows.length > 0) {
+          let regsList: Registration[] = [];
+          if (availRpcErr) {
             try {
               const { data: regsData } = await supabase
                 .from("registrations")
@@ -210,56 +160,60 @@ export const RegisterPage: React.FC = () => {
             } catch {
               regsList = [];
             }
-            const computed = computeGameRegistrationStats(
-              typedGames,
-              regsList,
-              (portalCtrl as RegistrationControl | null) || null
-            );
-            for (const st of computed) {
-              availMap[st.game.id] = {
-                id: st.game.id,
-                title: st.game.title,
-                team_size: st.game.team_size ?? null,
-                sort_order: st.game.sort_order,
-                is_active: st.game.is_active,
-                is_published: st.game.is_published,
-                registration_open: st.game.registration_open !== false,
-                max_teams: st.game.max_teams ?? null,
-                auto_close_at_capacity: st.game.auto_close_at_capacity !== false,
-                registration_override_open: st.game.registration_override_open === true,
-                registration_closed_message: st.game.registration_closed_message ?? null,
-                total_registered_teams: st.totalRegisteredTeams,
-                approved_teams: st.approvedTeams,
-                pending_teams: st.pendingTeams,
-                active_capacity_teams: st.activeCapacityTeams,
-                slots_remaining: st.slotsRemaining,
-                is_effectively_open: st.isEffectivelyOpen,
-                status_reason: st.statusReason,
-                updated_at: st.game.updated_at ?? null,
-                updated_by_email: st.game.updated_by_email ?? null,
-              };
-            }
           }
 
-          if (!active) return;
+          const normalized = normalizeEsportsGameAvailabilityList({
+            rpcRows,
+            games: loadedGames,
+            registrations: regsList,
+            portalControl: (portalCtrl as RegistrationControl | null) || null,
+          });
+
+          const availMap: Record<string, EsportsGameAvailability> = {};
+          for (const item of normalized) {
+            availMap[item.id] = item;
+          }
+
+          setActiveGames(
+            normalized.map((g) => ({
+              id: g.id,
+              title: g.title,
+              team_size: g.team_size ?? getOfficialTeamSize(g.title),
+            }))
+          );
           setAvailabilityByGameId(availMap);
 
-          if (!urlGameParam && availMap[initialTarget.id]?.is_effectively_open === false) {
-            const openFallback = typedGames.find((g) => availMap[g.id]?.is_effectively_open !== false);
-            if (openFallback && openFallback.id !== initialTarget.id) {
-              setSelectedGameId(openFallback.id);
-              const nextSize = getOfficialTeamSize(openFallback.title, openFallback.team_size);
-              setEspPlayers(
-                Array.from({ length: nextSize }, (_, i) => ({
-                  name: cachedPlayersRef.current[i]?.name || "",
-                  inGameId: cachedPlayersRef.current[i]?.inGameId || "",
-                  institutionType: cachedPlayersRef.current[i]?.institutionType || "",
-                  institutionName: cachedPlayersRef.current[i]?.institutionName || "",
-                  courseOrClass: cachedPlayersRef.current[i]?.courseOrClass || "",
-                  currentYearOrClass: cachedPlayersRef.current[i]?.currentYearOrClass || "",
-                }))
-              );
-            }
+          // Select preferred game from URL (?type=esports&game=...) or first open game
+          const urlGameParam = (searchParams.get("game") || "").toLowerCase().trim();
+          let initialTarget = normalized[0];
+          if (urlGameParam) {
+            const matched = normalized.find(
+              (g) => g.title.toLowerCase().includes(urlGameParam) || g.id === urlGameParam
+            );
+            if (matched) initialTarget = matched;
+          } else {
+            const firstOpen = normalized.find(
+              (g) => g.registration_open !== false && g.is_effectively_open !== false
+            );
+            if (firstOpen) initialTarget = firstOpen;
+          }
+
+          if (initialTarget) {
+            setSelectedGameId(initialTarget.id);
+            const requiredCount = getOfficialTeamSize(
+              initialTarget.title,
+              initialTarget.team_size ?? undefined
+            );
+            setEspPlayers(
+              Array.from({ length: requiredCount }, (_, i) => ({
+                name: cachedPlayersRef.current[i]?.name || "",
+                inGameId: cachedPlayersRef.current[i]?.inGameId || "",
+                institutionType: cachedPlayersRef.current[i]?.institutionType || "",
+                institutionName: cachedPlayersRef.current[i]?.institutionName || "",
+                courseOrClass: cachedPlayersRef.current[i]?.courseOrClass || "",
+                currentYearOrClass: cachedPlayersRef.current[i]?.currentYearOrClass || "",
+              }))
+            );
           }
         }
       } catch (err) {

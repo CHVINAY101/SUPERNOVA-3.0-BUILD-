@@ -13,16 +13,10 @@ import { DEFAULT_BR_PLACEMENT_POINTS } from "@/lib/tournamentEngine";
 
 export type EsportsSectionId =
   | "overview"
-  | "setup"
   | "teams"
-  | "bracket"
-  | "schedule"
-  | "matches"
-  | "live"
-  | "standings"
-  | "disputes"
-  | "history"
-  | "reset";
+  | "tournament_matches"
+  | "live_results"
+  | "settings";
 
 export interface ConductorOption {
   user_id: string;
@@ -44,6 +38,7 @@ export interface ParsedBrRules {
   placementPoints: Record<number, number>;
   pointsPerKill: number;
   teamsPerLobby: number;
+  qualificationCount: number;
   winPoints: number;
   drawPoints: number;
   lossPoints: number;
@@ -90,6 +85,7 @@ export function parseTournamentScoringRules(
   }
 
   const parsedTeamsPerLobby = Number(raw.teams_per_lobby ?? raw.teamsPerLobby);
+  const parsedQualification = Number(raw.qualification_count ?? raw.qualificationCount);
 
   return {
     placementPoints,
@@ -100,6 +96,10 @@ export function parseTournamentScoringRules(
       Number.isFinite(parsedTeamsPerLobby) && parsedTeamsPerLobby >= 2
         ? Math.trunc(parsedTeamsPerLobby)
         : 12,
+    qualificationCount:
+      Number.isFinite(parsedQualification) && parsedQualification >= 1
+        ? Math.trunc(parsedQualification)
+        : 0,
     winPoints: Number.isFinite(Number(raw.win_points)) ? Number(raw.win_points) : 3,
     drawPoints: Number.isFinite(Number(raw.draw_points)) ? Number(raw.draw_points) : 1,
     lossPoints: Number.isFinite(Number(raw.loss_points)) ? Number(raw.loss_points) : 0,

@@ -522,28 +522,52 @@ export function generateTournamentMatches(params: {
   }
 
   // ---------------------------------------------------------------------------
-  // 4. DOUBLE ELIMINATION
+  // 4. DOUBLE ELIMINATION (Full Winners + Alternating Losers + Grand Final)
   // ---------------------------------------------------------------------------
   if (params.format === "double_elimination") {
     const n = ordered.length;
     const bracketSize = Math.pow(2, Math.ceil(Math.log2(n)));
-    const wRounds = Math.log2(bracketSize);
+    const wRounds = Math.max(1, Math.log2(bracketSize));
     const r1Pairs = buildRoundOnePairs(ordered, bracketSize);
 
     const winnersIds: string[][] = [];
     for (let r = 1; r <= wRounds; r++) {
-      const cnt = bracketSize / Math.pow(2, r);
+      const cnt = Math.max(1, bracketSize / Math.pow(2, r));
       winnersIds.push(Array.from({ length: cnt }, () => nextId(++seqIdx)));
     }
 
-    const losersCount = Math.max(1, winnersIds[0].length / 2);
-    const losersRound1Ids = Array.from({ length: losersCount }, () => nextId(++seqIdx));
+    // Standard Double Elimination has 2*(wRounds - 1) losers rounds for wRounds >= 2
+    const losersRoundsIds: string[][] = [];
+    if (wRounds >= 2) {
+      let lCount = Math.max(1, winnersIds[0].length / 2);
+      const totalLoserRounds = 2 * (wRounds - 1);
+      for (let lr = 1; lr <= totalLoserRounds; lr++) {
+        losersRoundsIds.push(Array.from({ length: lCount }, () => nextId(++seqIdx)));
+        // After every major (even) losers round, match count halves for the next minor round
+        if (lr % 2 === 0 && lCount > 1) {
+          lCount = Math.max(1, lCount / 2);
+        }
+      }
+    } else {
+      // Edge case for 2 teams: single losers consolidation slot
+      losersRoundsIds.push([nextId(++seqIdx)]);
+    }
+
     const grandFinalId = nextId(++seqIdx);
     let slotCursor = 0;
 
+    // 1. Build Winners Bracket rounds
     for (let r = 1; r <= wRounds; r++) {
       const ids = winnersIds[r - 1];
       const nextW = r < wRounds ? winnersIds[r] : [grandFinalId];
+      // Which losers round does a loser from Winners Round r drop into?
+      const dropTargetIds =
+        wRounds === 1
+          ? losersRoundsIds[0]
+          : r === 1
+          ? losersRoundsIds[0]
+          : losersRoundsIds[2 * (r - 1) - 1] || [];
+
       for (let m = 0; m < ids.length; m++) {
         const teamA = r === 1 ? r1Pairs[m][0] : null;
         const teamB = r === 1 ? r1Pairs[m][1] : null;
@@ -551,9 +575,29 @@ export function generateTournamentMatches(params: {
         const byeWinner = isBye ? teamA || teamB : null;
         const nextMatchId = r < wRounds ? nextW[Math.floor(m / 2)] : grandFinalId;
         const nextSlot: "a" | "b" = r < wRounds ? (m % 2 === 0 ? "a" : "b") : "a";
-        const loserTargetId = r === 1 ? losersRound1Ids[Math.floor(m / 2)] || null : null;
-        const loserSlot: "a" | "b" | null = loserTargetId ? (m % 2 === 0 ? "a" : "b") : null;
+
+        let loserTargetId: string | null = null;
+        let loserSlot: "a" | "b" | null = null;
+        if (!isBye && dropTargetIds.length > 0) {
+          if (r === 1 && wRounds >= 2) {
+            loserTargetId = dropTargetIds[Math.floor(m / 2)] || null;
+            loserSlot = m % 2 === 0 ? "a" : "b";
+          } else {
+            // Major losers round: flip pairing on odd W rounds to separate early rematches
+            const reversePair = r % 2 === 1 && dropTargetIds.length > 1;
+            const targetIdx = reversePair ? dropTargetIds.length - 1 - m : m;
+            loserTargetId = dropTargetIds[targetIdx] || dropTargetIds[0] || null;
+            loserSlot = "b";
+          }
+        }
+
         const sched = computeSchedule(isBye ? slotCursor : slotCursor++, isBye);
+        const wLabel =
+          r === wRounds
+            ? "Winners Final"
+            : r === wRounds - 1 && wRounds >= 3
+            ? "Winners Semifinals"
+            : `Winners Round ${r}`;
 
         matches.push({
           id: ids[m],
@@ -561,7 +605,7 @@ export function generateTournamentMatches(params: {
           game_id: params.gameId,
           match_code: `${prefix}-WR${r}-M${String(m + 1).padStart(2, "0")}`,
           bracket_position: `W-R${r}-P${m + 1}`,
-          round: r === wRounds ? "Winners Final" : `Winners Round ${r}`,
+          round: wLabel,
           round_number: r,
           match_number: m + 1,
           bracket_side: "winners",
@@ -575,8 +619,8 @@ export function generateTournamentMatches(params: {
           winner_id: byeWinner,
           next_match_id: nextMatchId,
           next_match_slot: nextSlot,
-          loser_next_match_id: isBye ? null : loserTargetId,
-          loser_next_match_slot: isBye ? null : loserSlot,
+          loser_next_match_id: loserTargetId,
+          loser_next_match_slot: loserSlot,
           station: isBye ? null : params.defaultStation || "Arena Stage 1",
           conductor_id: isBye ? null : params.defaultConductorId || null,
           match_format: isBye ? "BYE" : formatLabel,
@@ -589,41 +633,64 @@ export function generateTournamentMatches(params: {
       }
     }
 
-    for (let m = 0; m < losersRound1Ids.length; m++) {
-      const sched = computeSchedule(slotCursor++, false);
-      matches.push({
-        id: losersRound1Ids[m],
-        tournament_id: params.tournamentId,
-        game_id: params.gameId,
-        match_code: `${prefix}-LR1-M${String(m + 1).padStart(2, "0")}`,
-        bracket_position: `L-R1-P${m + 1}`,
-        round: losersRound1Ids.length === 1 ? "Losers Final" : `Losers Round 1 · M${m + 1}`,
-        round_number: wRounds + 1,
-        match_number: m + 1,
-        bracket_side: "losers",
-        group_name: null,
-        team_a_id: null,
-        team_b_id: null,
-        br_results: [],
-        status: sched.is_scheduled ? "scheduled" : "upcoming",
-        score_a: 0,
-        score_b: 0,
-        winner_id: null,
-        next_match_id: grandFinalId,
-        next_match_slot: "b",
-        loser_next_match_id: null,
-        loser_next_match_slot: null,
-        station: params.defaultStation || "Arena Stage 2",
-        conductor_id: params.defaultConductorId || null,
-        match_format: formatLabel,
-        scheduled_start: sched.scheduled_start,
-        scheduled_end: sched.scheduled_end,
-        duration_minutes: durationMinutes,
-        is_scheduled: sched.is_scheduled,
-        is_published: isPublished,
-      });
+    // 2. Build Multi-Round Losers Bracket
+    for (let lrIdx = 0; lrIdx < losersRoundsIds.length; lrIdx++) {
+      const lrNum = lrIdx + 1;
+      const lrIds = losersRoundsIds[lrIdx];
+      const isLastLoserRound = lrIdx === losersRoundsIds.length - 1;
+      const nextLrIds = !isLastLoserRound ? losersRoundsIds[lrIdx + 1] : null;
+      const isMinorNext = nextLrIds && nextLrIds.length < lrIds.length;
+
+      for (let m = 0; m < lrIds.length; m++) {
+        const nextMatchId = isLastLoserRound
+          ? grandFinalId
+          : isMinorNext
+          ? nextLrIds![Math.floor(m / 2)]
+          : nextLrIds![m];
+        const nextSlot: "a" | "b" = isLastLoserRound
+          ? "b"
+          : isMinorNext
+          ? m % 2 === 0
+            ? "a"
+            : "b"
+          : "a";
+
+        const sched = computeSchedule(slotCursor++, false);
+        matches.push({
+          id: lrIds[m],
+          tournament_id: params.tournamentId,
+          game_id: params.gameId,
+          match_code: `${prefix}-LR${lrNum}-M${String(m + 1).padStart(2, "0")}`,
+          bracket_position: `L-R${lrNum}-P${m + 1}`,
+          round: isLastLoserRound ? "Losers Final" : `Losers Round ${lrNum}`,
+          round_number: wRounds + lrNum,
+          match_number: m + 1,
+          bracket_side: "losers",
+          group_name: null,
+          team_a_id: null,
+          team_b_id: null,
+          br_results: [],
+          status: sched.is_scheduled ? "scheduled" : "upcoming",
+          score_a: 0,
+          score_b: 0,
+          winner_id: null,
+          next_match_id: nextMatchId,
+          next_match_slot: nextSlot,
+          loser_next_match_id: null,
+          loser_next_match_slot: null,
+          station: params.defaultStation || "Arena Stage 2",
+          conductor_id: params.defaultConductorId || null,
+          match_format: formatLabel,
+          scheduled_start: sched.scheduled_start,
+          scheduled_end: sched.scheduled_end,
+          duration_minutes: durationMinutes,
+          is_scheduled: sched.is_scheduled,
+          is_published: isPublished,
+        });
+      }
     }
 
+    // 3. Build Grand Final
     const gfSched = computeSchedule(slotCursor++, false);
     matches.push({
       id: grandFinalId,
@@ -632,7 +699,7 @@ export function generateTournamentMatches(params: {
       match_code: `${prefix}-GF-01`,
       bracket_position: "GF-1",
       round: "Grand Final",
-      round_number: wRounds + 2,
+      round_number: wRounds + losersRoundsIds.length + 1,
       match_number: 1,
       bracket_side: "grand_final",
       group_name: null,
@@ -657,6 +724,7 @@ export function generateTournamentMatches(params: {
       is_published: isPublished,
     });
 
+    // Propagate R1 Byes forward inside Winners Bracket
     for (const r1m of matches.filter(
       (x) => x.bracket_side === "winners" && x.round_number === 1 && x.winner_id && x.next_match_id
     )) {
@@ -1245,6 +1313,8 @@ export function confirmAndAdvanceMatchResult(params: {
   overrideScoreB?: number;
   overrideWinnerId?: string | null;
   overrideBrResults?: BattleRoyaleTeamResult[];
+  allowDraw?: boolean;
+  forfeitTeamId?: string | null;
 }): { ok: true; matches: Match[]; advancedToMatchId: string | null } | { ok: false; error: string } {
   if (!params.permissions.has("tournament:confirm_results") && !params.permissions.has("esports:approve")) {
     return { ok: false, error: "Forbidden: Only Esports Managers or Admins can confirm match results." };
@@ -1280,6 +1350,10 @@ export function confirmAndAdvanceMatchResult(params: {
     if (brRows.length === 0) {
       return { ok: false, error: "Battle Royale match requires lobby placement & kill scores before confirmation." };
     }
+    const validation = validateBattleRoyaleRows(brRows);
+    if (!validation.isValid) {
+      return { ok: false, error: validation.errors[0] || "Fix invalid or duplicate BR placements before confirming." };
+    }
     const topTeam = [...brRows].sort((a, b) => (b.total_points || 0) - (a.total_points || 0))[0];
     updated[idx] = {
       ...updated[idx],
@@ -1301,22 +1375,35 @@ export function confirmAndAdvanceMatchResult(params: {
 
   const scoreA = typeof params.overrideScoreA === "number" ? params.overrideScoreA : current.score_a;
   const scoreB = typeof params.overrideScoreB === "number" ? params.overrideScoreB : current.score_b;
-  const winnerId = params.overrideWinnerId !== undefined ? params.overrideWinnerId : current.winner_id;
 
-  if (!winnerId || (winnerId !== current.team_a_id && winnerId !== current.team_b_id)) {
+  let winnerId = params.overrideWinnerId !== undefined ? params.overrideWinnerId : current.winner_id;
+  if (params.forfeitTeamId) {
+    if (params.forfeitTeamId === current.team_a_id && current.team_b_id) {
+      winnerId = current.team_b_id;
+    } else if (params.forfeitTeamId === current.team_b_id && current.team_a_id) {
+      winnerId = current.team_a_id;
+    }
+  }
+
+  const isDraw = Boolean(params.allowDraw && !winnerId && !current.next_match_id && scoreA === scoreB);
+
+  if (!isDraw && (!winnerId || (winnerId !== current.team_a_id && winnerId !== current.team_b_id))) {
     return {
       ok: false,
       error: "A valid match winner belonging to Team A or Team B must be selected before confirmation.",
     };
   }
 
-  const loserId = winnerId === current.team_a_id ? current.team_b_id : current.team_a_id;
+  const loserId = winnerId ? (winnerId === current.team_a_id ? current.team_b_id : current.team_a_id) : null;
 
   updated[idx] = {
     ...updated[idx],
     score_a: scoreA,
     score_b: scoreB,
-    winner_id: winnerId,
+    winner_id: isDraw ? null : winnerId,
+    detailed_scores: params.forfeitTeamId
+      ? { ...(current.detailed_scores || {}), forfeit_team_id: params.forfeitTeamId }
+      : current.detailed_scores,
     status: "completed",
     result_status: "confirmed",
     confirmed_by: params.managerUserId,
@@ -1745,4 +1832,531 @@ export function computePreEventLiveBoardState(params: {
     emptyStateMessage: PRE_EVENT_LIVE_EMPTY_MESSAGE,
   };
 }
+
+// -----------------------------------------------------------------------------
+// Battle Royale Spreadsheet Validation
+// -----------------------------------------------------------------------------
+export interface BattleRoyaleValidationResult {
+  isValid: boolean;
+  missingCount: number;
+  duplicatePlacements: number[];
+  duplicateTeamIds: Set<string>;
+  missingTeamIds: Set<string>;
+  negativeKillTeamIds: Set<string>;
+  errors: string[];
+}
+
+export function validateBattleRoyaleRows(rows: BattleRoyaleTeamResult[]): BattleRoyaleValidationResult {
+  const missingTeamIds = new Set<string>();
+  const duplicateTeamIds = new Set<string>();
+  const negativeKillTeamIds = new Set<string>();
+  const placementGroups = new Map<number, string[]>();
+
+  for (const r of rows) {
+    const p = r.placement;
+    if (p === null || p === undefined || !Number.isInteger(p) || p < 1) {
+      missingTeamIds.add(r.team_id);
+    } else {
+      const list = placementGroups.get(p) || [];
+      list.push(r.team_id);
+      placementGroups.set(p, list);
+    }
+    if (typeof r.kills !== "number" || !Number.isFinite(r.kills) || r.kills < 0) {
+      negativeKillTeamIds.add(r.team_id);
+    }
+  }
+
+  const duplicatePlacements: number[] = [];
+  for (const [place, ids] of placementGroups.entries()) {
+    if (ids.length > 1) {
+      duplicatePlacements.push(place);
+      ids.forEach((id) => duplicateTeamIds.add(id));
+    }
+  }
+  duplicatePlacements.sort((a, b) => a - b);
+
+  const errors: string[] = [];
+  if (rows.length === 0) {
+    errors.push("Add at least one squad to this Battle Royale lobby.");
+  }
+  if (duplicatePlacements.length > 0) {
+    errors.push(
+      `Duplicate placement(s) detected: ${duplicatePlacements.map((p) => `#${p}`).join(", ")}. Each squad must have a unique rank.`
+    );
+  }
+  if (missingTeamIds.size > 0) {
+    errors.push(`${missingTeamIds.size} squad(s) are missing placement ranks.`);
+  }
+  if (negativeKillTeamIds.size > 0) {
+    errors.push("Kills cannot be negative.");
+  }
+
+  return {
+    isValid: errors.length === 0,
+    missingCount: missingTeamIds.size,
+    duplicatePlacements,
+    duplicateTeamIds,
+    missingTeamIds,
+    negativeKillTeamIds,
+    errors,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// 6-Step Guided Tournament Setup Wizard State
+// -----------------------------------------------------------------------------
+export type TournamentWizardStepId =
+  | "select_teams"
+  | "choose_format"
+  | "configure_rules"
+  | "generate_matches"
+  | "publish_tournament"
+  | "start_tournament";
+
+export interface TournamentWizardStep {
+  stepNumber: number;
+  id: TournamentWizardStepId;
+  title: string;
+  done: boolean;
+  active: boolean;
+  summary: string;
+}
+
+export interface TournamentWizardState {
+  steps: TournamentWizardStep[];
+  currentStepNumber: number;
+  currentStepId: TournamentWizardStepId;
+  nextActionLabel: string;
+  nextActionSummary: string;
+  allCompleted: boolean;
+}
+
+export function deriveTournamentWizardState(params: {
+  tournament: Pick<Tournament, "format" | "status" | "has_started" | "champion_team_id">;
+  hasPersistedTournament: boolean;
+  selectedTeamCount: number;
+  approvedTeamCount: number;
+  matches: Array<Pick<Match, "status" | "match_format" | "is_published">>;
+}): TournamentWizardState {
+  const realMatches = params.matches.filter((m) => m.match_format !== "BYE");
+  const hasAnyMatches = params.matches.length > 0;
+  const hasPublishedMatches = realMatches.some((m) => m.is_published);
+  const isPublished =
+    hasAnyMatches &&
+    (params.tournament.status === "published" ||
+      params.tournament.status === "in_progress" ||
+      params.tournament.status === "completed" ||
+      params.tournament.has_started ||
+      hasPublishedMatches);
+  const hasStarted =
+    params.tournament.has_started === true ||
+    params.tournament.status === "in_progress" ||
+    params.tournament.status === "completed" ||
+    realMatches.some((m) => ["live", "result_submitted", "completed"].includes(m.status));
+
+  const step1Done = params.selectedTeamCount >= 2;
+  const step2Done = params.hasPersistedTournament && Boolean(params.tournament.format);
+  const step3Done = params.hasPersistedTournament;
+  const step4Done = hasAnyMatches;
+  const step5Done = hasAnyMatches && isPublished;
+  const step6Done = hasAnyMatches && hasStarted;
+
+  const doneFlags = [step1Done, step2Done, step3Done, step4Done, step5Done, step6Done];
+  const firstIncompleteIdx = doneFlags.findIndex((d) => !d);
+  const currentIdx = firstIncompleteIdx === -1 ? 5 : firstIncompleteIdx;
+  const allCompleted = firstIncompleteIdx === -1;
+
+  const rawSteps: Omit<TournamentWizardStep, "active">[] = [
+    {
+      stepNumber: 1,
+      id: "select_teams",
+      title: "Select Teams",
+      done: step1Done,
+      summary: step1Done
+        ? `${params.selectedTeamCount} squad(s) selected`
+        : `${params.approvedTeamCount} approved · select >= 2 teams`,
+    },
+    {
+      stepNumber: 2,
+      id: "choose_format",
+      title: "Choose Format",
+      done: step2Done,
+      summary: step2Done ? params.tournament.format.replace(/_/g, " ") : "Pick elimination or BR format",
+    },
+    {
+      stepNumber: 3,
+      id: "configure_rules",
+      title: "Rounds & Scoring",
+      done: step3Done,
+      summary: step3Done ? "Rules configured" : "Set BO/rounds & points",
+    },
+    {
+      stepNumber: 4,
+      id: "generate_matches",
+      title: "Generate Matches",
+      done: step4Done,
+      summary: step4Done ? `${realMatches.length} fixture(s) built` : "Auto-pair & preview bracket",
+    },
+    {
+      stepNumber: 5,
+      id: "publish_tournament",
+      title: "Publish Tournament",
+      done: step5Done,
+      summary: step5Done ? "Published to Public Board" : "Make schedule & bracket visible",
+    },
+    {
+      stepNumber: 6,
+      id: "start_tournament",
+      title: "Start Tournament",
+      done: step6Done,
+      summary:
+        params.tournament.champion_team_id
+          ? "Tournament Completed"
+          : step6Done
+          ? "Live in progress"
+          : "Open live match scoring",
+    },
+  ];
+
+  const steps: TournamentWizardStep[] = rawSteps.map((s, idx) => ({
+    ...s,
+    active: !allCompleted && idx === currentIdx,
+  }));
+
+  const currentStep = steps[currentIdx];
+  const ctaMap: Record<TournamentWizardStepId, { label: string; summary: string }> = {
+    select_teams: {
+      label: "Select Registered Teams",
+      summary: "Choose approved teams and confirm initial seeding.",
+    },
+    choose_format: {
+      label: "Save Tournament Format",
+      summary: "Confirm elimination, league, or Battle Royale structure.",
+    },
+    configure_rules: {
+      label: "Save Scoring Rules",
+      summary: "Confirm match length, points matrix, and confirmation rules.",
+    },
+    generate_matches: {
+      label: "Generate & Preview Matches",
+      summary: "Auto-create balanced pairings or BR lobbies before publishing.",
+    },
+    publish_tournament: {
+      label: "Publish Tournament",
+      summary: "Make bracket fixtures and IST timings visible to players & spectators.",
+    },
+    start_tournament: {
+      label: allCompleted ? "Operate Live Matches" : "Start Tournament",
+      summary: allCompleted
+        ? "Tournament is live. Click any match to record scores and advance winners."
+        : "Unlock live match scoring and standings on the Public Live Board.",
+    },
+  };
+
+  return {
+    steps,
+    currentStepNumber: currentStep.stepNumber,
+    currentStepId: currentStep.id,
+    nextActionLabel: ctaMap[currentStep.id].label,
+    nextActionSummary: ctaMap[currentStep.id].summary,
+    allCompleted,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Connected Visual Bracket Layout Engine (Admin & Public Live Board)
+// -----------------------------------------------------------------------------
+export interface BracketCardNode {
+  match: Match;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  teamALabel: string;
+  teamBLabel: string;
+  teamAIsPlaceholder: boolean;
+  teamBIsPlaceholder: boolean;
+  isBye: boolean;
+}
+
+export interface BracketColumn {
+  key: string;
+  label: string;
+  x: number;
+  cards: BracketCardNode[];
+}
+
+export interface BracketEdge {
+  id: string;
+  fromMatchId: string;
+  toId: string;
+  pathD: string;
+  highlighted: boolean;
+  edgeType: "winner" | "champion";
+}
+
+export interface BracketTrack {
+  id: "winners" | "losers" | "knockout";
+  title: string;
+  width: number;
+  height: number;
+  columns: BracketColumn[];
+  edges: BracketEdge[];
+  championCard?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    championName: string | null;
+    completed: boolean;
+  };
+}
+
+export interface ConnectedBracketLayout {
+  tracks: BracketTrack[];
+  hasConnectedBracket: boolean;
+}
+
+export function buildConnectedBracketLayout(params: {
+  matches: Match[];
+  teamNameById: Map<string, string>;
+  championTeamId?: string | null;
+  format?: TournamentFormat | string | null;
+}): ConnectedBracketLayout {
+  const CARD_W = 236;
+  const CARD_H = 88;
+  const COL_GAP = 54;
+  const COL_STEP = CARD_W + COL_GAP;
+  const HEADER_H = 42;
+  const BASE_SLOT = 112;
+  const PAD_X = 24;
+  const PAD_B = 28;
+
+  const nonGroupBrMatches = params.matches.filter(
+    (m) => m.bracket_side !== "battle_royale" && m.bracket_side !== "group"
+  );
+
+  if (nonGroupBrMatches.length === 0) {
+    return { tracks: [], hasConnectedBracket: false };
+  }
+
+  // Build feeder lookup so empty slots say "Winner of M1" or "Loser of W1"
+  const feederWinnerBySlot = new Map<string, Match>();
+  const feederLoserBySlot = new Map<string, Match>();
+  for (const m of params.matches) {
+    if (m.next_match_id) {
+      feederWinnerBySlot.set(`${m.next_match_id}:${m.next_match_slot === "b" ? "b" : "a"}`, m);
+    }
+    if (m.loser_next_match_id) {
+      feederLoserBySlot.set(`${m.loser_next_match_id}:${m.loser_next_match_slot === "b" ? "b" : "a"}`, m);
+    }
+  }
+
+  const resolveSlotText = (m: Match, slot: "a" | "b"): { label: string; isPlaceholder: boolean } => {
+    const tid = slot === "a" ? m.team_a_id : m.team_b_id;
+    if (tid) {
+      return { label: params.teamNameById.get(tid) || "Squad", isPlaceholder: false };
+    }
+    if (m.match_format === "BYE" && slot === "b") {
+      return { label: "BYE", isPlaceholder: true };
+    }
+    const winFeeder = feederWinnerBySlot.get(`${m.id}:${slot}`);
+    if (winFeeder) {
+      return {
+        label: `Winner of ${winFeeder.match_code || `M${winFeeder.match_number ?? 1}`}`,
+        isPlaceholder: true,
+      };
+    }
+    const loseFeeder = feederLoserBySlot.get(`${m.id}:${slot}`);
+    if (loseFeeder) {
+      return {
+        label: `Loser of ${loseFeeder.match_code || `M${loseFeeder.match_number ?? 1}`}`,
+        isPlaceholder: true,
+      };
+    }
+    return { label: "TBD", isPlaceholder: true };
+  };
+
+  const formatColLabel = (
+    roundMatches: Match[],
+    colIdx: number,
+    totalCols: number,
+    trackKind: "winners" | "losers" | "knockout"
+  ): string => {
+    const first = roundMatches[0];
+    if (trackKind === "losers") {
+      if (colIdx === totalCols - 1 && roundMatches.length === 1) return "Losers Final";
+      return `Losers Round ${colIdx + 1}`;
+    }
+    if (first?.bracket_side === "grand_final") return "Grand Final";
+    if (colIdx === totalCols - 1 && roundMatches.length === 1) {
+      return trackKind === "winners" && params.format === "double_elimination"
+        ? "Grand Final"
+        : "Grand Final";
+    }
+    const remainingFromEnd = totalCols - 1 - colIdx;
+    if (remainingFromEnd === 1 && roundMatches.length === 2) return "Semi-finals";
+    if (remainingFromEnd === 2 && roundMatches.length === 4) return "Quarter-finals";
+    if (colIdx === 0 && totalCols > 1) return "Opening Round";
+    return first?.round || `Round ${colIdx + 1}`;
+  };
+
+  const buildTrack = (
+    trackId: "winners" | "losers" | "knockout",
+    title: string,
+    trackMatches: Match[],
+    includeChampionColumn: boolean
+  ): BracketTrack => {
+    const byRound = new Map<number, Match[]>();
+    for (const m of trackMatches) {
+      const rn = m.round_number || 1;
+      const list = byRound.get(rn) || [];
+      list.push(m);
+      byRound.set(rn, list);
+    }
+    const sortedRounds = Array.from(byRound.entries()).sort((a, b) => a[0] - b[0]);
+
+    const firstRoundCount = sortedRounds[0]?.[1].length || 1;
+    const totalContentHeight = Math.max(firstRoundCount * BASE_SLOT, 160);
+    const columns: BracketColumn[] = [];
+    const nodeByMatchId = new Map<string, BracketCardNode>();
+
+    sortedRounds.forEach(([, roundMatches], colIdx) => {
+      const sorted = [...roundMatches].sort((a, b) => (a.match_number || 1) - (b.match_number || 1));
+      const x = PAD_X + colIdx * COL_STEP;
+      const count = Math.max(1, sorted.length);
+      const slotSpan = totalContentHeight / count;
+
+      const cards: BracketCardNode[] = sorted.map((m, idx) => {
+        const y = HEADER_H + idx * slotSpan + (slotSpan - CARD_H) / 2;
+        const slotA = resolveSlotText(m, "a");
+        const slotB = resolveSlotText(m, "b");
+        const node: BracketCardNode = {
+          match: m,
+          x,
+          y,
+          width: CARD_W,
+          height: CARD_H,
+          teamALabel: slotA.label,
+          teamBLabel: slotB.label,
+          teamAIsPlaceholder: slotA.isPlaceholder,
+          teamBIsPlaceholder: slotB.isPlaceholder,
+          isBye: m.match_format === "BYE",
+        };
+        nodeByMatchId.set(m.id, node);
+        return node;
+      });
+
+      columns.push({
+        key: `${trackId}-r${colIdx}`,
+        label: formatColLabel(sorted, colIdx, sortedRounds.length, trackId),
+        x,
+        cards,
+      });
+    });
+
+    const edges: BracketEdge[] = [];
+    for (const srcNode of nodeByMatchId.values()) {
+      const nextId = srcNode.match.next_match_id;
+      if (!nextId) continue;
+      const dstNode = nodeByMatchId.get(nextId);
+      if (!dstNode) continue;
+
+      const startX = srcNode.x + srcNode.width;
+      const startY = srcNode.y + srcNode.height / 2;
+      const endX = dstNode.x;
+      const slotOffset =
+        dstNode.match.id === nextId && srcNode.match.next_match_slot === "b"
+          ? dstNode.height * 0.68
+          : dstNode.height * 0.34;
+      const endY = dstNode.y + slotOffset;
+      const midX = startX + (endX - startX) / 2;
+
+      edges.push({
+        id: `${srcNode.match.id}->${dstNode.match.id}`,
+        fromMatchId: srcNode.match.id,
+        toId: dstNode.match.id,
+        pathD: `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`,
+        highlighted: srcNode.match.status === "completed",
+        edgeType: "winner",
+      });
+    }
+
+    let championCard: BracketTrack["championCard"] | undefined;
+    let totalCols = columns.length;
+
+    if (includeChampionColumn && columns.length > 0) {
+      const lastCol = columns[columns.length - 1];
+      const finalNode = lastCol.cards[0];
+      if (finalNode) {
+        const champW = 204;
+        const champH = 88;
+        const champX = PAD_X + columns.length * COL_STEP;
+        const champY = finalNode.y;
+        const championId = params.championTeamId || finalNode.match.winner_id || null;
+        const championName = championId ? params.teamNameById.get(championId) || "Champion" : null;
+
+        championCard = {
+          x: champX,
+          y: champY,
+          width: champW,
+          height: champH,
+          championName,
+          completed: Boolean(championName),
+        };
+
+        const startX = finalNode.x + finalNode.width;
+        const startY = finalNode.y + finalNode.height / 2;
+        const endX = champX;
+        const endY = champY + champH / 2;
+        const midX = startX + (endX - startX) / 2;
+        edges.push({
+          id: `${finalNode.match.id}->champion`,
+          fromMatchId: finalNode.match.id,
+          toId: "champion",
+          pathD: `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`,
+          highlighted: Boolean(championName),
+          edgeType: "champion",
+        });
+
+        totalCols += 1;
+      }
+    }
+
+    const totalWidth = PAD_X * 2 + Math.max(1, totalCols) * COL_STEP - COL_GAP;
+    const totalHeight = HEADER_H + totalContentHeight + PAD_B;
+
+    return {
+      id: trackId,
+      title,
+      width: totalWidth,
+      height: totalHeight,
+      columns,
+      edges,
+      championCard,
+    };
+  };
+
+  const hasLosersTrack = nonGroupBrMatches.some((m) => m.bracket_side === "losers");
+  if (hasLosersTrack) {
+    const winnersAndGf = nonGroupBrMatches.filter(
+      (m) => m.bracket_side === "winners" || m.bracket_side === "grand_final"
+    );
+    const losersOnly = nonGroupBrMatches.filter((m) => m.bracket_side === "losers");
+    const tracks: BracketTrack[] = [];
+    if (winnersAndGf.length > 0) {
+      tracks.push(buildTrack("winners", "Winners Bracket & Grand Final", winnersAndGf, true));
+    }
+    if (losersOnly.length > 0) {
+      tracks.push(buildTrack("losers", "Losers Bracket", losersOnly, false));
+    }
+    return { tracks, hasConnectedBracket: tracks.length > 0 };
+  }
+
+  return {
+    tracks: [buildTrack("knockout", "Tournament Bracket", nonGroupBrMatches, true)],
+    hasConnectedBracket: true,
+  };
+}
+
 

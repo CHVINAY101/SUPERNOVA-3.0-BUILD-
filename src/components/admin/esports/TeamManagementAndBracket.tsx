@@ -21,6 +21,7 @@ import {
   Lock,
   RefreshCw,
   ShieldCheck,
+  Shuffle,
   Users,
   X,
 } from "lucide-react";
@@ -155,12 +156,38 @@ export function TeamManagementSection({
     }
   };
 
+  const handleRandomSeedSelected = async () => {
+    if (!canSelectTeams && !canEditEsports) return;
+    const pool = selectedTeams.length >= 2 ? selectedTeams : approvedTeams;
+    if (pool.length < 2) {
+      onError("Select or approve at least 2 teams to randomize seeds.");
+      return;
+    }
+    setBusyId("random_seed");
+    try {
+      const shuffled = [...pool].sort(() => Math.random() - 0.5);
+      for (let i = 0; i < shuffled.length; i++) {
+        const { error } = await supabase
+          .from("registrations")
+          .update({ seed_number: i + 1 })
+          .eq("id", shuffled[i].id);
+        if (error) throw error;
+      }
+      setSeedEdits({});
+      await onRefresh(`Assigned random seeds #1–#${shuffled.length} for ${selectedGame?.title}.`);
+    } catch (err: any) {
+      onError(`Random seeding failed: ${err?.message || "Database error"}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
         <div>
           <h2 className="text-lg font-display font-bold text-slate-900 m-0">
-            {selectedGame?.title} Teams & Roster Eligibility
+            {selectedGame?.title} Teams &amp; Roster Eligibility
           </h2>
           <p className="text-xs text-slate-500 mt-0.5 m-0">
             Selected: <strong className="text-slate-800 font-mono">{selectedTeams.length}</strong> / Approved:{" "}
@@ -191,14 +218,25 @@ export function TeamManagementSection({
           </div>
 
           {(canSelectTeams || canEditEsports) && (
-            <button
-              type="button"
-              disabled={busyId === "bulk"}
-              onClick={selectAllConfirmed}
-              className="min-h-[36px] px-3.5 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
-            >
-              Select All Approved
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={busyId === "random_seed" || (selectedTeams.length < 2 && approvedTeams.length < 2)}
+                onClick={handleRandomSeedSelected}
+                className="min-h-[36px] px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-40"
+              >
+                <Shuffle size={13} />
+                <span>{busyId === "random_seed" ? "Seeding..." : "Random Seed"}</span>
+              </button>
+              <button
+                type="button"
+                disabled={busyId === "bulk"}
+                onClick={selectAllConfirmed}
+                className="min-h-[36px] px-3.5 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
+              >
+                Select All Approved
+              </button>
+            </>
           )}
           <Link
             to="/admin/esports-registrations"
@@ -808,7 +846,7 @@ export function BracketBuilderSection({
           {matches.length > 0 && (
             <button
               type="button"
-              onClick={() => onNavigate("schedule")}
+              onClick={() => onNavigate("tournament_matches")}
               className="min-h-[36px] px-3.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
             >
               Proceed to IST Scheduling →

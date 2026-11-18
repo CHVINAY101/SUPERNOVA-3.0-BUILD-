@@ -1,8 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildUpdateEsportsGameRegistrationControlParams,
   computeGameRegistrationStats,
   getGameClosedDisplayMessage,
+  normalizeEsportsGameAvailabilityList,
   simulateGameControlAction,
 } from "./esportsRegistrationControls.ts";
 import {
@@ -149,5 +151,83 @@ describe("Phase 1 & 2 — Game-Wise Registration Controls, Education Validation 
     });
     assert.equal(started.showPreEventEmptyState, false);
     assert.equal(started.showStandingsOrBracket, true);
+  });
+
+  it("Builds exact update_esports_game_registration_control RPC payload (p_game_id, p_is_open, p_closed_message)", () => {
+    const closePayload = buildUpdateEsportsGameRegistrationControlParams({
+      gameId: "11111111-1111-4111-8111-111111111111",
+      isOpen: false,
+      closedMessage: "  Free Fire slots filled.  ",
+    });
+    assert.deepEqual(closePayload, {
+      p_game_id: "11111111-1111-4111-8111-111111111111",
+      p_is_open: false,
+      p_closed_message: "Free Fire slots filled.",
+    });
+
+    const reopenPayload = buildUpdateEsportsGameRegistrationControlParams({
+      gameId: "22222222-2222-4222-8222-222222222222",
+      isOpen: true,
+      closedMessage: "   ",
+    });
+    assert.deepEqual(reopenPayload, {
+      p_game_id: "22222222-2222-4222-8222-222222222222",
+      p_is_open: true,
+      p_closed_message: null,
+    });
+  });
+
+  it("Normalizes get_esports_registration_availability rows with games.registration_open as authoritative", () => {
+    const games: Game[] = [
+      makeGame({ id: "g-val", title: "VALORANT", team_size: 5, registration_open: true }),
+      makeGame({ id: "g-bgmi", title: "BGMI", team_size: 4, registration_open: true }),
+      makeGame({ id: "g-ff", title: "FREE FIRE", team_size: 4, registration_open: true }),
+    ];
+
+    // Simulate compact RPC response using alias fields (game_id, is_open, total_teams, confirmed_teams, closed_message)
+    // and omitting is_effectively_open, plus a stale is_open:false on BGMI overridden by authoritative games.registration_open=true
+    const rpcRows = [
+      { game_id: "g-val", title: "VALORANT", is_open: true, total_teams: 6, confirmed_teams: 4, pending_teams: 2 },
+      { game_id: "g-bgmi", title: "BGMI", is_open: false, total_teams: 10, confirmed_teams: 8, pending_teams: 2 },
+      { game_id: "g-ff", title: "FREE FIRE", is_open: true, total_teams: 12, confirmed_teams: 9, pending_teams: 3, closed_message: "" },
+    ];
+
+    const list = normalizeEsportsGameAvailabilityList({
+      rpcRows,
+      games,
+      portalControl: { is_open: true },
+    });
+
+    assert.equal(list.length, 3);
+    for (const item of list) {
+      assert.equal(item.registration_open, true);
+      assert.equal(item.is_effectively_open, true);
+      assert.equal(item.status_reason, "open");
+    }
+    assert.equal(list[1].total_registered_teams, 10);
+    assert.equal(list[1].approved_teams, 8);
+    assert.equal(list[2].registration_closed_message, null);
+
+    // When games.registration_open becomes false, normalized availability reflects closure
+    const closedGames = [
+      games[0],
+      games[1],
+      makeGame({
+        id: "g-ff",
+        title: "FREE FIRE",
+        team_size: 4,
+        registration_open: false,
+        registration_closed_message: "Free Fire registrations paused by admin.",
+      }),
+    ];
+    const afterClose = normalizeEsportsGameAvailabilityList({
+      rpcRows,
+      games: closedGames,
+      portalControl: { is_open: true },
+    });
+    assert.equal(afterClose[2].registration_open, false);
+    assert.equal(afterClose[2].is_effectively_open, false);
+    assert.equal(afterClose[2].status_reason, "manual_closed");
+    assert.equal(getGameClosedDisplayMessage(afterClose[2]), "Free Fire registrations paused by admin.");
   });
 });

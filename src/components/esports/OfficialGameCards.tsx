@@ -12,8 +12,11 @@ import {
 import { GameRulesModal } from "./GameRulesModal";
 import { SITE_CONTENT } from "@/content/site";
 import { supabase } from "@/lib/supabase";
-import { getGameClosedDisplayMessage } from "@/lib/esportsRegistrationControls";
-import type { EsportsGameAvailability } from "@/types/database";
+import {
+  getGameClosedDisplayMessage,
+  normalizeEsportsGameAvailabilityList,
+} from "@/lib/esportsRegistrationControls";
+import type { EsportsGameAvailability, Game, RegistrationControl } from "@/types/database";
 
 export interface TournamentGameSpec {
   id: "valorant" | "bgmi" | "freefire";
@@ -99,48 +102,26 @@ export const OfficialGameCards: React.FC = () => {
     let active = true;
     async function loadAvailability() {
       try {
-        const gamesRes = await supabase
-          .from("games")
-          .select("*")
-          .eq("is_active", true)
-          .eq("is_published", true);
-        let rows: EsportsGameAvailability[] = [];
-        if (!gamesRes.error && Array.isArray(gamesRes.data) && gamesRes.data.length > 0) {
-          const hasCols = Object.prototype.hasOwnProperty.call(
-            gamesRes.data[0],
-            "registration_open"
-          );
-          let rpcLoaded = false;
-          if (hasCols) {
-            const rpcRes = await supabase.rpc("get_esports_registration_availability");
-            if (!rpcRes.error && Array.isArray(rpcRes.data)) {
-              rows = rpcRes.data as EsportsGameAvailability[];
-              rpcLoaded = true;
-            }
-          }
-          if (!rpcLoaded) {
-            rows = gamesRes.data.map((g: any) => ({
-              id: g.id,
-              title: g.title,
-              team_size: g.team_size ?? null,
-              sort_order: g.sort_order ?? 0,
-              is_active: g.is_active !== false,
-              is_published: g.is_published !== false,
-              registration_open: g.registration_open !== false,
-              max_teams: g.max_teams ?? null,
-              auto_close_at_capacity: g.auto_close_at_capacity !== false,
-              registration_override_open: g.registration_override_open === true,
-              registration_closed_message: g.registration_closed_message ?? null,
-              total_registered_teams: 0,
-              approved_teams: 0,
-              pending_teams: 0,
-              active_capacity_teams: 0,
-              slots_remaining: null,
-              is_effectively_open: g.registration_open !== false,
-              status_reason: g.registration_open === false ? "manual_closed" : "open",
-            }));
-          }
-        }
+        const [availRes, gamesRes, ctrlRes] = await Promise.all([
+          supabase.rpc("get_esports_registration_availability"),
+          supabase
+            .from("games")
+            .select("*")
+            .eq("is_active", true)
+            .eq("is_published", true),
+          supabase
+            .from("registration_controls")
+            .select("is_open, opens_at, closes_at")
+            .eq("form_type", "esports")
+            .maybeSingle(),
+        ]);
+
+        const rows = normalizeEsportsGameAvailabilityList({
+          rpcRows: !availRes.error ? availRes.data : [],
+          games: !gamesRes.error && Array.isArray(gamesRes.data) ? (gamesRes.data as Game[]) : [],
+          portalControl: !ctrlRes.error ? (ctrlRes.data as RegistrationControl | null) : null,
+        });
+
         if (!active) return;
         const map: Record<string, EsportsGameAvailability> = {};
         for (const r of rows) {

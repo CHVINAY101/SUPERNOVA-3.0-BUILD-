@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { computeGameRegistrationStats } from "@/lib/esportsRegistrationControls";
+import {
+  buildUpdateEsportsGameRegistrationControlParams,
+  computeGameRegistrationStats,
+  normalizeEsportsGameAvailabilityList,
+  type GameRegistrationStats,
+} from "@/lib/esportsRegistrationControls";
 import { formatLastUpdatedIst } from "@/lib/gatePortal";
-import type { Game, Registration, RegistrationControl } from "@/types/database";
+import type { EsportsGameAvailability, Game, Registration, RegistrationControl } from "@/types/database";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -19,6 +24,7 @@ import {
 } from "lucide-react";
 
 interface EsportsRegistrationControlPanelProps {
+  selectedGameId?: string;
   onUpdated?: () => void;
 }
 
@@ -28,7 +34,10 @@ interface GameDraftSettings {
   closedMessage: string;
 }
 
-export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrationControlPanelProps) {
+export function EsportsRegistrationControlPanel({
+  selectedGameId,
+  onUpdated,
+}: EsportsRegistrationControlPanelProps) {
   const { hasPermission } = useAuth();
   const canManage = hasPermission([
     "tournament:manage_games",
@@ -37,6 +46,7 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
   ]);
 
   const [games, setGames] = useState<Game[]>([]);
+  const [availabilityRows, setAvailabilityRows] = useState<EsportsGameAvailability[]>([]);
   const [registrations, setRegistrations] = useState<
     Pick<Registration, "id" | "game_id" | "status" | "admin_notes" | "submitted_at">[]
   >([]);
@@ -50,7 +60,8 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [gamesRes, regsRes, ctrlRes] = await Promise.all([
+      const [availRes, gamesRes, regsRes, ctrlRes] = await Promise.all([
+        supabase.rpc("get_esports_registration_availability"),
         supabase.from("games").select("*").order("sort_order", { ascending: true }),
         supabase
           .from("registrations")
@@ -62,37 +73,83 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
           .limit(1),
       ]);
 
-      if (gamesRes.error) throw gamesRes.error;
-      const loadedGames = (gamesRes.data as Game[]) || [];
-      setGames(loadedGames);
+      const loadedGames = !gamesRes.error && Array.isArray(gamesRes.data) ? (gamesRes.data as Game[]) : [];
+      const loadedRegs = !regsRes.error && Array.isArray(regsRes.data) ? (regsRes.data as any[]) : [];
+      const loadedPortal =
+        !ctrlRes.error && Array.isArray(ctrlRes.data) && ctrlRes.data.length > 0
+          ? (ctrlRes.data[0] as RegistrationControl)
+          : null;
 
-      const hasNewColumns =
-        loadedGames.length === 0 ||
+      const availRpcSucceeded = !availRes.error && Array.isArray(availRes.data);
+      const hasRegistrationOpenCol =
+        loadedGames.length > 0 &&
         Object.prototype.hasOwnProperty.call(loadedGames[0], "registration_open");
-      if (!hasNewColumns) {
-        setMigrationPendingNotice(
-          "Apply migration 20261123000000_esports_game_controls_and_player_education.sql in Supabase SQL Editor to activate per-game open/close switches, auto-closure at capacity, capacity overrides, and player educational fields."
-        );
-      } else {
-        setMigrationPendingNotice(null);
+
+      if (gamesRes.error && !availRpcSucceeded) {
+        throw gamesRes.error;
       }
 
+      const normalizedAvail = normalizeEsportsGameAvailabilityList({
+        rpcRows: availRpcSucceeded ? availRes.data : [],
+        games: loadedGames,
+        registrations: loadedRegs,
+        portalControl: loadedPortal,
+      });
+
+      const mergedGames: Game[] =
+        loadedGames.length > 0
+          ? loadedGames
+          : normalizedAvail.map((a) => ({
+              id: a.id,
+              title: a.title,
+              description: null,
+              rules: null,
+              team_size: a.team_size,
+              max_teams: a.max_teams,
+              registration_open: a.registration_open,
+              auto_close_at_capacity: a.auto_close_at_capacity,
+              registration_override_open: a.registration_override_open,
+              registration_closed_message: a.registration_closed_message,
+              is_active: a.is_active,
+              is_published: a.is_published,
+              sort_order: a.sort_order,
+              updated_by_email: a.updated_by_email ?? null,
+              created_at: "",
+              updated_at: a.updated_at || "",
+            }));
+
+      setGames(mergedGames);
+      setAvailabilityRows(normalizedAvail);
+      setRegistrations(loadedRegs);
+      setPortalControl(loadedPortal);
+
+      // Clear migration warning whenever live backend capability checks succeed
+      const rpcMissing =
+        Boolean(availRes.error) &&
+        (availRes.error?.code === "PGRST202" ||
+          availRes.error?.code === "42883" ||
+          String(availRes.error?.message || "").includes("Could not find the function"));
+
+      if (availRpcSucceeded || hasRegistrationOpenCol || (!rpcMissing && loadedGames.length === 0)) {
+        setMigrationPendingNotice(null);
+      } else {
+        setMigrationPendingNotice(
+          "Registration control backend capabilities (get_esports_registration_availability / games.registration_open) could not be verified on Supabase."
+        );
+      }
+
+      const availMap = new Map(normalizedAvail.map((r) => [r.id, r]));
       const nextDrafts: Record<string, GameDraftSettings> = {};
-      for (const g of loadedGames) {
+      for (const g of mergedGames) {
+        const av = availMap.get(g.id);
+        const effMax = g.max_teams ?? av?.max_teams ?? null;
         nextDrafts[g.id] = {
-          maxTeamsInput: g.max_teams && g.max_teams > 0 ? String(g.max_teams) : "",
+          maxTeamsInput: effMax && effMax > 0 ? String(effMax) : "",
           autoCloseAtCapacity: g.auto_close_at_capacity !== false,
-          closedMessage: g.registration_closed_message || "",
+          closedMessage: g.registration_closed_message ?? av?.registration_closed_message ?? "",
         };
       }
       setDrafts(nextDrafts);
-
-      if (!regsRes.error && Array.isArray(regsRes.data)) {
-        setRegistrations(regsRes.data as any[]);
-      }
-      if (!ctrlRes.error && Array.isArray(ctrlRes.data) && ctrlRes.data.length > 0) {
-        setPortalControl(ctrlRes.data[0] as RegistrationControl);
-      }
     } catch (err: any) {
       setStatusMsg({
         type: "error",
@@ -107,15 +164,39 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
     loadData();
   }, [loadData]);
 
-  const statsList = useMemo(
-    () =>
-      computeGameRegistrationStats(
-        games.filter((g) => g.is_active),
-        registrations as any,
-        portalControl
-      ),
-    [games, registrations, portalControl]
-  );
+  const [showAllGames, setShowAllGames] = useState<boolean>(!selectedGameId);
+
+  const statsList: GameRegistrationStats[] = useMemo(() => {
+    const activeGames = games.filter((g) => g.is_active !== false);
+    const computedStats = computeGameRegistrationStats(
+      activeGames,
+      registrations as any,
+      portalControl
+    );
+    const availMap = new Map(availabilityRows.map((a) => [a.id, a]));
+
+    const merged = computedStats.map((st) => {
+      const av = availMap.get(st.game.id);
+      if (!av) return st;
+      return {
+        ...st,
+        totalRegisteredTeams: av.total_registered_teams,
+        approvedTeams: av.approved_teams,
+        pendingTeams: av.pending_teams,
+        activeCapacityTeams: av.active_capacity_teams,
+        slotsRemaining: av.slots_remaining,
+        isAtCapacity: av.max_teams !== null && av.active_capacity_teams >= av.max_teams,
+        isEffectivelyOpen: av.is_effectively_open,
+        statusReason: av.status_reason,
+      };
+    });
+
+    if (selectedGameId && !showAllGames) {
+      const focused = merged.filter((s) => s.game.id === selectedGameId);
+      if (focused.length > 0) return focused;
+    }
+    return merged;
+  }, [games, availabilityRows, registrations, portalControl, selectedGameId, showAllGames]);
 
   const updateDraft = (gameId: string, patch: Partial<GameDraftSettings>) => {
     setDrafts((prev) => ({
@@ -136,6 +217,7 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
     overrideMaxTeams?: number | null
   ) => {
     if (!canManage) return;
+    const currentGame = games.find((g) => g.id === gameId);
     const draft = drafts[gameId] || {
       maxTeamsInput: "",
       autoCloseAtCapacity: true,
@@ -161,28 +243,57 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
     setStatusMsg(null);
 
     try {
-      const clearMaxTeams = parsedMax === null;
-      const { error } = await supabase.rpc("update_esports_game_registration_control", {
-        p_game_id: gameId,
-        p_action: action,
-        p_max_teams: parsedMax,
-        p_clear_max_teams: clearMaxTeams,
-        p_auto_close_at_capacity: draft.autoCloseAtCapacity,
-        p_closed_message: draft.closedMessage.trim() || "",
+      const targetIsOpen =
+        action === "close"
+          ? false
+          : action === "open" || action === "reopen_override"
+          ? true
+          : currentGame?.registration_open !== false;
+
+      const rpcPayload = buildUpdateEsportsGameRegistrationControlParams({
+        gameId,
+        isOpen: targetIsOpen,
+        closedMessage: draft.closedMessage,
       });
 
+      const { error } = await supabase.rpc("update_esports_game_registration_control", rpcPayload);
+
       if (error) {
-        const msg = String(error.message || "");
-        if (
-          msg.includes("Could not find the function") ||
-          error.code === "PGRST202" ||
-          error.code === "42883"
-        ) {
-          throw new Error(
-            "Database migration 20261123000000_esports_game_controls_and_player_education.sql has not been applied on Supabase yet. Apply the migration to enable per-game registration locks."
-          );
-        }
         throw error;
+      }
+
+      const currentMax =
+        typeof currentGame?.max_teams === "number" && currentGame.max_teams > 0
+          ? currentGame.max_teams
+          : null;
+      const currentAutoClose = currentGame?.auto_close_at_capacity !== false;
+      const maxTeamsChanged = parsedMax !== currentMax;
+      const autoCloseChanged = draft.autoCloseAtCapacity !== currentAutoClose;
+
+      if (
+        action === "reopen_override" ||
+        (action === "update_settings" && (maxTeamsChanged || autoCloseChanged))
+      ) {
+        const capacityPatch: Record<string, unknown> = {};
+        if (maxTeamsChanged) {
+          capacityPatch.max_teams = parsedMax;
+        }
+        if (autoCloseChanged) {
+          capacityPatch.auto_close_at_capacity = draft.autoCloseAtCapacity;
+        }
+        if (
+          action === "reopen_override" &&
+          currentGame &&
+          Object.prototype.hasOwnProperty.call(currentGame, "registration_override_open")
+        ) {
+          capacityPatch.registration_override_open = true;
+        }
+        if (Object.keys(capacityPatch).length > 0) {
+          const capRes = await supabase.from("games").update(capacityPatch).eq("id", gameId);
+          if (capRes.error) {
+            throw capRes.error;
+          }
+        }
       }
 
       const actionLabel =
@@ -192,7 +303,7 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
           ? `Overrode capacity lock and reopened registrations for ${gameTitle}.`
           : action === "open"
           ? `Opened registrations for ${gameTitle}.`
-          : `Saved capacity & auto-close rules for ${gameTitle}.`;
+          : `Saved notice & capacity settings for ${gameTitle}.`;
 
       setStatusMsg({ type: "success", text: actionLabel });
       await loadData();
@@ -229,15 +340,26 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={loadData}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer self-start sm:self-auto"
-        >
-          <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-          <span>Sync Counts</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          {selectedGameId && (
+            <button
+              type="button"
+              onClick={() => setShowAllGames((v) => !v)}
+              className="px-3 py-2 rounded-xl bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-800 hover:bg-slate-200 cursor-pointer whitespace-nowrap"
+            >
+              {showAllGames ? "Focus Selected Game" : "Show All 3 Games"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={loadData}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+          >
+            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+            <span>Sync Counts</span>
+          </button>
+        </div>
       </div>
 
       {migrationPendingNotice && (
@@ -274,7 +396,11 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
           Loading game registration controls...
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div
+          className={`grid grid-cols-1 ${
+            statsList.length === 1 ? "lg:grid-cols-1 max-w-xl" : "lg:grid-cols-3"
+          } gap-4`}
+        >
           {statsList.map((stat) => {
             const { game } = stat;
             const draft = drafts[game.id] || {
@@ -283,14 +409,15 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
               closedMessage: game.registration_closed_message || "",
             };
             const isBusy = busyGameId === game.id;
+            const isAuthoritativelyOpen = game.registration_open !== false;
 
             const statusBadge = (() => {
+              if (!isAuthoritativelyOpen) {
+                return stat.isAtCapacity && game.auto_close_at_capacity !== false
+                  ? { label: "AUTO-CLOSED (FULL)", cls: "bg-amber-50 text-amber-900 border-amber-300" }
+                  : { label: "CLOSED", cls: "bg-rose-50 text-rose-800 border-rose-200" };
+              }
               switch (stat.statusReason) {
-                case "open":
-                  return {
-                    label: "OPEN",
-                    cls: "bg-emerald-50 text-emerald-800 border-emerald-200",
-                  };
                 case "open_override":
                   return {
                     label: "OPEN (CAPACITY OVERRIDE)",
@@ -308,22 +435,26 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
                     label: "PORTAL PAUSED",
                     cls: "bg-rose-50 text-rose-800 border-rose-200",
                   };
-                case "manual_closed":
+                case "open":
                 default:
                   return {
-                    label: "CLOSED",
-                    cls: "bg-rose-50 text-rose-800 border-rose-200",
+                    label: "OPEN",
+                    cls: "bg-emerald-50 text-emerald-800 border-emerald-200",
                   };
               }
             })();
 
-            const isClosed = game.registration_open === false || (!stat.isEffectivelyOpen && stat.statusReason === "capacity_reached");
+            const isCapacityBlocked =
+              isAuthoritativelyOpen &&
+              stat.isAtCapacity &&
+              game.auto_close_at_capacity !== false &&
+              game.registration_override_open !== true;
 
             return (
               <div
                 key={game.id}
                 className={`rounded-2xl border p-4 sm:p-5 flex flex-col justify-between gap-4 transition-colors ${
-                  stat.isEffectivelyOpen
+                  isAuthoritativelyOpen && stat.isEffectivelyOpen
                     ? "bg-white border-slate-200"
                     : "bg-slate-50/80 border-rose-200/80"
                 }`}
@@ -343,7 +474,7 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
                       </span>
                     </div>
                     <span
-                      className={`px-2.5 py-0.5 rounded-full border font-mono text-[10px] font-bold uppercase ${statusBadge.cls}`}
+                      className={`px-2 py-0.5 rounded border font-mono text-[10px] font-bold uppercase ${statusBadge.cls}`}
                     >
                       {statusBadge.label}
                     </span>
@@ -390,17 +521,17 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
                   {/* Quick Open / Close / Override Reopen Action Bar */}
                   {canManage && (
                     <div className="flex flex-wrap gap-2">
-                      {!isClosed && stat.isEffectivelyOpen ? (
+                      {!isAuthoritativelyOpen ? (
                         <button
                           type="button"
                           disabled={isBusy}
-                          onClick={() => handleControlAction(game.id, game.title, "close")}
-                          className="flex-1 min-h-[38px] inline-flex items-center justify-center gap-1.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                          onClick={() => handleControlAction(game.id, game.title, "open")}
+                          className="flex-1 min-h-[38px] inline-flex items-center justify-center gap-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
                         >
-                          <Lock size={13} />
-                          <span>Close Immediately</span>
+                          <Unlock size={13} />
+                          <span>Reopen Registrations</span>
                         </button>
-                      ) : stat.isAtCapacity ? (
+                      ) : isCapacityBlocked ? (
                         <button
                           type="button"
                           disabled={isBusy}
@@ -415,11 +546,11 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
                         <button
                           type="button"
                           disabled={isBusy}
-                          onClick={() => handleControlAction(game.id, game.title, "open")}
-                          className="flex-1 min-h-[38px] inline-flex items-center justify-center gap-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                          onClick={() => handleControlAction(game.id, game.title, "close")}
+                          className="flex-1 min-h-[38px] inline-flex items-center justify-center gap-1.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
                         >
-                          <Unlock size={13} />
-                          <span>{game.registration_open === false ? "Reopen Registrations" : "Open Registrations"}</span>
+                          <Lock size={13} />
+                          <span>Close Immediately</span>
                         </button>
                       )}
                     </div>

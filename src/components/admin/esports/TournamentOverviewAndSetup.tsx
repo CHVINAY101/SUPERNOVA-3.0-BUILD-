@@ -62,7 +62,7 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
       detail: hasPersistedTournament
         ? `${FORMAT_LABELS[tournament.format] || tournament.format} · ${tournament.total_rounds || 1} round(s)`
         : "Configure format, rules & BR points",
-      target: "setup" as EsportsSectionId,
+      target: "tournament_matches" as EsportsSectionId,
     },
     {
       step: "02",
@@ -76,7 +76,7 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
       title: "Bracket & Pairing",
       done: matches.length > 0,
       detail: matches.length > 0 ? `${matches.length} fixtures built` : "Auto-pair teams cleanly",
-      target: "bracket" as EsportsSectionId,
+      target: "tournament_matches" as EsportsSectionId,
     },
     {
       step: "04",
@@ -88,14 +88,14 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
           : unscheduledMatches.length > 0
           ? `${unscheduledMatches.length} awaiting IST slot`
           : `All ${scheduledMatches.length} matches scheduled`,
-      target: "schedule" as EsportsSectionId,
+      target: "tournament_matches" as EsportsSectionId,
     },
     {
       step: "05",
       title: "Play & Confirmation",
       done: matches.length > 0 && completedCount === matches.length,
       detail: `${completedCount}/${matches.length} completed · ${confirmQueueCount} pending confirm`,
-      target: "matches" as EsportsSectionId,
+      target: "live_results" as EsportsSectionId,
     },
   ];
 
@@ -162,7 +162,7 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
           </div>
           <button
             type="button"
-            onClick={() => onNavigate("standings")}
+            onClick={() => onNavigate("live_results")}
             className="min-h-[40px] px-4 rounded-lg bg-white text-slate-900 text-xs font-semibold hover:bg-slate-100 cursor-pointer whitespace-nowrap shrink-0"
           >
             View Final Standings
@@ -176,7 +176,7 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
           {openDisputeCount > 0 && (
             <button
               type="button"
-              onClick={() => onNavigate("disputes")}
+              onClick={() => onNavigate("settings")}
               className="text-left p-4 rounded-xl bg-rose-50 border border-rose-200 hover:bg-rose-100/70 transition-colors cursor-pointer"
             >
               <div className="flex items-center justify-between text-rose-900 font-semibold text-xs">
@@ -194,7 +194,7 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
           {confirmQueueCount > 0 && (
             <button
               type="button"
-              onClick={() => onNavigate("live")}
+              onClick={() => onNavigate("live_results")}
               className="text-left p-4 rounded-xl bg-blue-50 border border-blue-200 hover:bg-blue-100/70 transition-colors cursor-pointer"
             >
               <div className="flex items-center justify-between text-blue-900 font-semibold text-xs">
@@ -212,7 +212,7 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
           {unscheduledMatches.length > 0 && (
             <button
               type="button"
-              onClick={() => onNavigate("schedule")}
+              onClick={() => onNavigate("tournament_matches")}
               className="text-left p-4 rounded-xl bg-amber-50 border border-amber-200 hover:bg-amber-100/70 transition-colors cursor-pointer"
             >
               <div className="flex items-center justify-between text-amber-900 font-semibold text-xs">
@@ -223,7 +223,7 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
                 <ChevronRight size={14} />
               </div>
               <p className="text-xs text-amber-800 mt-1 mb-0">
-                Assign IST dates, start times, arenas, and conductors in Schedule Calendar.
+                Assign IST dates, start times, arenas, and conductors in Tournament & Matches.
               </p>
             </button>
           )}
@@ -245,19 +245,19 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onNavigate("setup")}
+              onClick={() => onNavigate("settings")}
               className="min-h-[38px] px-3.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 inline-flex items-center gap-1.5 cursor-pointer"
             >
               <Settings2 size={14} />
-              <span>Edit Setup</span>
+              <span>Technical Settings</span>
             </button>
             <button
               type="button"
-              onClick={() => onNavigate(matches.length === 0 ? "bracket" : "matches")}
+              onClick={() => onNavigate(matches.length === 0 ? "tournament_matches" : "live_results")}
               className="min-h-[38px] px-3.5 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
             >
               {matches.length === 0 ? <GitBranch size={14} /> : <Play size={14} />}
-              <span>{matches.length === 0 ? "Build Fixtures" : "Open Match Control"}</span>
+              <span>{matches.length === 0 ? "Build Fixtures" : "Open Live Results"}</span>
             </button>
           </div>
         </div>
@@ -297,10 +297,10 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
           </h3>
           <button
             type="button"
-            onClick={() => onNavigate("schedule")}
+            onClick={() => onNavigate("tournament_matches")}
             className="text-xs font-semibold text-blue-700 hover:underline cursor-pointer bg-transparent border-0"
           >
-            Open Full Calendar →
+            Open Schedule &amp; Bracket →
           </button>
         </div>
 
@@ -455,9 +455,11 @@ export function TournamentSetupSection({ data, canManageSetup, onSaved, onError 
 
     const teamLimitNum = approvedTeamLimit.trim() ? Math.max(2, Number(approvedTeamLimit)) : null;
     const rulesSnapshot = {
+      ...((tournament.rules_snapshot as Record<string, any> | null) || {}),
       best_of: bestOf,
       points_per_kill: Math.max(0, pointsPerKill),
       teams_per_lobby: Math.max(2, Math.min(100, Math.trunc(teamsPerLobby || 12))),
+      qualification_count: parsedRules.qualificationCount || 0,
       placement_points: placementTable,
       win_points: winPoints,
       draw_points: drawPoints,

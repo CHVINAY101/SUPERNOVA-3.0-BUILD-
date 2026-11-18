@@ -737,7 +737,7 @@ export function MatchesControlSection({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => onNavigate("schedule")}
+              onClick={() => onNavigate("tournament_matches")}
               className="min-h-[38px] px-3 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
             >
               <CalendarClock size={14} />
@@ -879,7 +879,7 @@ export function MatchesControlSection({
                         ) : (
                           <button
                             type="button"
-                            onClick={() => onNavigate("schedule")}
+                            onClick={() => onNavigate("tournament_matches")}
                             className="text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded hover:bg-amber-100 cursor-pointer"
                           >
                             Unscheduled
@@ -1215,7 +1215,7 @@ export function MatchesControlSection({
                 type="button"
                 onClick={() => {
                   setControlMatch(null);
-                  onNavigate("schedule");
+                  onNavigate("tournament_matches");
                 }}
                 className="min-h-[40px] px-3.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer"
               >
@@ -1870,7 +1870,7 @@ export function LiveConsoleAndResultsSection(props: SharedControlProps) {
             </div>
             <button
               type="button"
-              onClick={() => onNavigate("matches")}
+              onClick={() => onNavigate("tournament_matches")}
               className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
             >
               Full Match Controls
@@ -1903,7 +1903,7 @@ export function LiveConsoleAndResultsSection(props: SharedControlProps) {
                         </span>
                         <button
                           type="button"
-                          onClick={() => onNavigate("matches")}
+                          onClick={() => onNavigate("tournament_matches")}
                           className="h-8 px-3 rounded-lg bg-[#0B1120] text-white text-xs font-semibold cursor-pointer"
                         >
                           Enter Lobby Placements

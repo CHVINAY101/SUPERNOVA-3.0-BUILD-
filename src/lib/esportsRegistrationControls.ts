@@ -273,6 +273,172 @@ export function getGameClosedDisplayMessage(
   }
 }
 
+export interface UpdateEsportsGameRegistrationControlParams {
+  p_game_id: string;
+  p_is_open: boolean;
+  p_closed_message?: string | null;
+}
+
+export function buildUpdateEsportsGameRegistrationControlParams(input: {
+  gameId: string;
+  isOpen: boolean;
+  closedMessage?: string | null;
+}): UpdateEsportsGameRegistrationControlParams {
+  const trimmed = typeof input.closedMessage === "string" ? input.closedMessage.trim() : "";
+  return {
+    p_game_id: input.gameId,
+    p_is_open: Boolean(input.isOpen),
+    p_closed_message: trimmed.length > 0 ? trimmed : null,
+  };
+}
+
+export function normalizeEsportsGameAvailabilityList(input: {
+  rpcRows?: unknown;
+  games?: Game[];
+  registrations?: (Pick<Registration, "id" | "game_id" | "status" | "admin_notes"> & { archived_at?: string | null })[];
+  portalControl?: Pick<RegistrationControl, "is_open" | "opens_at" | "closes_at"> | null;
+  now?: Date;
+}): EsportsGameAvailability[] {
+  const rawRpcRows = Array.isArray(input.rpcRows) ? (input.rpcRows as Record<string, any>[]) : [];
+  const games = Array.isArray(input.games) ? input.games : [];
+  const regs = Array.isArray(input.registrations) ? input.registrations : [];
+  const now = input.now ?? new Date();
+
+  const portalBlockedReason = (() => {
+    const pc = input.portalControl;
+    if (!pc) return null;
+    if (!pc.is_open) return "portal_closed" as const;
+    if (pc.opens_at && now < new Date(pc.opens_at)) return "portal_scheduled" as const;
+    if (pc.closes_at && now > new Date(pc.closes_at)) return "portal_expired" as const;
+    return null;
+  })();
+
+  const rpcByGameId = new Map<string, Record<string, any>>();
+  for (const row of rawRpcRows) {
+    const rowId = String(row?.id ?? row?.game_id ?? "").trim();
+    if (rowId) rpcByGameId.set(rowId, row);
+  }
+
+  const fallbackStats = computeGameRegistrationStats(games, regs, input.portalControl, now);
+  const statsByGameId = new Map<string, GameRegistrationStats>();
+  for (const st of fallbackStats) statsByGameId.set(st.game.id, st);
+
+  // Merge game IDs preserving games sort order first, then any RPC-only rows
+  const orderedIds: string[] = [];
+  const seen = new Set<string>();
+  for (const g of games) {
+    if (!seen.has(g.id)) {
+      seen.add(g.id);
+      orderedIds.push(g.id);
+    }
+  }
+  for (const row of rawRpcRows) {
+    const rowId = String(row?.id ?? row?.game_id ?? "").trim();
+    if (rowId && !seen.has(rowId)) {
+      seen.add(rowId);
+      orderedIds.push(rowId);
+    }
+  }
+
+  const gameById = new Map<string, Game>();
+  for (const g of games) gameById.set(g.id, g);
+
+  return orderedIds.map((id) => {
+    const game = gameById.get(id);
+    const rpc = rpcByGameId.get(id);
+    const stat = statsByGameId.get(id);
+
+    // Authoritative status from games.registration_open when available
+    const authoritativeRegOpen: boolean =
+      game && typeof game.registration_open === "boolean"
+        ? game.registration_open
+        : typeof rpc?.registration_open === "boolean"
+        ? rpc.registration_open
+        : typeof rpc?.is_open === "boolean"
+        ? rpc.is_open
+        : true;
+
+    const maxTeamsRaw = game?.max_teams ?? rpc?.max_teams ?? null;
+    const maxTeams = typeof maxTeamsRaw === "number" && maxTeamsRaw > 0 ? maxTeamsRaw : null;
+    const autoClose =
+      typeof game?.auto_close_at_capacity === "boolean"
+        ? game.auto_close_at_capacity
+        : rpc?.auto_close_at_capacity !== false;
+    const overrideOpen =
+      typeof game?.registration_override_open === "boolean"
+        ? game.registration_override_open
+        : rpc?.registration_override_open === true;
+
+    const totalRegistered = Number(
+      rpc?.total_registered_teams ?? rpc?.total_teams ?? stat?.totalRegisteredTeams ?? 0
+    );
+    const approvedTeams = Number(
+      rpc?.approved_teams ?? rpc?.confirmed_teams ?? stat?.approvedTeams ?? 0
+    );
+    const pendingTeams = Number(rpc?.pending_teams ?? stat?.pendingTeams ?? 0);
+    const activeCapacityTeams = Number(
+      rpc?.active_capacity_teams ?? stat?.activeCapacityTeams ?? totalRegistered
+    );
+    const slotsRemaining =
+      typeof rpc?.slots_remaining === "number"
+        ? rpc.slots_remaining
+        : maxTeams !== null
+        ? Math.max(0, maxTeams - activeCapacityTeams)
+        : null;
+
+    const closedMessage =
+      (game?.registration_closed_message ?? rpc?.registration_closed_message ?? rpc?.closed_message ?? null) ||
+      null;
+
+    const isActive = game ? game.is_active !== false : rpc?.is_active !== false;
+    const isPublished = game ? game.is_published !== false : rpc?.is_published !== false;
+    const isAtCapacity = maxTeams !== null && activeCapacityTeams >= maxTeams;
+
+    let statusReason: EsportsRegistrationStatusReason = "open";
+    if (portalBlockedReason) {
+      statusReason = portalBlockedReason;
+    } else if (!authoritativeRegOpen) {
+      statusReason = isAtCapacity && autoClose ? "capacity_reached" : "manual_closed";
+    } else if (isAtCapacity && autoClose && !overrideOpen) {
+      statusReason = "capacity_reached";
+    } else if (isAtCapacity && overrideOpen) {
+      statusReason = "open_override";
+    } else if (typeof rpc?.status_reason === "string" && rpc.status_reason !== "manual_closed") {
+      statusReason = rpc.status_reason as EsportsRegistrationStatusReason;
+    }
+
+    const isEffectivelyOpen =
+      isActive &&
+      isPublished &&
+      !portalBlockedReason &&
+      authoritativeRegOpen &&
+      (!isAtCapacity || !autoClose || overrideOpen);
+
+    return {
+      id,
+      title: game?.title ?? String(rpc?.title ?? "Esports"),
+      team_size: game?.team_size ?? (typeof rpc?.team_size === "number" ? rpc.team_size : null),
+      sort_order: game?.sort_order ?? Number(rpc?.sort_order ?? 0),
+      is_active: isActive,
+      is_published: isPublished,
+      registration_open: authoritativeRegOpen,
+      max_teams: maxTeams,
+      auto_close_at_capacity: autoClose,
+      registration_override_open: overrideOpen,
+      registration_closed_message: closedMessage,
+      updated_at: game?.updated_at ?? rpc?.updated_at ?? null,
+      updated_by_email: game?.updated_by_email ?? rpc?.updated_by_email ?? null,
+      total_registered_teams: totalRegistered,
+      approved_teams: approvedTeams,
+      pending_teams: pendingTeams,
+      active_capacity_teams: activeCapacityTeams,
+      slots_remaining: slotsRemaining,
+      is_effectively_open: isEffectivelyOpen,
+      status_reason: statusReason,
+    };
+  });
+}
+
 export function simulateGameControlAction(
   current: GameRegistrationStats,
   action: "open" | "close" | "reopen_override" | "update_settings",

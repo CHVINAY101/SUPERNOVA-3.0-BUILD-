@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   authorizeConductorMatchOperation,
+  buildConnectedBracketLayout,
   calculateBattleRoyaleStandings,
   calculateCumulativeBattleRoyaleStandings,
   calculateGroupStandings,
@@ -9,6 +10,7 @@ import {
   canRegenerateBracket,
   canTeamEnterTournament,
   confirmAndAdvanceMatchResult,
+  deriveTournamentWizardState,
   escalateMatchDispute,
   findDependentDownstreamMatches,
   generateTournamentMatches,
@@ -16,6 +18,7 @@ import {
   resolveMatchDispute,
   submitMatchResultDraft,
   undoMatchResultAndRewind,
+  validateBattleRoyaleRows,
   validateSelectionUpdate,
 } from "./tournamentEngine.ts";
 import { resolveEffectivePermissions } from "./rbac.ts";
@@ -643,18 +646,22 @@ describe("Esports Tournament Operations Engine (Scenarios 10–20)", () => {
     let currentMatches = built.matches as unknown as Match[];
 
     for (const m of built.matches) {
+      const hasFf1 = m.br_results.some((r) => r.team_id === "ff-1");
+      const hasFf2 = m.br_results.some((r) => r.team_id === "ff-2");
+      let nextRank = 1;
       const scoredRows = m.br_results.map((row, idx) => {
-        // Give ff-1 Booyah (#1) + 8 kills in all its lobbies, ff-2 #2 + 5 kills, others descending
-        let placement = idx + 1;
-        let kills = Math.max(0, 4 - idx);
+        let placement: number;
+        let kills = idx % 2;
         if (row.team_id === "ff-1") {
           placement = 1;
           kills = 8;
         } else if (row.team_id === "ff-2") {
           placement = 2;
           kills = 5;
-        } else if (placement <= 2) {
-          placement += 2;
+        } else {
+          if (hasFf1 && nextRank === 1) nextRank += 1;
+          if (hasFf2 && nextRank === 2) nextRank += 1;
+          placement = nextRank++;
         }
         const pp = ffPlacementTable[placement] ?? 0;
         const kp = kills * 1;
@@ -698,5 +705,179 @@ describe("Esports Tournament Operations Engine (Scenarios 10–20)", () => {
     // ff-2 played 3 rounds with #2 (9 pts) + 5 kills = 14 pts/round => 42 pts total
     assert.equal(cumulative[1].teamId, "ff-2");
     assert.equal(cumulative[1].totalPoints, 42);
+  });
+
+  it("Scenario 25: Full 8-team Double Elimination bracket links Winners, Multi-Round Losers & Grand Final cleanly", () => {
+    const squads8 = Array.from({ length: 8 }, (_, idx) => makeTeam(`de-${idx + 1}`, `Team ${idx + 1}`));
+    const built = generateTournamentMatches({
+      tournamentId: "tour-de-8",
+      gameId: "g-val",
+      gameTitle: "VALORANT",
+      format: "double_elimination",
+      teams: squads8,
+      seedingMode: "registration_order",
+      leaveUnscheduled: true,
+    });
+    assert.equal(built.ok, true);
+    if (!built.ok) return;
+
+    const winners = built.matches.filter((m) => m.bracket_side === "winners");
+    const losers = built.matches.filter((m) => m.bracket_side === "losers");
+    const gf = built.matches.filter((m) => m.bracket_side === "grand_final");
+
+    // 8 teams => W1(4) + W2(2) + W3(1) = 7 winners; LR1(2)+LR2(2)+LR3(1)+LR4(1) = 6 losers; 1 Grand Final = 14 total
+    assert.equal(winners.length, 7);
+    assert.equal(losers.length, 6);
+    assert.equal(gf.length, 1);
+
+    // Winners Round 1 feeds into Winners R2 and drops losers into LR1
+    const wr1 = winners.filter((m) => m.round_number === 1);
+    assert.equal(wr1.every((m) => Boolean(m.next_match_id) && Boolean(m.loser_next_match_id)), true);
+    // Losers Final feeds into Grand Final slot 'b'
+    const losersFinal = losers.find((m) => m.round === "Losers Final");
+    assert.ok(losersFinal);
+    assert.equal(losersFinal?.next_match_id, gf[0].id);
+    assert.equal(losersFinal?.next_match_slot, "b");
+
+    // Connected bracket layout computes separate Winners + Losers tracks with awaiting labels
+    const teamNameById = new Map(squads8.map((t) => [t.id, t.team_name]));
+    const layout = buildConnectedBracketLayout({
+      matches: built.matches as unknown as Match[],
+      teamNameById,
+      format: "double_elimination",
+    });
+    assert.equal(layout.hasConnectedBracket, true);
+    assert.equal(layout.tracks.length, 2);
+    assert.equal(layout.tracks[0].id, "winners");
+    assert.equal(layout.tracks[1].id, "losers");
+    assert.ok(layout.tracks[0].championCard);
+    assert.ok(layout.tracks[0].edges.length >= 6);
+    assert.ok(layout.tracks[1].edges.length >= 4);
+    const lr1Card = layout.tracks[1].columns[0].cards[0];
+    assert.ok(lr1Card.teamALabel.startsWith("Loser of VAL-WR1-M"));
+  });
+
+  it("Scenario 26: 6-step Tournament Setup Wizard derives accurate step progress & next CTA", () => {
+    const baseTournament = makeTournament({ has_started: false, status: "draft" });
+    const s1 = deriveTournamentWizardState({
+      tournament: baseTournament,
+      hasPersistedTournament: false,
+      selectedTeamCount: 1,
+      approvedTeamCount: 4,
+      matches: [],
+    });
+    assert.equal(s1.currentStepNumber, 1);
+    assert.equal(s1.currentStepId, "select_teams");
+
+    const s2 = deriveTournamentWizardState({
+      tournament: baseTournament,
+      hasPersistedTournament: false,
+      selectedTeamCount: 4,
+      approvedTeamCount: 4,
+      matches: [],
+    });
+    assert.equal(s2.currentStepNumber, 2);
+    assert.equal(s2.currentStepId, "choose_format");
+
+    const s4 = deriveTournamentWizardState({
+      tournament: makeTournament({ status: "open", has_started: false }),
+      hasPersistedTournament: true,
+      selectedTeamCount: 4,
+      approvedTeamCount: 4,
+      matches: [],
+    });
+    assert.equal(s4.currentStepNumber, 4);
+    assert.equal(s4.currentStepId, "generate_matches");
+
+    const s5 = deriveTournamentWizardState({
+      tournament: makeTournament({ status: "open", has_started: false }),
+      hasPersistedTournament: true,
+      selectedTeamCount: 4,
+      approvedTeamCount: 4,
+      matches: [{ status: "upcoming", match_format: "BO1", is_published: false }],
+    });
+    assert.equal(s5.currentStepNumber, 5);
+    assert.equal(s5.currentStepId, "publish_tournament");
+
+    const s6 = deriveTournamentWizardState({
+      tournament: makeTournament({ status: "published", has_started: false }),
+      hasPersistedTournament: true,
+      selectedTeamCount: 4,
+      approvedTeamCount: 4,
+      matches: [{ status: "scheduled", match_format: "BO1", is_published: true }],
+    });
+    assert.equal(s6.currentStepNumber, 6);
+    assert.equal(s6.currentStepId, "start_tournament");
+
+    const done = deriveTournamentWizardState({
+      tournament: makeTournament({ status: "in_progress", has_started: true }),
+      hasPersistedTournament: true,
+      selectedTeamCount: 4,
+      approvedTeamCount: 4,
+      matches: [{ status: "live", match_format: "BO1", is_published: true }],
+    });
+    assert.equal(done.allCompleted, true);
+  });
+
+  it("Scenario 27: BR Validation flags duplicate/missing placements & H2H allows League Draw + Forfeit", () => {
+    const brCheck = validateBattleRoyaleRows([
+      { team_id: "a", team_name: "Alpha", placement: 1, kills: 5, placement_points: 15, kill_points: 5, total_points: 20 },
+      { team_id: "b", team_name: "Bravo", placement: 1, kills: 2, placement_points: 15, kill_points: 2, total_points: 17 },
+      { team_id: "c", team_name: "Charlie", placement: null, kills: 0, placement_points: 0, kill_points: 0, total_points: 0 },
+    ]);
+    assert.equal(brCheck.isValid, false);
+    assert.deepEqual(brCheck.duplicatePlacements, [1]);
+    assert.equal(brCheck.missingCount, 1);
+    assert.equal(brCheck.duplicateTeamIds.has("a"), true);
+    assert.equal(brCheck.duplicateTeamIds.has("b"), true);
+    assert.equal(brCheck.missingTeamIds.has("c"), true);
+
+    const mgrPerms = resolveEffectivePermissions("esports_manager", "active");
+    const rrMatch: Match = {
+      id: "rr-1",
+      game_id: "g-1",
+      round: "Round 1",
+      team_a_id: "t1",
+      team_b_id: "t2",
+      scheduled_start: null,
+      score_a: 1,
+      score_b: 1,
+      status: "live",
+      winner_id: null,
+      is_published: true,
+      created_at: "",
+      updated_at: "",
+    };
+
+    const drawConfirmed = confirmAndAdvanceMatchResult({
+      matches: [rrMatch],
+      matchId: "rr-1",
+      managerUserId: "mgr-1",
+      permissions: mgrPerms,
+      overrideScoreA: 1,
+      overrideScoreB: 1,
+      overrideWinnerId: null,
+      allowDraw: true,
+    });
+    assert.equal(drawConfirmed.ok, true);
+    if (drawConfirmed.ok) {
+      assert.equal(drawConfirmed.matches[0].status, "completed");
+      assert.equal(drawConfirmed.matches[0].winner_id, null);
+    }
+
+    const forfeitConfirmed = confirmAndAdvanceMatchResult({
+      matches: [{ ...rrMatch, id: "ff-forf", score_a: 0, score_b: 0 }],
+      matchId: "ff-forf",
+      managerUserId: "mgr-1",
+      permissions: mgrPerms,
+      overrideScoreA: 0,
+      overrideScoreB: 1,
+      forfeitTeamId: "t1",
+    });
+    assert.equal(forfeitConfirmed.ok, true);
+    if (forfeitConfirmed.ok) {
+      assert.equal(forfeitConfirmed.matches[0].winner_id, "t2");
+      assert.equal((forfeitConfirmed.matches[0].detailed_scores as any)?.forfeit_team_id, "t1");
+    }
   });
 });
