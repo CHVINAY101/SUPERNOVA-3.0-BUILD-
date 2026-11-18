@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowRight,
@@ -7,9 +7,13 @@ import {
   Smartphone,
   Shield,
   Clock,
+  Lock,
 } from "lucide-react";
 import { GameRulesModal } from "./GameRulesModal";
 import { SITE_CONTENT } from "@/content/site";
+import { supabase } from "@/lib/supabase";
+import { getGameClosedDisplayMessage } from "@/lib/esportsRegistrationControls";
+import type { EsportsGameAvailability } from "@/types/database";
 
 export interface TournamentGameSpec {
   id: "valorant" | "bgmi" | "freefire";
@@ -88,13 +92,85 @@ export const TOURNAMENT_GAMES: TournamentGameSpec[] = [
 
 export const OfficialGameCards: React.FC = () => {
   const [selectedGameForRules, setSelectedGameForRules] = useState<TournamentGameSpec | null>(null);
+  const [availabilityBySlug, setAvailabilityBySlug] = useState<Record<string, EsportsGameAvailability>>({});
   const isRegistrationOpen = SITE_CONTENT.registrationOpen !== false;
+
+  useEffect(() => {
+    let active = true;
+    async function loadAvailability() {
+      try {
+        const gamesRes = await supabase
+          .from("games")
+          .select("*")
+          .eq("is_active", true)
+          .eq("is_published", true);
+        let rows: EsportsGameAvailability[] = [];
+        if (!gamesRes.error && Array.isArray(gamesRes.data) && gamesRes.data.length > 0) {
+          const hasCols = Object.prototype.hasOwnProperty.call(
+            gamesRes.data[0],
+            "registration_open"
+          );
+          let rpcLoaded = false;
+          if (hasCols) {
+            const rpcRes = await supabase.rpc("get_esports_registration_availability");
+            if (!rpcRes.error && Array.isArray(rpcRes.data)) {
+              rows = rpcRes.data as EsportsGameAvailability[];
+              rpcLoaded = true;
+            }
+          }
+          if (!rpcLoaded) {
+            rows = gamesRes.data.map((g: any) => ({
+              id: g.id,
+              title: g.title,
+              team_size: g.team_size ?? null,
+              sort_order: g.sort_order ?? 0,
+              is_active: g.is_active !== false,
+              is_published: g.is_published !== false,
+              registration_open: g.registration_open !== false,
+              max_teams: g.max_teams ?? null,
+              auto_close_at_capacity: g.auto_close_at_capacity !== false,
+              registration_override_open: g.registration_override_open === true,
+              registration_closed_message: g.registration_closed_message ?? null,
+              total_registered_teams: 0,
+              approved_teams: 0,
+              pending_teams: 0,
+              active_capacity_teams: 0,
+              slots_remaining: null,
+              is_effectively_open: g.registration_open !== false,
+              status_reason: g.registration_open === false ? "manual_closed" : "open",
+            }));
+          }
+        }
+        if (!active) return;
+        const map: Record<string, EsportsGameAvailability> = {};
+        for (const r of rows) {
+          const norm = (r.title || "").toLowerCase();
+          if (norm.includes("valorant")) map.valorant = r;
+          else if (norm.includes("bgmi")) map.bgmi = r;
+          else if (norm.includes("free fire") || norm.includes("freefire")) map.freefire = r;
+        }
+        setAvailabilityBySlug(map);
+      } catch {
+        // Fallback preserves default site config behavior
+      }
+    }
+    loadAvailability();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <div className="w-full">
       {/* 3 Balanced, Professional Game Cards */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8 items-stretch">
         {TOURNAMENT_GAMES.map((game) => {
+          const liveAvail = availabilityBySlug[game.id] || null;
+          const gameIsOpen = isRegistrationOpen && (liveAvail ? liveAvail.is_effectively_open : true);
+          const closedMessage =
+            liveAvail && !liveAvail.is_effectively_open
+              ? getGameClosedDisplayMessage(liveAvail)
+              : null;
           return (
             <article
               key={game.id}
@@ -206,11 +282,17 @@ export const OfficialGameCards: React.FC = () => {
                       </p>
                     </div>
                   </div>
+                  {closedMessage && (
+                    <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/40 text-xs text-rose-200 mb-4 flex items-start gap-2">
+                      <Lock size={14} className="shrink-0 mt-0.5 text-rose-300" />
+                      <span>{closedMessage}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* 3. Card Action Center */}
                 <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
-                  {isRegistrationOpen ? (
+                  {gameIsOpen ? (
                     <Link
                       to={game.registerQuery}
                       className="w-full sm:flex-1 h-11 rounded-xl bg-[#2563EB] hover:bg-blue-600 text-white font-body font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors shadow-sm active:scale-[0.98]"
@@ -222,10 +304,10 @@ export const OfficialGameCards: React.FC = () => {
                     <button
                       type="button"
                       disabled
-                      className="w-full sm:flex-1 h-11 rounded-xl bg-slate-800 text-slate-400 font-body font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-not-allowed"
+                      className="w-full sm:flex-1 h-11 rounded-xl bg-slate-800 border border-rose-500/30 text-rose-200 font-body font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-not-allowed"
                     >
-                      <Clock size={14} />
-                      <span>REGISTRATION OPENING SOON</span>
+                      <Lock size={14} />
+                      <span>{liveAvail ? "REGISTRATIONS CLOSED" : "REGISTRATION OPENING SOON"}</span>
                     </button>
                   )}
 

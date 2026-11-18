@@ -21,6 +21,9 @@ import VisitorInfo from "./pages/public/VisitorInfo";
 import Privacy from "./pages/public/Privacy";
 
 // Admin Pages
+import { GateGuard } from "./components/admin/GateGuard";
+import GateLogin from "./pages/gate/GateLogin";
+import GatePortal from "./pages/gate/GatePortal";
 import AdminLayout from "./pages/admin/AdminLayout";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -43,7 +46,6 @@ import AdminFormOptions from "./pages/admin/AdminFormOptions";
 import AdminAuditLogs from "./pages/admin/AdminAuditLogs";
 import AdminSystemReadiness from "./pages/admin/AdminSystemReadiness";
 import AdminDataExports from "./pages/admin/AdminDataExports";
-import AdminCrmEmails from "./pages/admin/AdminCrmEmails";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminConductorMatches from "./pages/admin/AdminConductorMatches";
 
@@ -73,8 +75,19 @@ export default function App() {
         <Route path="/privacy" element={<Privacy />} />
       </Route>
 
-      {/* Staff redirect to checkin */}
-      <Route path="/staff" element={<Navigate to="/admin/checkin" replace />} />
+      {/* Dedicated Gate Verification & Ticket Scanning Portal */}
+      <Route path="/gate/login" element={<GateLogin />} />
+      <Route
+        path="/gate"
+        element={
+          <GateGuard>
+            <GatePortal />
+          </GateGuard>
+        }
+      />
+
+      {/* Staff redirect to dedicated Gate Login */}
+      <Route path="/staff" element={<Navigate to="/gate/login" replace />} />
 
       {/* Admin Login (Public entry to Admin Area) */}
       <Route path="/admin/login" element={<AdminLogin />} />
@@ -95,7 +108,6 @@ export default function App() {
         <Route path="registration-controls" element={<AdminRegistrationControls />} />
         <Route path="esports-registrations" element={<AdminEsportsRegistrations />} />
         <Route path="visitor-registrations" element={<AdminVisitorRegistrations />} />
-        <Route path="crm-emails" element={<AdminCrmEmails />} />
         <Route path="users" element={<AdminUsers />} />
         <Route path="schedule" element={<AdminSchedule />} />
         <Route path="announcements" element={<AdminAnnouncements />} />

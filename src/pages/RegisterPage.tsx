@@ -5,8 +5,17 @@ import { SITE_CONTENT } from "../content/site";
 import { CheckCircle2, Copy, Download, Eye, QrCode, Search, Clock, AlertCircle, X, Ticket, GraduationCap, Building2, UserCheck } from "lucide-react";
 import QRCode from "qrcode";
 import { supabase } from "../lib/supabase";
-import { getOfficialTeamSize, validateEsportsRoster } from "@/utils/esportsRules";
-import { sendRegistrationConfirmationEmail } from "@/lib/registrationOperations";
+import {
+  getOfficialTeamSize,
+  validateEsportsRosterWithEducation,
+  type PlayerFieldErrors,
+} from "@/utils/esportsRules";
+import {
+  PLAYER_INSTITUTION_TYPES,
+  computeGameRegistrationStats,
+  getEducationSuggestionsForType,
+  getGameClosedDisplayMessage,
+} from "@/lib/esportsRegistrationControls";
 import {
   isValidEmail,
   isValidInstitution,
@@ -30,14 +39,35 @@ import {
 import { archiveTicketToNas } from "@/lib/nasArchivalService";
 import { lookupPublicTicket, submitVisitorAndIssueTicket } from "@/lib/ticketClient";
 import { TicketPassModal } from "@/components/TicketPassModal";
-import type { PublicTicketLookupResult, TicketRecord } from "@/types/database";
+import type {
+  EsportsGameAvailability,
+  Game,
+  PlayerInstitutionType,
+  PublicTicketLookupResult,
+  Registration,
+  RegistrationControl,
+  TicketRecord,
+} from "@/types/database";
 
 type FormType = "visitor" | "esports" | null;
 
 interface PlayerRow {
   name: string;
   inGameId: string;
+  institutionType: PlayerInstitutionType | "";
+  institutionName: string;
+  courseOrClass: string;
+  currentYearOrClass: string;
 }
+
+const EMPTY_PLAYER_ROW = (): PlayerRow => ({
+  name: "",
+  inGameId: "",
+  institutionType: "",
+  institutionName: "",
+  courseOrClass: "",
+  currentYearOrClass: "",
+});
 
 interface GameOption {
   id: string;
@@ -76,45 +106,170 @@ export const RegisterPage: React.FC = () => {
     }
   }, [searchParams]);
 
-  // Active games from Supabase
+  // Active games & per-game registration availability from Supabase
   const [activeGames, setActiveGames] = useState<GameOption[]>([]);
+  const [availabilityByGameId, setAvailabilityByGameId] = useState<
+    Record<string, EsportsGameAvailability>
+  >({});
+  const [portalClosedNotice, setPortalClosedNotice] = useState<string | null>(null);
   const [selectedGameId, setSelectedGameId] = useState<string>("");
   const cachedPlayersRef = useRef<Record<number, PlayerRow>>({});
 
   useEffect(() => {
+    let active = true;
     async function loadGames() {
       try {
-        const { data, error } = await supabase
-          .from("games")
-          .select("id, title, team_size")
-          .eq("is_active", true)
-          .eq("is_published", true)
-          .order("sort_order", { ascending: true });
-        if (!error && data && data.length > 0) {
-          setActiveGames(data);
-          
-          // Check if URL specified a preferred game (e.g. ?type=esports&game=bgmi)
+        const [{ data: gamesData, error }, { data: portalCtrl }] = await Promise.all([
+          supabase
+            .from("games")
+            .select("*")
+            .eq("is_active", true)
+            .eq("is_published", true)
+            .order("sort_order", { ascending: true }),
+          supabase
+            .from("registration_controls")
+            .select("is_open, opens_at, closes_at, closed_message")
+            .eq("form_type", "esports")
+            .maybeSingle(),
+        ]);
+
+        if (!active) return;
+
+        if (portalCtrl && !portalCtrl.is_open) {
+          setPortalClosedNotice(
+            portalCtrl.closed_message ||
+              "Esports squad registrations are currently closed by the organizers."
+          );
+        } else {
+          setPortalClosedNotice(null);
+        }
+
+        if (!error && gamesData && gamesData.length > 0) {
+          const typedGames = gamesData as Game[];
+          setActiveGames(
+            typedGames.map((g) => ({
+              id: g.id,
+              title: g.title,
+              team_size: g.team_size ?? getOfficialTeamSize(g.title),
+            }))
+          );
+
+          // Select preferred game from URL (?type=esports&game=...) or first game immediately
           const urlGameParam = (searchParams.get("game") || "").toLowerCase().trim();
-          let targetGame = data[0];
+          let initialTarget = typedGames[0];
           if (urlGameParam) {
-            const matched = data.find((g) => g.title.toLowerCase().includes(urlGameParam) || g.id === urlGameParam);
-            if (matched) targetGame = matched;
+            const matched = typedGames.find(
+              (g) => g.title.toLowerCase().includes(urlGameParam) || g.id === urlGameParam
+            );
+            if (matched) initialTarget = matched;
+          } else {
+            const firstOpen = typedGames.find((g) => g.registration_open !== false);
+            if (firstOpen) initialTarget = firstOpen;
           }
-          
-          setSelectedGameId(targetGame.id);
-          const requiredCount = getOfficialTeamSize(targetGame.title, targetGame.team_size);
+
+          setSelectedGameId(initialTarget.id);
+          const requiredCount = getOfficialTeamSize(initialTarget.title, initialTarget.team_size);
           setEspPlayers(
             Array.from({ length: requiredCount }, (_, i) => ({
               name: cachedPlayersRef.current[i]?.name || "",
               inGameId: cachedPlayersRef.current[i]?.inGameId || "",
+              institutionType: cachedPlayersRef.current[i]?.institutionType || "",
+              institutionName: cachedPlayersRef.current[i]?.institutionName || "",
+              courseOrClass: cachedPlayersRef.current[i]?.courseOrClass || "",
+              currentYearOrClass: cachedPlayersRef.current[i]?.currentYearOrClass || "",
             }))
           );
+
+          // Non-blocking availability enrichment
+          const availMap: Record<string, EsportsGameAvailability> = {};
+          const hasGameControlCols = Object.prototype.hasOwnProperty.call(
+            typedGames[0],
+            "registration_open"
+          );
+
+          let loadedFromRpc = false;
+          if (hasGameControlCols) {
+            const { data: availData, error: availErr } = await supabase.rpc(
+              "get_esports_registration_availability"
+            );
+            if (!availErr && Array.isArray(availData) && availData.length > 0) {
+              for (const row of availData as EsportsGameAvailability[]) {
+                availMap[row.id] = row;
+              }
+              loadedFromRpc = true;
+            }
+          }
+
+          if (!loadedFromRpc) {
+            let regsList: Registration[] = [];
+            try {
+              const { data: regsData } = await supabase
+                .from("registrations")
+                .select("id, game_id, status, admin_notes");
+              regsList = (regsData || []) as Registration[];
+            } catch {
+              regsList = [];
+            }
+            const computed = computeGameRegistrationStats(
+              typedGames,
+              regsList,
+              (portalCtrl as RegistrationControl | null) || null
+            );
+            for (const st of computed) {
+              availMap[st.game.id] = {
+                id: st.game.id,
+                title: st.game.title,
+                team_size: st.game.team_size ?? null,
+                sort_order: st.game.sort_order,
+                is_active: st.game.is_active,
+                is_published: st.game.is_published,
+                registration_open: st.game.registration_open !== false,
+                max_teams: st.game.max_teams ?? null,
+                auto_close_at_capacity: st.game.auto_close_at_capacity !== false,
+                registration_override_open: st.game.registration_override_open === true,
+                registration_closed_message: st.game.registration_closed_message ?? null,
+                total_registered_teams: st.totalRegisteredTeams,
+                approved_teams: st.approvedTeams,
+                pending_teams: st.pendingTeams,
+                active_capacity_teams: st.activeCapacityTeams,
+                slots_remaining: st.slotsRemaining,
+                is_effectively_open: st.isEffectivelyOpen,
+                status_reason: st.statusReason,
+                updated_at: st.game.updated_at ?? null,
+                updated_by_email: st.game.updated_by_email ?? null,
+              };
+            }
+          }
+
+          if (!active) return;
+          setAvailabilityByGameId(availMap);
+
+          if (!urlGameParam && availMap[initialTarget.id]?.is_effectively_open === false) {
+            const openFallback = typedGames.find((g) => availMap[g.id]?.is_effectively_open !== false);
+            if (openFallback && openFallback.id !== initialTarget.id) {
+              setSelectedGameId(openFallback.id);
+              const nextSize = getOfficialTeamSize(openFallback.title, openFallback.team_size);
+              setEspPlayers(
+                Array.from({ length: nextSize }, (_, i) => ({
+                  name: cachedPlayersRef.current[i]?.name || "",
+                  inGameId: cachedPlayersRef.current[i]?.inGameId || "",
+                  institutionType: cachedPlayersRef.current[i]?.institutionType || "",
+                  institutionName: cachedPlayersRef.current[i]?.institutionName || "",
+                  courseOrClass: cachedPlayersRef.current[i]?.courseOrClass || "",
+                  currentYearOrClass: cachedPlayersRef.current[i]?.currentYearOrClass || "",
+                }))
+              );
+            }
+          }
         }
       } catch (err) {
         console.warn("Could not load games list:", err);
       }
     }
     loadGames();
+    return () => {
+      active = false;
+    };
   }, [searchParams]);
 
   // Three-Category Visitor Form State (No Registration Number / No Mobile)
@@ -133,11 +288,11 @@ export const RegisterPage: React.FC = () => {
   const [espPhone, setEspPhone] = useState("");
   const [espInstitution, setEspInstitution] = useState("");
   const [espPlayers, setEspPlayers] = useState<PlayerRow[]>([
-    { name: "", inGameId: "" },
-    { name: "", inGameId: "" },
-    { name: "", inGameId: "" },
-    { name: "", inGameId: "" },
-    { name: "", inGameId: "" },
+    EMPTY_PLAYER_ROW(),
+    EMPTY_PLAYER_ROW(),
+    EMPTY_PLAYER_ROW(),
+    EMPTY_PLAYER_ROW(),
+    EMPTY_PLAYER_ROW(),
   ]);
   const [espRulesAgreed, setEspRulesAgreed] = useState(false);
 
@@ -154,6 +309,7 @@ export const RegisterPage: React.FC = () => {
   const [copiedRef, setCopiedRef] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [playerFieldErrors, setPlayerFieldErrors] = useState<Record<number, PlayerFieldErrors>>({});
 
   const clearFieldError = (key: string) => {
     setFieldErrors((prev) => {
@@ -236,19 +392,28 @@ export const RegisterPage: React.FC = () => {
   // When game selection changes, resize players roster to match exact official team_size
   const handleGameChange = (gameId: string) => {
     setSelectedGameId(gameId);
+    clearFieldError("selectedGameId");
+    setPlayerFieldErrors({});
+    setSubmitError(null);
     const game = activeGames.find((g) => g.id === gameId);
     const targetSize = getOfficialTeamSize(game?.title, game?.team_size);
 
     setEspPlayers((prev) => {
       // 1. Sync current player rows to session cache
       prev.forEach((p, idx) => {
-        if (p.name || p.inGameId) {
+        if (
+          p.name ||
+          p.inGameId ||
+          p.institutionType ||
+          p.institutionName ||
+          p.courseOrClass ||
+          p.currentYearOrClass
+        ) {
           cachedPlayersRef.current[idx] = { ...p };
         }
       });
 
       // 2. Build exactly targetSize rows preserving valid positions (players 1..targetSize)
-      // and restoring from cache if user previously entered them during this session
       const reconciled: PlayerRow[] = Array.from({ length: targetSize }, (_, i) => {
         if (prev[i]) {
           return { ...prev[i] };
@@ -256,7 +421,7 @@ export const RegisterPage: React.FC = () => {
         if (cachedPlayersRef.current[i]) {
           return { ...cachedPlayersRef.current[i] };
         }
-        return { name: "", inGameId: "" };
+        return EMPTY_PLAYER_ROW();
       });
 
       return reconciled;
@@ -270,6 +435,13 @@ export const RegisterPage: React.FC = () => {
         cachedPlayersRef.current[idx] = { ...updated[idx] };
       }
       return updated;
+    });
+    setPlayerFieldErrors((prev) => {
+      const existing = prev[idx];
+      if (!existing || !existing[field]) return prev;
+      const updatedRow = { ...existing };
+      delete updatedRow[field];
+      return { ...prev, [idx]: updatedRow };
     });
   };
 
@@ -302,7 +474,7 @@ export const RegisterPage: React.FC = () => {
       body += `Institution: ${espInstitution}\n`;
       body += `Players:\n`;
       espPlayers.forEach((p, i) => {
-        body += `  Player ${i + 1}: ${p.name} (ID: ${p.inGameId})\n`;
+        body += `  Player ${i + 1}: ${p.name} (ID: ${p.inGameId}) · ${p.institutionType || "-"} · ${p.institutionName || "-"} · ${p.courseOrClass || "-"} · ${p.currentYearOrClass || "-"}\n`;
       });
     }
 
@@ -317,11 +489,23 @@ export const RegisterPage: React.FC = () => {
     }
   };
 
+  const selectedGameAvailability = selectedGameId ? availabilityByGameId[selectedGameId] : undefined;
+  const selectedGameClosedMsg = selectedGameAvailability
+    ? getGameClosedDisplayMessage(selectedGameAvailability, portalClosedNotice)
+    : portalClosedNotice;
+  const selectedGameClosed = Boolean(
+    selectedType === "esports" &&
+      ((selectedGameAvailability && !selectedGameAvailability.is_effectively_open) ||
+        portalClosedNotice)
+  );
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (honeypot) return; // bot detected
 
     const errors: Record<string, string> = {};
+    let nextPlayerErrors: Record<number, PlayerFieldErrors> = {};
+    let rosterErrorMsg: string | undefined;
 
     if (selectedType === "visitor") {
       const visValidationErrors = validateVisitorFormFields({
@@ -335,11 +519,14 @@ export const RegisterPage: React.FC = () => {
       });
       Object.assign(errors, visValidationErrors);
     } else if (selectedType === "esports") {
-      if (!isValidName(espTeamName, 100)) {
-        errors.espTeamName = "Please enter your team name (at least 2 characters).";
-      }
       if (!selectedGameId) {
         errors.selectedGameId = "Please select a game for esports registration.";
+      } else if (selectedGameClosed) {
+        errors.selectedGameId =
+          selectedGameClosedMsg || "Registrations for the selected game are currently closed.";
+      }
+      if (!isValidName(espTeamName, 100)) {
+        errors.espTeamName = "Please enter your team name (at least 2 characters).";
       }
       if (!isValidName(espRep, 120)) {
         errors.espRep = "Please enter the team representative name.";
@@ -353,6 +540,19 @@ export const RegisterPage: React.FC = () => {
       if (!isValidInstitution(espInstitution, 150)) {
         errors.espInstitution = "Please enter your college or institution name.";
       }
+      if (selectedGameId) {
+        const selectedGame = activeGames.find((g) => g.id === selectedGameId);
+        const gameTitle = selectedGame?.title || "Tournament Title";
+        const expectedCount = getOfficialTeamSize(selectedGame?.title, selectedGame?.team_size);
+        const rosterValidation = validateEsportsRosterWithEducation(
+          gameTitle,
+          espPlayers.slice(0, expectedCount)
+        );
+        if (!rosterValidation.isValid) {
+          nextPlayerErrors = rosterValidation.playerErrors;
+          rosterErrorMsg = rosterValidation.errorMessage;
+        }
+      }
       if (!espRulesAgreed) {
         errors.espRulesAgreed = "Please accept the tournament rules before submitting.";
       }
@@ -362,14 +562,16 @@ export const RegisterPage: React.FC = () => {
       errors.privacyAgreed = "Please agree to the privacy notice before submitting.";
     }
 
-    if (Object.keys(errors).length > 0) {
+    if (Object.keys(errors).length > 0 || Object.keys(nextPlayerErrors).length > 0 || rosterErrorMsg) {
       setFieldErrors(errors);
-      const firstMsg = Object.values(errors)[0];
+      setPlayerFieldErrors(nextPlayerErrors);
+      const firstMsg = errors.selectedGameId || Object.values(errors)[0] || rosterErrorMsg;
       setSubmitError(firstMsg || "Please complete all required fields before submitting.");
       return;
     }
 
     setFieldErrors({});
+    setPlayerFieldErrors({});
     setIsSubmitting(true);
     setSubmitError(null);
     setIssuedVisitorTicket(null);
@@ -410,7 +612,6 @@ export const RegisterPage: React.FC = () => {
         setIssuedVisitorTicket(submissionRes.ticket || null);
 
         // Generate PDF ticket (with secure token when available) and archive best-effort
-        let ticketPdfAttachments: { filename: string; contentType: string; base64Content: string }[] = [];
         try {
           const ticketRes = await generateTicketPdf({
             ticketRef,
@@ -422,14 +623,6 @@ export const RegisterPage: React.FC = () => {
             registrationType: "visitor",
             daysAttending: "Both",
           });
-
-          ticketPdfAttachments = [
-            {
-              filename: ticketRes.fileName,
-              contentType: "application/pdf",
-              base64Content: ticketRes.pdfBase64,
-            },
-          ];
 
           await archiveTicketToNas(ticketRes, {
             ticketRef,
@@ -445,58 +638,39 @@ export const RegisterPage: React.FC = () => {
           console.warn("NAS archival / PDF creation notice:", nasErr);
         }
 
-        // Best-effort email copy (ticket issuance does NOT depend on email delivery)
-        let emailNoticeText =
-          "Your official pass is active immediately above — download your PDF ticket or screenshot your QR pass now. Email delivery unavailable; please save or download your pass directly.";
-        try {
-          const emailRes = await sendRegistrationConfirmationEmail(
-            submissionRes.registrationId || ticketRef,
-            "visitor",
-            false,
-            {
-              recipientEmail: cleanEmail,
-              recipientName: cleanName,
-              registrationRef: ticketRef,
-              institution: cleanInstitution || undefined,
-              extraDetails: {
-                category: canonicalCategory,
-                student_class: cleanClass || undefined,
-                designation: cleanDesignation || undefined,
-                days: "Both",
-              },
-              attachments: ticketPdfAttachments,
-            }
-          );
-
-          if (emailRes.ok && !emailRes.simulated) {
-            emailNoticeText =
-              "Your official pass is active immediately above, and a copy of your PDF ticket has also been emailed to you.";
-          } else if (emailRes.unavailable) {
-            emailNoticeText =
-              "Your official pass is active immediately above — download your PDF ticket or screenshot your QR pass now. Email delivery unavailable; please save or download your pass directly.";
-          }
-        } catch {
-          // Email is optional; ticket pass is already generated and downloadable directly
-        }
-
-        setEmailNotice(emailNoticeText);
+        setEmailNotice(
+          "Your official visitor pass, QR code, and downloadable PDF ticket are ready above. Save or download your pass now to present at the venue gate on 20–21 November 2026."
+        );
         setSubmitSuccess(true);
       } else if (selectedType === "esports") {
         if (!selectedGameId) {
           throw new Error("Please select a game for esports registration.");
         }
+        if (selectedGameClosed) {
+          throw new Error(
+            selectedGameClosedMsg || "Registrations for the selected game are currently closed."
+          );
+        }
         const game = activeGames.find((g) => g.id === selectedGameId);
         const gameTitle = game?.title || "Tournament Title";
         const expectedCount = getOfficialTeamSize(game?.title, game?.team_size);
 
-        const validation = validateEsportsRoster(gameTitle, espPlayers.slice(0, expectedCount));
+        const validation = validateEsportsRosterWithEducation(
+          gameTitle,
+          espPlayers.slice(0, expectedCount)
+        );
         if (!validation.isValid) {
-          throw new Error(validation.errorMessage || `All ${expectedCount} players are required.`);
+          setPlayerFieldErrors(validation.playerErrors);
+          throw new Error(validation.errorMessage || `All ${expectedCount} players and their educational details are required.`);
         }
 
         const playersPayload = espPlayers.slice(0, expectedCount).map((p) => ({
           player_name: p.name.trim(),
           gamer_tag: p.inGameId.trim(),
+          institution_type: p.institutionType,
+          institution_name: p.institutionName.trim(),
+          course_or_class: p.courseOrClass.trim(),
+          current_year_or_class: p.currentYearOrClass.trim(),
         }));
 
         if (playersPayload.length !== expectedCount) {
@@ -862,7 +1036,7 @@ export const RegisterPage: React.FC = () => {
                       setVisitorQrPreviewUrl("");
                       setEmailNotice(null);
                     }}
-                    className="btn-secondary mt-2 cursor-pointer"
+                    className="mt-2 inline-flex items-center justify-center px-5 py-2.5 rounded-xl border-2 border-[#191936] bg-white hover:bg-[#F0F2FD] text-xs font-mono font-bold text-[#191936] shadow-[3px_3px_0px_#191936] transition-all cursor-pointer"
                   >
                     Submit another response
                   </button>
@@ -1196,94 +1370,166 @@ export const RegisterPage: React.FC = () => {
                   {/* 3. ESPORTS TEAM FORM FIELDS */}
                   {selectedType === "esports" && (
                     <div className="space-y-5">
+                      {selectedGameClosed && selectedGameClosedMsg && (
+                        <div
+                          role="alert"
+                          className="p-4 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-950 flex items-start gap-3 text-xs sm:text-sm"
+                        >
+                          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                          <div>
+                            <strong className="block font-bold uppercase tracking-tight text-rose-900 mb-0.5">
+                              {activeGames.find((g) => g.id === selectedGameId)?.title || "Game"} Registration Closed
+                            </strong>
+                            <span>{selectedGameClosedMsg}</span>
+                          </div>
+                        </div>
+                      )}
+
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                         <div>
-                          <label className="form-label">Team Name *</label>
+                          <label htmlFor="esp-team-name" className="form-label">Team Name *</label>
                           <input
+                            id="esp-team-name"
                             type="text"
                             required
                             value={espTeamName}
-                            onChange={(e) => setEspTeamName(e.target.value)}
+                            onChange={(e) => {
+                              setEspTeamName(e.target.value);
+                              clearFieldError("espTeamName");
+                            }}
                             placeholder="e.g. Supernova Strikers"
-                            className="form-input"
+                            className={`form-input ${fieldErrors.espTeamName ? "!border-red-500" : ""}`}
                           />
+                          {fieldErrors.espTeamName && (
+                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              {fieldErrors.espTeamName}
+                            </p>
+                          )}
                         </div>
 
                         <div>
-                          <label className="form-label">Game Title *</label>
+                          <label htmlFor="esp-game-select" className="form-label">Game Title *</label>
                           <select
+                            id="esp-game-select"
                             value={selectedGameId}
                             onChange={(e) => handleGameChange(e.target.value)}
-                            className="form-input"
+                            className={`form-input ${fieldErrors.selectedGameId ? "!border-red-500" : ""}`}
                           >
                             {activeGames.length > 0 ? (
-                              activeGames.map((game) => (
-                                <option key={game.id} value={game.id}>
-                                  {game.title} ({game.team_size} players)
-                                </option>
-                              ))
+                              activeGames.map((game) => {
+                                const avail = availabilityByGameId[game.id];
+                                const isClosed = avail ? !avail.is_effectively_open : false;
+                                return (
+                                  <option key={game.id} value={game.id}>
+                                    {game.title} ({getOfficialTeamSize(game.title, game.team_size)} players)
+                                    {isClosed ? " — [CLOSED]" : ""}
+                                  </option>
+                                );
+                              })
                             ) : (
                               <option value="">Loading official games...</option>
                             )}
                           </select>
+                          {fieldErrors.selectedGameId && (
+                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              {fieldErrors.selectedGameId}
+                            </p>
+                          )}
                         </div>
 
                         <div>
-                          <label className="form-label">Team Representative *</label>
+                          <label htmlFor="esp-rep-name" className="form-label">Team Representative *</label>
                           <input
+                            id="esp-rep-name"
                             type="text"
                             required
                             value={espRep}
-                            onChange={(e) => setEspRep(e.target.value)}
+                            onChange={(e) => {
+                              setEspRep(e.target.value);
+                              clearFieldError("espRep");
+                            }}
                             placeholder="Captain or Manager name"
-                            className="form-input"
+                            className={`form-input ${fieldErrors.espRep ? "!border-red-500" : ""}`}
                           />
+                          {fieldErrors.espRep && (
+                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              {fieldErrors.espRep}
+                            </p>
+                          )}
                         </div>
 
                         <div>
-                          <label className="form-label">Representative Email *</label>
+                          <label htmlFor="esp-rep-email" className="form-label">Representative Email *</label>
                           <input
+                            id="esp-rep-email"
                             type="email"
                             required
                             value={espEmail}
-                            onChange={(e) => setEspEmail(e.target.value)}
+                            onChange={(e) => {
+                              setEspEmail(e.target.value);
+                              clearFieldError("espEmail");
+                            }}
                             placeholder="rep@example.com"
-                            className="form-input"
+                            className={`form-input ${fieldErrors.espEmail ? "!border-red-500" : ""}`}
                           />
+                          {fieldErrors.espEmail && (
+                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              {fieldErrors.espEmail}
+                            </p>
+                          )}
                         </div>
 
                         <div>
-                          <label className="form-label">Representative Phone *</label>
+                          <label htmlFor="esp-rep-phone" className="form-label">Representative Phone *</label>
                           <input
+                            id="esp-rep-phone"
                             type="tel"
                             required
                             value={espPhone}
-                            onChange={(e) => setEspPhone(e.target.value)}
+                            onChange={(e) => {
+                              setEspPhone(e.target.value);
+                              clearFieldError("espPhone");
+                            }}
                             placeholder="+91 98765 43210"
-                            className="form-input"
+                            className={`form-input ${fieldErrors.espPhone ? "!border-red-500" : ""}`}
                           />
+                          {fieldErrors.espPhone && (
+                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              {fieldErrors.espPhone}
+                            </p>
+                          )}
                         </div>
 
                         <div>
-                          <label className="form-label">Institution / College *</label>
+                          <label htmlFor="esp-institution" className="form-label">Team Institution / College *</label>
                           <input
+                            id="esp-institution"
                             type="text"
                             required
+                            list="visitor-institutions-list"
                             value={espInstitution}
-                            onChange={(e) => setEspInstitution(e.target.value)}
-                            placeholder="College or institution name"
-                            className="form-input"
+                            onChange={(e) => {
+                              setEspInstitution(e.target.value);
+                              clearFieldError("espInstitution");
+                            }}
+                            placeholder="Primary college or institution name"
+                            className={`form-input ${fieldErrors.espInstitution ? "!border-red-500" : ""}`}
                           />
+                          {fieldErrors.espInstitution && (
+                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              {fieldErrors.espInstitution}
+                            </p>
+                          )}
                         </div>
                       </div>
 
-                      {/* Player Rows: Strictly Enforced Official Tournament Team Sizes */}
+                      {/* Player Rows: Official Team Sizes + Mandatory 4 Educational Fields Per Player */}
                       <div className="pt-4 border-t border-[#EAEAF2]">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                           <div>
                             <label className="form-label font-bold text-base mb-0">
-                              Team Players (
-                              {activeGames.find((g) => g.id === selectedGameId)?.title || "Official Title"} — exactly{" "}
+                              Team Players &amp; Educational Details (
+                              {activeGames.find((g) => g.id === selectedGameId)?.title || "Official Title"} —{" "}
                               {getOfficialTeamSize(
                                 activeGames.find((g) => g.id === selectedGameId)?.title,
                                 activeGames.find((g) => g.id === selectedGameId)?.team_size
@@ -1291,7 +1537,7 @@ export const RegisterPage: React.FC = () => {
                               players required)
                             </label>
                             <p className="text-xs text-[#191936]/60 mt-0.5">
-                              Substitutes are not permitted. All roster positions are mandatory.
+                              Substitutes are not permitted. Full name, In-Game ID, and all 4 educational fields are mandatory for every player.
                             </p>
                           </div>
                           <span className="self-start sm:self-auto font-mono text-xs font-bold px-2.5 py-1 rounded bg-blue-50 border border-blue-200 text-blue-700">
@@ -1304,48 +1550,188 @@ export const RegisterPage: React.FC = () => {
                           </span>
                         </div>
 
-                        <div className="space-y-3">
-                          {espPlayers.map((player, idx) => (
-                            <div
-                              key={idx}
-                              className="p-3.5 rounded-xl bg-[#F8F7FC] border border-[#EAEAF2] space-y-2.5 sm:space-y-0 sm:flex sm:items-center sm:gap-3"
-                            >
-                              <div className="flex items-center justify-between sm:justify-start gap-2 shrink-0 sm:w-28">
-                                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-white border border-[#EAEAF2] text-[#191936]">
-                                  Player #{idx + 1}
-                                </span>
-                                {idx === 0 && (
-                                  <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
-                                    Lead
+                        <div className="space-y-3.5">
+                          {espPlayers.map((player, idx) => {
+                            const rowErr = playerFieldErrors[idx] || {};
+                            const eduSug = getEducationSuggestionsForType(player.institutionType);
+                            return (
+                              <div
+                                key={idx}
+                                data-player-card={idx + 1}
+                                className="p-4 rounded-2xl bg-[#F8F7FC] border border-[#EAEAF2] space-y-3"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono text-xs font-bold px-2.5 py-0.5 rounded bg-white border border-[#EAEAF2] text-[#191936]">
+                                      Player #{idx + 1}
+                                    </span>
+                                    {idx === 0 && (
+                                      <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                                        Squad Lead
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] font-mono uppercase text-[#191936]/55">
+                                    All 6 Fields Required *
                                   </span>
-                                )}
-                              </div>
-                              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                <div>
-                                  <label className="sr-only">Player {idx + 1} Full Name</label>
-                                  <input
-                                    type="text"
-                                    required
-                                    value={player.name}
-                                    onChange={(e) => handlePlayerChange(idx, "name", e.target.value)}
-                                    placeholder={`Player ${idx + 1} Full Name *`}
-                                    className="form-input !h-10 text-sm w-full"
-                                  />
                                 </div>
-                                <div>
-                                  <label className="sr-only">Player {idx + 1} In-Game ID</label>
-                                  <input
-                                    type="text"
-                                    required
-                                    value={player.inGameId}
-                                    onChange={(e) => handlePlayerChange(idx, "inGameId", e.target.value)}
-                                    placeholder={`Player ${idx + 1} In-Game Tag/ID *`}
-                                    className="form-input !h-10 text-sm w-full font-mono"
-                                  />
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div>
+                                    <label htmlFor={`player-${idx}-name`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                      Player {idx + 1} Full Name *
+                                    </label>
+                                    <input
+                                      id={`player-${idx}-name`}
+                                      type="text"
+                                      required
+                                      value={player.name}
+                                      onChange={(e) => handlePlayerChange(idx, "name", e.target.value)}
+                                      placeholder={`Player ${idx + 1} Full Name`}
+                                      className={`form-input !h-10 text-sm w-full ${rowErr.name ? "!border-red-500" : ""}`}
+                                    />
+                                    {rowErr.name && (
+                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                        {rowErr.name}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <label htmlFor={`player-${idx}-ign`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                      Player {idx + 1} In-Game ID / Tag *
+                                    </label>
+                                    <input
+                                      id={`player-${idx}-ign`}
+                                      type="text"
+                                      required
+                                      value={player.inGameId}
+                                      onChange={(e) => handlePlayerChange(idx, "inGameId", e.target.value)}
+                                      placeholder={`Player ${idx + 1} In-Game Tag/ID`}
+                                      className={`form-input !h-10 text-sm w-full font-mono ${rowErr.inGameId ? "!border-red-500" : ""}`}
+                                    />
+                                    {rowErr.inGameId && (
+                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                        {rowErr.inGameId}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* 4 Mandatory Educational Details */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#EAEAF2]/80">
+                                  <div>
+                                    <label htmlFor={`player-${idx}-inst-type`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                      Institution Type *
+                                    </label>
+                                    <select
+                                      id={`player-${idx}-inst-type`}
+                                      required
+                                      value={player.institutionType}
+                                      onChange={(e) =>
+                                        handlePlayerChange(idx, "institutionType", e.target.value)
+                                      }
+                                      className={`form-input !h-10 text-sm w-full bg-white ${rowErr.institutionType ? "!border-red-500" : ""}`}
+                                    >
+                                      <option value="">Select School / College / Other...</option>
+                                      {PLAYER_INSTITUTION_TYPES.map((t) => (
+                                        <option key={t} value={t}>
+                                          {t}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    {rowErr.institutionType && (
+                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                        {rowErr.institutionType}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <label htmlFor={`player-${idx}-inst-name`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                      School / College / Institution Name *
+                                    </label>
+                                    <input
+                                      id={`player-${idx}-inst-name`}
+                                      type="text"
+                                      required
+                                      maxLength={150}
+                                      list="visitor-institutions-list"
+                                      value={player.institutionName}
+                                      onChange={(e) =>
+                                        handlePlayerChange(idx, "institutionName", e.target.value)
+                                      }
+                                      placeholder="Full school, college or institution name"
+                                      className={`form-input !h-10 text-sm w-full ${rowErr.institutionName ? "!border-red-500" : ""}`}
+                                    />
+                                    {rowErr.institutionName && (
+                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                        {rowErr.institutionName}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <label htmlFor={`player-${idx}-course`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                      {eduSug.courseLabel}
+                                    </label>
+                                    <input
+                                      id={`player-${idx}-course`}
+                                      type="text"
+                                      required
+                                      maxLength={100}
+                                      list={`sn3-player-course-${idx}`}
+                                      value={player.courseOrClass}
+                                      onChange={(e) =>
+                                        handlePlayerChange(idx, "courseOrClass", e.target.value)
+                                      }
+                                      placeholder={eduSug.coursePlaceholder}
+                                      className={`form-input !h-10 text-sm w-full ${rowErr.courseOrClass ? "!border-red-500" : ""}`}
+                                    />
+                                    <datalist id={`sn3-player-course-${idx}`}>
+                                      {eduSug.courseSuggestions.map((s) => (
+                                        <option key={s} value={s} />
+                                      ))}
+                                    </datalist>
+                                    {rowErr.courseOrClass && (
+                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                        {rowErr.courseOrClass}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <label htmlFor={`player-${idx}-year`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                      {eduSug.yearLabel}
+                                    </label>
+                                    <input
+                                      id={`player-${idx}-year`}
+                                      type="text"
+                                      required
+                                      maxLength={80}
+                                      list={`sn3-player-year-${idx}`}
+                                      value={player.currentYearOrClass}
+                                      onChange={(e) =>
+                                        handlePlayerChange(idx, "currentYearOrClass", e.target.value)
+                                      }
+                                      placeholder={eduSug.yearPlaceholder}
+                                      className={`form-input !h-10 text-sm w-full ${rowErr.currentYearOrClass ? "!border-red-500" : ""}`}
+                                    />
+                                    <datalist id={`sn3-player-year-${idx}`}>
+                                      {eduSug.yearSuggestions.map((s) => (
+                                        <option key={s} value={s} />
+                                      ))}
+                                    </datalist>
+                                    {rowErr.currentYearOrClass && (
+                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                        {rowErr.currentYearOrClass}
+                                      </p>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -1356,12 +1742,26 @@ export const RegisterPage: React.FC = () => {
                             type="checkbox"
                             required
                             checked={espRulesAgreed}
-                            onChange={(e) => setEspRulesAgreed(e.target.checked)}
+                            onChange={(e) => {
+                              setEspRulesAgreed(e.target.checked);
+                              clearFieldError("espRulesAgreed");
+                            }}
                             className="w-4 h-4 mt-0.5 rounded border-gray-300 text-[#4549D8]"
                           />
                           <span>{content.rulesCheckboxLabel}</span>
                         </label>
+                        {fieldErrors.espRulesAgreed && (
+                          <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            {fieldErrors.espRulesAgreed}
+                          </p>
+                        )}
                       </div>
+
+                      <datalist id="visitor-institutions-list">
+                        {SUGGESTED_INSTITUTIONS.map((inst) => (
+                          <option key={inst} value={inst} />
+                        ))}
+                      </datalist>
                     </div>
                   )}
 
@@ -1372,18 +1772,24 @@ export const RegisterPage: React.FC = () => {
                         type="checkbox"
                         required
                         checked={privacyAgreed}
-                        onChange={(e) => setPrivacyAgreed(e.target.checked)}
+                        onChange={(e) => {
+                          setPrivacyAgreed(e.target.checked);
+                          clearFieldError("privacyAgreed");
+                        }}
                         className="w-4 h-4 mt-0.5 rounded border-gray-300 text-[#4549D8]"
                       />
                       <span>{content.privacyCheckboxLabel}</span>
                     </label>
+                    {fieldErrors.privacyAgreed && (
+                      <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                        {fieldErrors.privacyAgreed}
+                      </p>
+                    )}
                   </div>
-
-
 
                   {/* Error Message */}
                   {submitError && (
-                    <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+                    <div role="alert" className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
                       {submitError}
                     </div>
                   )}
@@ -1392,18 +1798,24 @@ export const RegisterPage: React.FC = () => {
                   <div className="pt-4 flex flex-col sm:flex-row items-center gap-4">
                     <button
                       type="submit"
-                      disabled={isSubmitting}
-                      className="btn-primary w-full sm:w-auto"
+                      disabled={isSubmitting || selectedGameClosed}
+                      className="btn-primary w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isSubmitting ? "Submitting..." : "Submit Registration"}
+                      {selectedGameClosed
+                        ? "Registrations Closed for Selected Game"
+                        : isSubmitting
+                        ? "Submitting..."
+                        : "Submit Registration"}
                     </button>
 
-                    <a
-                      href={generateMailtoUrl()}
-                      className="text-xs font-semibold text-[#4549D8] hover:underline"
-                    >
-                      Or submit via email client →
-                    </a>
+                    {!selectedGameClosed && (
+                      <a
+                        href={generateMailtoUrl()}
+                        className="text-xs font-semibold text-[#4549D8] hover:underline"
+                      >
+                        Or submit via email client →
+                      </a>
+                    )}
                   </div>
                 </form>
               )}

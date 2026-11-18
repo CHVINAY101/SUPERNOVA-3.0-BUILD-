@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { computeGameRegistrationStats } from "@/lib/esportsRegistrationControls";
+import { formatLastUpdatedIst } from "@/lib/gatePortal";
 import type { Game, Registration, RegistrationControl } from "@/types/database";
 import {
   AlertTriangle,
   CheckCircle2,
+  Clock,
   Gamepad2,
   Lock,
   RefreshCw,
@@ -465,18 +467,43 @@ export function EsportsRegistrationControlPanel({ onUpdated }: EsportsRegistrati
                     </label>
 
                     <div>
-                      <label className="font-semibold text-slate-700 block mb-1">
-                        Closed Notice Message (Optional)
-                      </label>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <label className="font-semibold text-slate-700 block">
+                          Closed Notice Message (Optional)
+                        </label>
+                        {draft.closedMessage && canManage && (
+                          <button
+                            type="button"
+                            onClick={() => updateDraft(game.id, { closedMessage: "" })}
+                            className="text-[11px] font-semibold text-slate-500 hover:text-slate-900 cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
                       <input
                         type="text"
                         disabled={!canManage}
                         maxLength={200}
-                        placeholder={`e.g. ${game.title} slots are full.`}
+                        placeholder={`e.g. ${game.title} registrations are currently closed.`}
                         value={draft.closedMessage}
                         onChange={(e) => updateDraft(game.id, { closedMessage: e.target.value })}
                         className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs disabled:opacity-60"
                       />
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-500 flex items-start gap-1.5">
+                      <Clock size={12} className="shrink-0 mt-0.5 text-slate-400" />
+                      <div className="min-w-0">
+                        <span className="block truncate">
+                          Last updated: <strong className="text-slate-700">{formatLastUpdatedIst(game.updated_at)}</strong>
+                        </span>
+                        {game.updated_by_email && (
+                          <span className="block font-mono text-[10px] text-slate-400 truncate">
+                            By: {game.updated_by_email}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

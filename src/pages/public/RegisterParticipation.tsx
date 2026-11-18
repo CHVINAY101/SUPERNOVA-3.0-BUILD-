@@ -377,7 +377,7 @@ export default function RegisterParticipation() {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20, marginBottom: 20 }}>
             <div>
-              <label className="label">Mobile Number (WhatsApp updates) *</label>
+              <label className="label">Mobile Number *</label>
               <input
                 className="input"
                 required

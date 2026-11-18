@@ -63,10 +63,6 @@ export type PermissionKey =
   | "event_info:publish"
   | "social_links:view"
   | "social_links:edit"
-  | "email_centre:view"
-  | "email_centre:compose"
-  | "email_centre:send"
-  | "email_centre:resend"
   | "reports:view"
   | "reports:export"
   | "user_management:view"
@@ -196,17 +192,6 @@ export const PERMISSION_GROUPS: PermissionGroupDefinition[] = [
     ],
   },
   {
-    id: "email_centre",
-    label: "Email Centre",
-    description: "CRM emails, templates, and pass resends",
-    permissions: [
-      { key: "email_centre:view", label: "View" },
-      { key: "email_centre:compose", label: "Compose" },
-      { key: "email_centre:send", label: "Send" },
-      { key: "email_centre:resend", label: "Resend" },
-    ],
-  },
-  {
     id: "reports",
     label: "Reports & Data Exports",
     description: "Attendance analytics and registration CSV/Excel exports",
@@ -269,7 +254,7 @@ export const ROLE_METADATA: Record<
   },
   crm_admin: {
     label: "CRM Admin",
-    description: "Operational management across registrations, entry, tournaments, content, and email.",
+    description: "Operational management across registrations, entry, tournaments, and event content.",
     badgeTone: "bg-blue-50 text-blue-700 border-blue-200",
   },
   registration_staff: {
@@ -388,10 +373,6 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "event_info:publish",
     "social_links:view",
     "social_links:edit",
-    "email_centre:view",
-    "email_centre:compose",
-    "email_centre:send",
-    "email_centre:resend",
     "reports:view",
     "reports:export",
     "system_settings:view",
@@ -575,7 +556,6 @@ export const ROUTE_PERMISSIONS: { prefix: string; exact?: boolean; anyOf: Permis
     label: "Esports Teams",
   },
   { prefix: "/admin/visitor-registrations", anyOf: ["visitor:view"], label: "Visitors" },
-  { prefix: "/admin/crm-emails", anyOf: ["email_centre:view"], label: "Email Centre" },
   { prefix: "/admin/data-exports", anyOf: ["reports:view", "reports:export"], label: "Registration Data Exports" },
   { prefix: "/admin/announcements", anyOf: ["announcements:view"], label: "Announcements" },
   { prefix: "/admin/gallery", anyOf: ["gallery:view"], label: "Gallery" },
@@ -652,7 +632,7 @@ export function getDefaultAdminRoute(
 ): string {
   const canonical = normalizeRole(role);
   if (canonical === "registration_staff" || canonical === "esports_entry_staff") {
-    return "/admin/checkin";
+    return "/gate";
   }
   if (canonical === "match_conductor") {
     return "/admin/conductor-matches";

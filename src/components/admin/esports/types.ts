@@ -21,7 +21,8 @@ export type EsportsSectionId =
   | "live"
   | "standings"
   | "disputes"
-  | "history";
+  | "history"
+  | "reset";
 
 export interface ConductorOption {
   user_id: string;

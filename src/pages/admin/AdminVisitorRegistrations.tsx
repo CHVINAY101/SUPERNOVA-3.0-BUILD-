@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import {
-  sendRegistrationConfirmationEmail,
   archiveRegistrationRecord,
   restoreRegistrationRecord,
   isRegistrationArchived,
@@ -12,9 +11,8 @@ import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge"
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
 import { useAuth } from "@/lib/auth";
 import { AdminStatusBadge } from "@/components/admin/AdminBadge";
-import { downloadTicketPdfFile, generateTicketPdf } from "@/lib/ticketPdfService";
+import { downloadTicketPdfFile } from "@/lib/ticketPdfService";
 import { getLocalNasArchives } from "@/lib/nasArchivalService";
-import { EMAIL_DELIVERY_ENABLED } from "@/lib/emailPayload";
 import {
   buildVisitorDisplaySubtitle,
   normalizeVisitorCategory,
@@ -30,8 +28,7 @@ import {
   RotateCcw,
   Trash2,
   CheckCircle2,
-  AlertTriangle,
-  Mail
+  AlertTriangle
 } from "lucide-react";
 
 export interface VisitorRegistrationRecord {
@@ -54,7 +51,6 @@ export interface VisitorRegistrationRecord {
   competition_notes?: string | null;
   days_attending?: string | null;
   status: string;
-  email_status?: string | null;
   check_in_status?: string | null;
   checked_in_at?: string | null;
   checked_in_by_email?: string | null;
@@ -76,7 +72,6 @@ export default function AdminVisitorRegistrations() {
   const canEdit = hasPermission("visitor:edit");
   const canDelete = hasPermission("visitor:delete");
   const canExport = hasPermission("visitor:export");
-  const canResend = hasPermission("email_centre:resend");
 
   const [registrations, setRegistrations] = useState<VisitorRegistrationRecord[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -152,69 +147,10 @@ export default function AdminVisitorRegistrations() {
         setInspectedRecord({ ...inspectedRecord, status: newStatus });
       }
 
-      let nextEmailStatus: string | undefined;
       if (newStatus === "confirmed") {
-        const item = registrations?.find((r) => r.id === id) || inspectedRecord;
-        let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
-        if (item) {
-          try {
-            const ticketPdf = await generateTicketPdf({
-              ticketRef: item.ticket_ref || ref,
-              recipientName: item.full_name,
-              category: buildVisitorDisplaySubtitle({
-                visitorCategory: item.visitor_category,
-                studentClass: item.student_class,
-                designation: item.designation,
-              }),
-              email: item.email,
-              institution: item.institution || undefined,
-              registrationType: "visitor",
-              daysAttending: item.days_attending || undefined,
-            });
-            pdfAttachments = [
-              {
-                filename: ticketPdf.fileName,
-                base64Content: ticketPdf.pdfBase64,
-                contentType: "application/pdf",
-              },
-            ];
-          } catch {
-            // proceed cleanly if PDF generation throws
-          }
-        }
-
-        const emailRes = await sendRegistrationConfirmationEmail(id, "visitor", false, {
-          recipientEmail: item?.email,
-          recipientName: item?.full_name,
-          registrationRef: ref,
-          institution: item?.institution || undefined,
-          attachments: pdfAttachments,
-          extraDetails: {
-            category: item?.visitor_category,
-            days: item?.days_attending,
-          },
-        });
-        const isUnavailable = Boolean(emailRes.unavailable || !EMAIL_DELIVERY_ENABLED);
-        nextEmailStatus = emailRes.ok
-          ? "sent"
-          : isUnavailable
-          ? item?.email_status === "sent"
-            ? "sent"
-            : "unavailable"
-          : "failed";
-        setRegistrations((prev) =>
-          prev ? prev.map((r) => (r.id === id ? { ...r, email_status: nextEmailStatus } : r)) : null
-        );
-        if (inspectedRecord && inspectedRecord.id === id) {
-          setInspectedRecord((prev) => (prev ? { ...prev, email_status: nextEmailStatus } : null));
-        }
         setStatusMsg({
-          type: emailRes.ok || isUnavailable ? "success" : "error",
-          text: emailRes.ok
-            ? `Reference ${ref} confirmed and confirmation email sent.`
-            : isUnavailable
-            ? `Reference ${ref} confirmed. Ticket pass active (Email delivery unavailable).`
-            : `Reference ${ref} confirmed, but email notice failed: ${emailRes.error}`,
+          type: "success",
+          text: `Reference ${ref} confirmed. Ticket pass is active for download and gate verification.`,
         });
       } else {
         setStatusMsg({
@@ -384,94 +320,6 @@ export default function AdminVisitorRegistrations() {
       badge: "bg-blue-50 text-blue-700 border-blue-200",
       isWalkIn: false,
     };
-  };
-
-  const handleResendEmail = async (record: VisitorRegistrationRecord) => {
-    if (!canResend || savingId === record.id) return;
-    setSavingId(record.id);
-    setStatusMsg(null);
-    const ticketRef = record.ticket_ref || record.registration_ref;
-    try {
-      let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
-      try {
-        const ticketPdf = await generateTicketPdf({
-          ticketRef,
-          recipientName: record.full_name,
-          category: buildVisitorDisplaySubtitle({
-            visitorCategory: record.visitor_category,
-            studentClass: record.student_class,
-            designation: record.designation,
-          }),
-          email: record.email,
-          institution: record.institution || undefined,
-          registrationType: "visitor",
-          daysAttending: record.days_attending || undefined,
-        });
-        pdfAttachments = [
-          {
-            filename: ticketPdf.fileName,
-            base64Content: ticketPdf.pdfBase64,
-            contentType: "application/pdf",
-          },
-        ];
-      } catch {
-        // continue
-      }
-
-      const res = await sendRegistrationConfirmationEmail(record.id, "visitor", true, {
-        recipientEmail: record.email,
-        recipientName: record.full_name,
-        registrationRef: record.registration_ref,
-        institution: record.institution || undefined,
-        attachments: pdfAttachments,
-        extraDetails: {
-          category: record.visitor_category,
-          days: record.days_attending,
-        },
-      });
-      if (res.ok && !res.simulated) {
-        setStatusMsg({
-          type: "success",
-          text: `Visitor ticket pass (${ticketRef}) resent successfully to ${record.email}.`,
-        });
-        setRegistrations((prev) =>
-          prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: "sent" } : item)) : null
-        );
-        if (inspectedRecord && inspectedRecord.id === record.id) {
-          setInspectedRecord({ ...inspectedRecord, email_status: "sent" });
-        }
-      } else if (res.unavailable || !EMAIL_DELIVERY_ENABLED) {
-        const nextStatus = record.email_status === "sent" ? "sent" : "unavailable";
-        setRegistrations((prev) =>
-          prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: nextStatus } : item)) : null
-        );
-        if (inspectedRecord && inspectedRecord.id === record.id) {
-          setInspectedRecord({ ...inspectedRecord, email_status: nextStatus });
-        }
-        setStatusMsg({
-          type: "error",
-          text: "Email delivery unavailable — download the PDF ticket directly.",
-        });
-      } else {
-        const nextStatus = record.email_status === "sent" ? "sent" : "failed";
-        setRegistrations((prev) =>
-          prev ? prev.map((item) => (item.id === record.id ? { ...item, email_status: nextStatus } : item)) : null
-        );
-        if (inspectedRecord && inspectedRecord.id === record.id) {
-          setInspectedRecord({ ...inspectedRecord, email_status: nextStatus });
-        }
-        const statusSuffix = res.httpStatusCode ? ` [HTTP ${res.httpStatusCode}${res.errorType ? ` · ${res.errorType}` : ""}]` : "";
-        throw new Error(`${res.error || "Email delivery failed"}${statusSuffix}`);
-      }
-      setTimeout(() => setStatusMsg(null), 5000);
-    } catch (err: any) {
-      setStatusMsg({
-        type: "error",
-        text: `Failed to resend confirmation email: ${err.message || "Unknown error"}`,
-      });
-    } finally {
-      setSavingId(null);
-    }
   };
 
   // Filtered registrations
@@ -954,28 +802,6 @@ export default function AdminVisitorRegistrations() {
                               </span>
                             </div>
                           )}
-                          {row.status === "confirmed" && (
-                            <div>
-                              <span
-                                className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded ${
-                                  row.email_status === "sent"
-                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                    : row.email_status === "failed"
-                                    ? "bg-rose-50 text-rose-700 border border-rose-200"
-                                    : "bg-amber-50 text-amber-700 border border-amber-200"
-                                }`}
-                              >
-                                <Mail size={10} />
-                                <span>
-                                  {row.email_status === "sent"
-                                    ? "sent"
-                                    : row.email_status === "failed"
-                                    ? "failed"
-                                    : "Email delivery unavailable"}
-                                </span>
-                              </span>
-                            </div>
-                          )}
                         </div>
                       </td>
 
@@ -998,18 +824,6 @@ export default function AdminVisitorRegistrations() {
                             <Eye size={12} />
                             <span>View</span>
                           </button>
-
-                          {row.status === "confirmed" && canResend && (
-                            <button
-                              type="button"
-                              onClick={() => handleResendEmail(row)}
-                              disabled={savingId === row.id}
-                              className="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer"
-                              title="Resend visitor pass email"
-                            >
-                              <Mail size={13} />
-                            </button>
-                          )}
 
                           {canDelete && (
                             isArchived ? (
@@ -1142,11 +956,11 @@ export default function AdminVisitorRegistrations() {
                 </div>
               )}
 
-              {/* Ticketing & Email Dispatch Card */}
+              {/* Ticketing & Archive Card */}
               <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-2 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-xs font-bold uppercase tracking-wider text-blue-900">
-                    Visitor Ticket & Email Pass
+                    Visitor Ticket Pass
                   </span>
                   <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-white text-blue-700 border border-blue-200">
                     {getRegistrationSource(inspectedRecord).label}
@@ -1166,18 +980,6 @@ export default function AdminVisitorRegistrations() {
                     </strong>
                   </div>
                 )}
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-600">Email Status:</span>
-                  <span className="font-semibold text-slate-800">
-                    {inspectedRecord.email_status === "sent"
-                      ? "Sent"
-                      : inspectedRecord.email_status === "failed"
-                      ? "Failed"
-                      : inspectedRecord.status === "confirmed"
-                      ? "Email delivery unavailable"
-                      : "Pending confirmation"}
-                  </span>
-                </div>
                 {/* NAS Archive Status */}
                 {(() => {
                   const nasRecord = getLocalNasArchives().find((a) => a.ticketRef === inspectedRecord.registration_ref);
@@ -1204,7 +1006,7 @@ export default function AdminVisitorRegistrations() {
                   );
                 })()}
 
-                <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="pt-2 grid grid-cols-1 gap-2">
                   <button
                     type="button"
                     onClick={() => {
@@ -1227,18 +1029,6 @@ export default function AdminVisitorRegistrations() {
                     <Download size={13} />
                     <span>Download Ticket</span>
                   </button>
-
-                  {canResend && (
-                    <button
-                      type="button"
-                      disabled={savingId === inspectedRecord.id}
-                      onClick={() => handleResendEmail(inspectedRecord)}
-                      className="py-2 px-3 rounded-lg bg-white hover:bg-blue-50 border border-blue-300 text-blue-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Mail size={13} />
-                      <span>Resend Email</span>
-                    </button>
-                  )}
                 </div>
               </div>
 

@@ -13,6 +13,7 @@ import {
   isLastActiveSuperAdmin,
   normalizeRole,
   resolveEffectivePermissions,
+  ROUTE_PERMISSIONS,
   validateCrmUserMutation,
   validateNewCrmUserInput,
 } from "./rbac.ts";
@@ -33,7 +34,7 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
   it("Scenario 21: Entry Staff (registration_staff) can access Event Entry & Verification only; blocked from applications & tournament config", () => {
     const perms = resolveEffectivePermissions("registration_staff", "active");
     assert.equal(isDedicatedOperationsRole("registration_staff"), true);
-    assert.equal(getDefaultAdminRoute("registration_staff", perms), "/admin/checkin");
+    assert.equal(getDefaultAdminRoute("registration_staff", perms), "/gate");
     assert.equal(canAccessAdminRoute("/admin/checkin", perms, "active"), true);
     assert.equal(hasCrmPermission(perms, "entry:scan_visitor", "active"), true);
     assert.equal(hasCrmPermission(perms, "entry:checkin_visitor", "active"), true);
@@ -51,7 +52,7 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
   it("Scenario 22: Esports Entry Staff can verify/check in esports players only; cannot approve teams or modify tournament selection", () => {
     const perms = resolveEffectivePermissions("esports_entry_staff", "active");
     assert.equal(isDedicatedOperationsRole("esports_entry_staff"), true);
-    assert.equal(getDefaultAdminRoute("esports_entry_staff", perms), "/admin/checkin");
+    assert.equal(getDefaultAdminRoute("esports_entry_staff", perms), "/gate");
     assert.equal(canAccessAdminRoute("/admin/checkin", perms, "active"), true);
     assert.equal(hasCrmPermission(perms, "entry:scan_esports", "active"), true);
     assert.equal(hasCrmPermission(perms, "entry:checkin_esports", "active"), true);
@@ -519,5 +520,20 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
       selectedPermissions: staffSubset,
     });
     assert.equal(validInvite.ok, true);
+  });
+
+  it("External Email Centre permissions and routes are completely removed", () => {
+    const emailPerms = ALL_PERMISSIONS.filter((p) => String(p).startsWith("email_centre:"));
+    assert.equal(emailPerms.length, 0);
+    assert.equal(
+      ROUTE_PERMISSIONS.some((r) => r.prefix === "/admin/crm-emails"),
+      false
+    );
+
+    const adminPerms = resolveEffectivePermissions("crm_admin", "active", [
+      { permission_key: "email_centre:send" as any, allowed: true },
+    ]);
+    assert.equal(adminPerms.has("email_centre:send" as any), false);
+    assert.equal(canAccessAdminRoute("/admin/crm-emails", adminPerms, "active"), false);
   });
 });

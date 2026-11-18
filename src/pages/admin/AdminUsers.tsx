@@ -136,7 +136,7 @@ export default function AdminUsers() {
   const canAssignPermissions = isSuperAdmin || hasPermission("user_management:assign_permissions");
   const canEdit = canEditDetails || canAssignPermissions;
   const canDeactivate = isSuperAdmin || hasPermission("user_management:deactivate");
-  const canDelete = isSuperAdmin || hasPermission(["user_management:delete", "user_management:deactivate"]);
+  const canDelete = isSuperAdmin || hasPermission("user_management:delete");
 
   const invokeManageCrmUsers = useCallback(
     async (

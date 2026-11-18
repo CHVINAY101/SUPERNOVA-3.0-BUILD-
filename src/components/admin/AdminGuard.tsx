@@ -2,6 +2,7 @@ import { Navigate, useLocation, Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { isMisconfigured } from "@/lib/supabase";
 import { getDefaultAdminRoute, getRoleLabel, isDedicatedOperationsRole } from "@/lib/rbac";
+import { isGateOnlyRole } from "@/lib/gatePortal";
 import { ShieldAlert, ServerOff, LogOut, Lock, ArrowRight } from "lucide-react";
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
@@ -99,6 +100,11 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
+  }
+
+  // Block gate-only roles from accessing ANY CRM Admin route (/admin or /admin/*)
+  if (isGateOnlyRole(role)) {
+    return <Navigate to="/gate" replace />;
   }
 
   const normalizedPath = location.pathname.replace(/\/+$/, "") || "/admin";

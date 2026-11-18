@@ -141,6 +141,8 @@ export interface Game {
   is_active: boolean;
   is_published: boolean;
   sort_order: number;
+  updated_by?: string | null;
+  updated_by_email?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -166,6 +168,8 @@ export interface EsportsGameAvailability {
   auto_close_at_capacity: boolean;
   registration_override_open: boolean;
   registration_closed_message: string | null;
+  updated_at?: string | null;
+  updated_by_email?: string | null;
   total_registered_teams: number;
   approved_teams: number;
   pending_teams: number;
@@ -173,6 +177,45 @@ export interface EsportsGameAvailability {
   slots_remaining: number | null;
   is_effectively_open: boolean;
   status_reason: EsportsRegistrationStatusReason;
+}
+
+export type EsportsResetScope = "results_only" | "selected_game" | "full_reset";
+
+export interface EsportsResetPreview {
+  ok: boolean;
+  scope: EsportsResetScope;
+  game_id: string | null;
+  game_title: string | null;
+  affected: {
+    matches: number;
+    results: number;
+    disputes: number;
+    history: number;
+    match_attendance: number;
+    tournaments: number;
+    team_selections: number;
+  };
+  preserved: {
+    esports_registrations: number;
+    players: number;
+    visitor_registrations: number;
+    tickets: number;
+    gate_checkins: number;
+    games: number;
+    audit_logs: number;
+  };
+}
+
+export interface EsportsResetBackupSummary {
+  id: string;
+  scope: EsportsResetScope;
+  game_id: string | null;
+  game_title: string | null;
+  reason: string;
+  triggered_by: string | null;
+  triggered_by_email: string | null;
+  counts_summary: EsportsResetPreview | Record<string, unknown>;
+  created_at: string;
 }
 
 export interface Sponsor {
@@ -568,30 +611,9 @@ export interface UserRole {
   created_at: string;
 }
 
-export type CrmEmailStatus = "pending" | "sending" | "sent" | "failed";
-
-export interface CrmEmail {
-  id: string;
-  recipient: string;
-  cc?: string | null;
-  bcc?: string | null;
-  subject: string;
-  body_html: string;
-  sender_email: string;
-  sent_by?: string | null;
-  sent_by_email?: string | null;
-  status: CrmEmailStatus;
-  gmail_message_id?: string | null;
-  gmail_thread_id?: string | null;
-  error_message?: string | null;
-  idempotency_key?: string | null;
-  created_at: string;
-  sent_at?: string | null;
-}
-
 export type TicketCategory = "visitor" | "esports";
 export type TicketRecordStatus = "active" | "cancelled" | "revoked";
-export type GateVerdict = "VALID" | "ALREADY USED" | "INVALID";
+export type GateVerdict = "VALID" | "ALREADY USED" | "INVALID" | "CANCELLED / REVOKED";
 
 export interface TicketRecord {
   id: string;

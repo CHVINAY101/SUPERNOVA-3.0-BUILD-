@@ -23,7 +23,6 @@ import {
   ListPlus,
   ClipboardCheck,
   Download,
-  Mail,
   Menu,
   X,
   Search,
@@ -55,7 +54,6 @@ const navSections: NavSection[] = [
   {
     title: "Registrations & CRM",
     items: [
-      { to: "/admin/crm-emails", label: "Email Centre", icon: Mail },
       { to: "/admin/esports-registrations", label: "Esports Teams", icon: Gamepad2 },
       { to: "/admin/visitor-registrations", label: "Visitors", icon: UserCheck },
       { to: "/admin/data-exports", label: "Registration Data Exports", icon: Download },

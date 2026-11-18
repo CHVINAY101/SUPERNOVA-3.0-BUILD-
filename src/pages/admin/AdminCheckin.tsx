@@ -31,6 +31,7 @@ import {
   verifyGateTicket,
 } from "@/lib/ticketClient";
 import { buildTicketQrContent, downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import { getGateVerdictPresentation } from "@/lib/gatePortal";
 import {
   FACULTY_DESIGNATION_OPTIONS,
   VISITOR_CATEGORY_CARDS,
@@ -127,7 +128,8 @@ interface WalkInIssuedPass {
   >;
 }
 
-export default function AdminCheckin() {
+export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "admin" | "gate" } = {}) {
+  const isGatePortal = portalMode === "gate";
   const { user, hasPermission } = useAuth();
 
   const canScanVisitor = hasPermission(["entry:scan_visitor", "visitor:view"]);
@@ -1007,14 +1009,14 @@ export default function AdminCheckin() {
             Ticket Verification / Gate Entry
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 m-0">
-            Scan QR codes or search ticket numbers to verify authenticity (VALID / ALREADY USED / INVALID), prevent duplicate entry, and issue wristbands.
+            Scan QR codes or search ticket numbers to verify authenticity (VALID / ALREADY USED / INVALID / CANCELLED / REVOKED), prevent duplicate entry, and issue wristbands.
           </p>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
           <RealtimeConnectionBadge state={connectionState} lastEventTime={lastEventTime} />
 
-          {canManageWristbands && (
+          {!isGatePortal && canManageWristbands && (
             <button
               type="button"
               onClick={() => setConfigOpen(true)}
@@ -1256,29 +1258,17 @@ export default function AdminCheckin() {
       </form>
 
       {/* Authoritative DB Ticket Verification Verdict Card */}
-      {gateVerification && (
-        <div
-          className={`rounded-2xl border-2 p-5 shadow-xs space-y-3 ${
-            gateVerification.verdict === "VALID"
-              ? "bg-emerald-50 border-emerald-400"
-              : gateVerification.verdict === "ALREADY USED"
-              ? "bg-amber-50 border-amber-400"
-              : "bg-rose-50 border-rose-400"
-          }`}
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <span
-                className={`px-3 py-1 rounded-lg font-mono text-xs font-black uppercase tracking-wider ${
-                  gateVerification.verdict === "VALID"
-                    ? "bg-emerald-700 text-white"
-                    : gateVerification.verdict === "ALREADY USED"
-                    ? "bg-amber-700 text-white"
-                    : "bg-rose-700 text-white"
-                }`}
-              >
-                {gateVerification.verdict}
-              </span>
+      {gateVerification && (() => {
+        const verdictMeta = getGateVerdictPresentation(gateVerification.verdict);
+        return (
+          <div className={`rounded-2xl border-2 p-5 shadow-xs space-y-3 ${verdictMeta.containerClass}`}>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <span
+                  className={`px-3 py-1 rounded-lg font-mono text-xs font-black uppercase tracking-wider ${verdictMeta.badgeClass}`}
+                >
+                  {verdictMeta.label}
+                </span>
               {gateVerification.ticket && (
                 <>
                   <span className="font-mono text-base font-black text-slate-900">
@@ -1339,7 +1329,8 @@ export default function AdminCheckin() {
             </p>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {statusMessage && (
         <div

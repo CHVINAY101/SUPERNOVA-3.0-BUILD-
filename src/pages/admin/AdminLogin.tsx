@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Navigate, useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth, type AuthErrorCategory } from "@/lib/auth";
+import { getDefaultAdminRoute } from "@/lib/rbac";
 import {
   supabase,
   checkSupabaseClientConfig,
@@ -248,7 +249,7 @@ function logAuthDiagnosticToConsole(diag: AuthDiagnostic) {
 }
 
 export default function AdminLogin() {
-  const { session, isAdmin, accountStatus, loading: authLoading, signIn, refreshRole } = useAuth();
+  const { session, isAdmin, role, permissions, accountStatus, loading: authLoading, signIn, refreshRole } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -297,9 +298,11 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
 
-  // Already active authenticated admin -> redirect to workspace
+  // Already active authenticated admin -> redirect to role-appropriate workspace
   if (!authLoading && session && isAdmin && accountStatus === "active" && !isInviteFlow) {
-    const dest = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "/admin";
+    const requestedFrom = (location.state as { from?: { pathname: string } })?.from?.pathname;
+    const defaultDest = getDefaultAdminRoute(role, permissions);
+    const dest = defaultDest === "/gate" ? "/gate" : (requestedFrom ?? defaultDest);
     return <Navigate to={dest} replace />;
   }
 
@@ -861,13 +864,21 @@ export default function AdminLogin() {
             </form>
           )}
 
-          <div className="mt-6 pt-5 border-t-2 border-[#191936]/10 flex flex-col gap-1.5">
+          <div className="mt-6 pt-5 border-t-2 border-[#191936]/10 flex flex-col gap-2">
             <span className="font-heading text-[11px] font-bold text-[#191936]/70 uppercase tracking-wider">
               Invitation-Only Role-Based Access Control
             </span>
-            <p className="font-body text-xs text-[#191936]/60 leading-relaxed">
+            <p className="font-body text-xs text-[#191936]/60 leading-relaxed m-0">
               Public self-signup is disabled. CRM access is provisioned strictly via Super Admin invitations with assigned operational permissions.
             </p>
+            <div className="pt-1">
+              <Link
+                to="/gate/login"
+                className="text-xs font-heading font-bold text-[#4549D8] hover:underline no-underline"
+              >
+                Gate Entry &amp; Ticket Verification Staff? Sign in at Gate Portal →
+              </Link>
+            </div>
           </div>
         </div>
       </main>

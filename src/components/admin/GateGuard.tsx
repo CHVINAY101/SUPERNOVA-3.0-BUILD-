@@ -1,0 +1,144 @@
+import { Navigate, useLocation, Link } from "react-router-dom";
+import { useAuth } from "@/lib/auth";
+import { isMisconfigured } from "@/lib/supabase";
+import { canAccessGatePortal } from "@/lib/gatePortal";
+import { getRoleLabel } from "@/lib/rbac";
+import { ShieldAlert, ServerOff, LogOut, Lock } from "lucide-react";
+
+export function GateGuard({ children }: { children: React.ReactNode }) {
+  const { session, loading, role, accountStatus, signOut, refreshRole } = useAuth();
+  const location = useLocation();
+
+  if (isMisconfigured) {
+    return (
+      <div className="flex justify-center items-center min-h-screen bg-[#FAF9F4] p-6">
+        <div className="max-w-lg w-full text-center p-8 bg-white rounded-3xl border-2 border-[#191936] shadow-[6px_6px_0px_#191936]">
+          <div className="inline-flex p-4 rounded-full bg-rose-50 text-rose-600 mb-4">
+            <ServerOff size={36} />
+          </div>
+          <h2 className="text-xl font-display font-black text-slate-900 mb-2">
+            Supabase Configuration Missing
+          </h2>
+          <p className="text-sm text-slate-600 leading-relaxed mb-6">
+            The Gate Verification Portal cannot connect because{" "}
+            <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">VITE_SUPABASE_URL</code> or{" "}
+            <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">VITE_SUPABASE_PUBLISHABLE_KEY</code> is missing or invalid.
+          </p>
+          <Link
+            to="/"
+            className="inline-flex items-center justify-center w-full py-2.5 px-4 rounded-xl bg-slate-900 text-white text-xs font-bold uppercase tracking-wider no-underline"
+          >
+            Return to Public Portal
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center min-h-screen bg-[#F8FAFC]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs font-semibold text-slate-500 font-mono">
+            Verifying gate staff credentials...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Navigate to="/gate/login" state={{ from: location }} replace />;
+  }
+
+  if (accountStatus === "invited") {
+    return <Navigate to="/gate/login?type=invite" state={{ from: location }} replace />;
+  }
+
+  if (accountStatus !== "active") {
+    const isBlockedStatus = accountStatus === "deactivated" || accountStatus === "revoked";
+    return (
+      <div className="flex justify-center items-center min-h-screen bg-[#F8FAFC] p-6">
+        <div className="max-w-md w-full text-center p-8 bg-white rounded-3xl border border-slate-200 shadow-lg">
+          <div className="inline-flex p-3.5 rounded-2xl bg-rose-50 text-rose-600 mb-4 border border-rose-200">
+            <ShieldAlert size={34} />
+          </div>
+          <h2 className="text-xl font-display font-black text-slate-900 mb-2">
+            {isBlockedStatus ? "Gate Access Suspended" : "Gate Access Inactive"}
+          </h2>
+          <p className="text-sm text-slate-600 leading-relaxed mb-4">
+            Signed in as <strong className="text-slate-900">{session.user.email}</strong>.
+          </p>
+          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3.5 mb-6 text-rose-800 text-xs font-medium leading-relaxed">
+            {isBlockedStatus
+              ? `Your gate staff account status is "${accountStatus}". Please contact a Super Admin to restore access.`
+              : "Your account does not currently hold an active Gate Operations role."}
+          </div>
+          <div className="flex flex-col gap-2.5">
+            <button
+              type="button"
+              onClick={() => refreshRole()}
+              className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors cursor-pointer"
+            >
+              Recheck Access Status
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await signOut();
+              }}
+              className="w-full py-2.5 px-4 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs transition-colors cursor-pointer inline-flex items-center justify-center gap-2"
+            >
+              <LogOut size={14} /> Sign Out
+            </button>
+            <Link to="/" className="text-xs text-slate-500 hover:text-slate-800 mt-1 no-underline">
+              Return to Festival Website
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!canAccessGatePortal(role, accountStatus)) {
+    return (
+      <div className="flex justify-center items-center min-h-screen bg-[#F8FAFC] p-6">
+        <div className="max-w-md w-full text-center p-8 bg-white rounded-3xl border border-slate-200 shadow-lg">
+          <div className="inline-flex p-3.5 rounded-2xl bg-amber-50 text-amber-600 mb-4 border border-amber-200">
+            <Lock size={32} />
+          </div>
+          <div className="mb-3">
+            <span className="inline-block px-2.5 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-mono text-[11px] font-bold uppercase">
+              Role: {getRoleLabel(role)}
+            </span>
+          </div>
+          <h2 className="text-xl font-display font-black text-slate-900 mb-2">
+            Gate Portal Access Restricted
+          </h2>
+          <p className="text-sm text-slate-600 leading-relaxed mb-6">
+            The Gate Verification Portal is restricted to{" "}
+            <strong>Gate Entry Staff</strong>, <strong>Esports Entry Staff</strong>,{" "}
+            <strong>CRM Admin</strong>, and <strong>Super Admin</strong> accounts.
+          </p>
+          <div className="flex flex-col gap-2.5">
+            <button
+              type="button"
+              onClick={async () => {
+                await signOut();
+              }}
+              className="w-full py-2.5 px-4 rounded-xl bg-[#0B1120] hover:bg-slate-800 text-white font-semibold text-xs transition-colors cursor-pointer inline-flex items-center justify-center gap-2"
+            >
+              <LogOut size={14} /> Sign Out &amp; Switch Account
+            </button>
+            <Link to="/" className="text-xs text-slate-500 hover:text-slate-800 mt-1 no-underline">
+              Return to Festival Homepage
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}

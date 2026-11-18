@@ -39,6 +39,7 @@ import {
   StandingsSection,
   TournamentHistorySection,
 } from "@/components/admin/esports/StandingsDisputesHistory";
+import { TournamentResetRecoverySection } from "@/components/admin/esports/TournamentResetRecoverySection";
 import {
   AlertTriangle,
   Award,
@@ -51,6 +52,7 @@ import {
   LayoutGrid,
   Play,
   RefreshCw,
+  RotateCcw,
   Settings2,
   ShieldAlert,
   SlidersHorizontal,
@@ -58,7 +60,7 @@ import {
   X,
 } from "lucide-react";
 
-const SECTIONS: { id: EsportsSectionId; label: string; icon: typeof LayoutGrid }[] = [
+const SECTIONS: { id: EsportsSectionId; label: string; icon: typeof LayoutGrid; superAdminOnly?: boolean }[] = [
   { id: "overview", label: "Overview", icon: LayoutGrid },
   { id: "setup", label: "Tournament Setup", icon: Settings2 },
   { id: "teams", label: "Teams", icon: Users },
@@ -69,10 +71,11 @@ const SECTIONS: { id: EsportsSectionId; label: string; icon: typeof LayoutGrid }
   { id: "standings", label: "Standings", icon: Award },
   { id: "disputes", label: "Disputes & Rewind", icon: ShieldAlert },
   { id: "history", label: "History", icon: History },
+  { id: "reset", label: "Reset & Recovery", icon: RotateCcw, superAdminOnly: true },
 ];
 
 export default function AdminEsportsControl() {
-  const { user, permissions, hasPermission } = useAuth();
+  const { user, permissions, hasPermission, isSuperAdmin } = useAuth();
 
   const canCreateMatch = hasPermission(["tournament:build_bracket", "esports:create", "esports:edit"]);
   const canEditEsports = hasPermission(["esports:edit", "tournament:build_bracket"]);
@@ -397,10 +400,10 @@ export default function AdminEsportsControl() {
         </div>
       </div>
 
-      {/* 10-Section Workspace Tab Bar */}
+      {/* Workspace Tab Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-1.5 overflow-x-auto">
         <nav className="flex items-center gap-1 min-w-max" aria-label="Esports Control Sections">
-          {SECTIONS.map((sec) => {
+          {SECTIONS.filter((sec) => !sec.superAdminOnly || isSuperAdmin).map((sec) => {
             const Icon = sec.icon;
             const active = activeSection === sec.id;
             let badge: number | null = null;
@@ -584,6 +587,15 @@ export default function AdminEsportsControl() {
           )}
 
           {activeSection === "history" && <TournamentHistorySection data={sharedData} />}
+
+          {activeSection === "reset" && isSuperAdmin && (
+            <TournamentResetRecoverySection
+              selectedGame={selectedGame}
+              games={games}
+              onResetComplete={(msg) => fetchData(msg)}
+              onError={(msg) => setStatusMsg({ type: "error", text: msg })}
+            />
+          )}
         </>
       )}
 

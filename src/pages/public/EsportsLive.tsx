@@ -6,6 +6,7 @@ import { RealtimeConnectionBadge } from "@/lib/realtime/RealtimeConnectionBadge"
 import {
   calculateCumulativeBattleRoyaleStandings,
   calculateGroupStandings,
+  computePreEventLiveBoardState,
 } from "@/lib/tournamentEngine";
 import { formatIstDateTime, isMatchScheduled } from "@/lib/scheduling";
 import {
@@ -169,6 +170,16 @@ export default function EsportsLive() {
       .filter((x) => Boolean(x.champion));
   }, [tournaments, selectedGameId, gameMap, teamMap]);
 
+  const preEventState = useMemo(
+    () =>
+      computePreEventLiveBoardState({
+        tournaments,
+        matches,
+        selectedGameId,
+      }),
+    [tournaments, matches, selectedGameId]
+  );
+
   // Game-specific standings when a single game tab is selected
   const singleGameStandings = useMemo(() => {
     if (!selectedGame) return null;
@@ -296,60 +307,64 @@ export default function EsportsLive() {
           </div>
         )}
 
-        {/* Tournament Champions Banner */}
-        {championEntries.length > 0 && (
-          <section className="space-y-3">
-            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-amber-400 m-0 flex items-center gap-2">
-              <Crown size={15} />
-              <span>Official Tournament Champions</span>
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {championEntries.map(({ tournament, game, champion }) => (
-                <div
-                  key={tournament.id}
-                  className="p-5 rounded-2xl bg-amber-500/10 border border-amber-400/30 flex items-center gap-4"
-                >
-                  <div className="w-11 h-11 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-300 shrink-0">
-                    <Trophy size={22} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-[11px] font-mono font-bold uppercase text-amber-300">
-                      {game?.title || tournament.name}
-                    </div>
-                    <div className="text-lg font-display font-black text-white truncate">
-                      {champion?.team_name}
-                    </div>
-                    {champion?.institution && (
-                      <div className="text-xs text-slate-300 truncate">{champion.institution}</div>
-                    )}
-                  </div>
-                </div>
-              ))}
+        {preEventState.showPreEventEmptyState ? (
+          <section className="rounded-3xl border border-dashed border-white/15 bg-white/[0.03] px-6 py-16 text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-sky-500/15 border border-sky-400/30 text-sky-300 flex items-center justify-center mx-auto">
+              <Clock size={24} />
             </div>
+            <h2 className="text-lg sm:text-2xl font-display font-bold text-white m-0">
+              {selectedGame ? `${selectedGame.title} — Pre-Event Stand-By` : "Esports Arena Stand-By"}
+            </h2>
+            <p className="text-sm text-slate-300 max-w-xl mx-auto m-0 leading-relaxed">
+              {preEventState.emptyStateMessage}
+            </p>
           </section>
-        )}
+        ) : (
+          <>
+            {/* Tournament Champions Banner */}
+            {championEntries.length > 0 && (
+              <section className="space-y-3">
+                <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-amber-400 m-0 flex items-center gap-2">
+                  <Crown size={15} />
+                  <span>Official Tournament Champions</span>
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {championEntries.map(({ tournament, game, champion }) => (
+                    <div
+                      key={tournament.id}
+                      className="p-5 rounded-2xl bg-amber-500/10 border border-amber-400/30 flex items-center gap-4"
+                    >
+                      <div className="w-11 h-11 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-300 shrink-0">
+                        <Trophy size={22} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-mono font-bold uppercase text-amber-300">
+                          {game?.title || tournament.name}
+                        </div>
+                        <div className="text-lg font-display font-black text-white truncate">
+                          {champion?.team_name}
+                        </div>
+                        {champion?.institution && (
+                          <div className="text-xs text-slate-300 truncate">{champion.institution}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
-        {/* 1. Live Matches */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base sm:text-lg font-display font-bold text-white m-0 flex items-center gap-2">
-              {liveMatches.length > 0 && (
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse inline-block" />
-              )}
-              <span>Live Now in the Arena ({liveMatches.length})</span>
-            </h2>
-          </div>
+            {/* 1. Live Matches */}
+            {liveMatches.length > 0 && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-base sm:text-lg font-display font-bold text-white m-0 flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse inline-block" />
+                    <span>Live Now in the Arena ({liveMatches.length})</span>
+                  </h2>
+                </div>
 
-          {liveMatches.length === 0 ? (
-            <div className="p-8 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] text-center space-y-1">
-              <Clock size={26} className="mx-auto text-slate-500 mb-2" />
-              <p className="text-sm font-semibold text-slate-200 m-0">No Matches Currently Live</p>
-              <p className="text-xs text-slate-400 m-0">
-                Scheduled IST fixtures and current tournament standings are updated below in real time.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4">
+                <div className="grid grid-cols-1 gap-4">
               {liveMatches.map((m) => {
                 const game = gameMap.get(m.game_id || "");
                 const isBr =
@@ -411,12 +426,12 @@ export default function EsportsLive() {
                   </div>
                 );
               })}
-            </div>
-          )}
-        </section>
+                </div>
+              </section>
+            )}
 
-        {/* 2. Game-Specific Bracket or Standings Board when Game Tab Selected */}
-        {selectedGame && singleGameStandings && (
+            {/* 2. Game-Specific Bracket or Standings Board when Game Started & Tab Selected */}
+            {selectedGame && singleGameStandings && preEventState.showStandingsOrBracket && (
           <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-base sm:text-lg font-display font-bold text-white m-0 flex items-center gap-2">
@@ -542,104 +557,104 @@ export default function EsportsLive() {
           </section>
         )}
 
-        {/* 3. Upcoming Scheduled Matches */}
-        <section className="space-y-4">
-          <h2 className="text-base sm:text-lg font-display font-bold text-sky-400 m-0 flex items-center gap-2">
-            <CalendarClock size={17} />
-            <span>Upcoming Match Schedule (IST)</span>
-          </h2>
+            {/* 3. Upcoming Scheduled Matches */}
+            {upcomingMatches.length > 0 && (
+              <section className="space-y-4">
+                <h2 className="text-base sm:text-lg font-display font-bold text-sky-400 m-0 flex items-center gap-2">
+                  <CalendarClock size={17} />
+                  <span>Upcoming Match Schedule (IST)</span>
+                </h2>
 
-          {upcomingMatches.length === 0 ? (
-            <p className="text-xs text-slate-400 m-0">No upcoming published matches scheduled yet.</p>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {upcomingMatches.map((m) => {
-                const game = gameMap.get(m.game_id || "");
-                const teamA = teamMap.get(m.team_a_id || "");
-                const teamB = teamMap.get(m.team_b_id || "");
-                const isBr =
-                  m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {upcomingMatches.map((m) => {
+                    const game = gameMap.get(m.game_id || "");
+                    const teamA = teamMap.get(m.team_a_id || "");
+                    const teamB = teamMap.get(m.team_b_id || "");
+                    const isBr =
+                      m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
 
-                return (
-                  <div key={m.id} className="p-4 rounded-2xl border border-white/10 bg-white/[0.03] space-y-3">
-                    <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-sky-300">
-                      <span className="truncate">
-                        {game?.title} · {m.match_code || m.round}
-                      </span>
-                      <span className="text-slate-400 shrink-0">{m.station || "Arena"}</span>
-                    </div>
+                    return (
+                      <div key={m.id} className="p-4 rounded-2xl border border-white/10 bg-white/[0.03] space-y-3">
+                        <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-sky-300">
+                          <span className="truncate">
+                            {game?.title} · {m.match_code || m.round}
+                          </span>
+                          <span className="text-slate-400 shrink-0">{m.station || "Arena"}</span>
+                        </div>
 
-                    {isBr ? (
-                      <div>
-                        <div className="text-sm font-bold text-white">{m.round}</div>
-                        <div className="text-xs text-slate-400 mt-0.5">
-                          Multi-Squad Battle Royale Lobby ({Array.isArray(m.br_results) ? m.br_results.length : 0} squads)
+                        {isBr ? (
+                          <div>
+                            <div className="text-sm font-bold text-white">{m.round}</div>
+                            <div className="text-xs text-slate-400 mt-0.5">
+                              Multi-Squad Battle Royale Lobby ({Array.isArray(m.br_results) ? m.br_results.length : 0} squads)
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-sm font-bold text-white truncate">{teamA?.team_name || "TBD"}</div>
+                              <div className="text-[11px] text-slate-400 truncate">{teamA?.institution}</div>
+                            </div>
+                            <span className="text-xs font-mono text-slate-500 shrink-0">VS</span>
+                            <div className="min-w-0 text-right">
+                              <div className="text-sm font-bold text-white truncate">{teamB?.team_name || "TBD"}</div>
+                              <div className="text-[11px] text-slate-400 truncate">{teamB?.institution}</div>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="pt-2 border-t border-white/10 text-[11px] font-mono text-slate-300 tabular-nums">
+                          {isMatchScheduled(m) ? formatIstDateTime(m.scheduled_start) : "Schedule pending admin confirmation"}
                         </div>
                       </div>
-                    ) : (
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="text-sm font-bold text-white truncate">{teamA?.team_name || "TBD"}</div>
-                          <div className="text-[11px] text-slate-400 truncate">{teamA?.institution}</div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* 4. Recent Completed Results */}
+            {completedMatches.length > 0 && (
+              <section className="space-y-4">
+                <h2 className="text-base sm:text-lg font-display font-bold text-emerald-400 m-0 flex items-center gap-2">
+                  <Trophy size={17} />
+                  <span>Recent Official Results</span>
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {completedMatches.map((m) => {
+                    const game = gameMap.get(m.game_id || "");
+                    const teamA = teamMap.get(m.team_a_id || "");
+                    const teamB = teamMap.get(m.team_b_id || "");
+                    const winner = teamMap.get(m.winner_id || "");
+                    const isBr =
+                      m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
+
+                    return (
+                      <div key={m.id} className="p-4 rounded-2xl border border-white/10 bg-white/[0.02] space-y-2">
+                        <div className="flex items-center justify-between text-[11px] font-mono text-emerald-400">
+                          <span>
+                            {game?.title} · {m.match_code || m.round}
+                          </span>
+                          <span className="tabular-nums">
+                            {isBr ? "BR FINAL" : `FINAL ${m.score_a} - ${m.score_b}`}
+                          </span>
                         </div>
-                        <span className="text-xs font-mono text-slate-500 shrink-0">VS</span>
-                        <div className="min-w-0 text-right">
-                          <div className="text-sm font-bold text-white truncate">{teamB?.team_name || "TBD"}</div>
-                          <div className="text-[11px] text-slate-400 truncate">{teamB?.institution}</div>
+                        <div className="text-sm font-bold text-white">
+                          {isBr ? m.round : `${teamA?.team_name || "TBD"} vs ${teamB?.team_name || "TBD"}`}
                         </div>
+                        {winner && (
+                          <div className="text-xs text-emerald-300 font-semibold flex items-center gap-1.5">
+                            <Trophy size={13} />
+                            <span>{isBr ? `Round Top: ${winner.team_name}` : `Winner: ${winner.team_name}`}</span>
+                          </div>
+                        )}
                       </div>
-                    )}
-
-                    <div className="pt-2 border-t border-white/10 text-[11px] font-mono text-slate-300 tabular-nums">
-                      {isMatchScheduled(m) ? formatIstDateTime(m.scheduled_start) : "Schedule pending admin confirmation"}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        {/* 4. Recent Completed Results */}
-        {completedMatches.length > 0 && (
-          <section className="space-y-4">
-            <h2 className="text-base sm:text-lg font-display font-bold text-emerald-400 m-0 flex items-center gap-2">
-              <Trophy size={17} />
-              <span>Recent Official Results</span>
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {completedMatches.map((m) => {
-                const game = gameMap.get(m.game_id || "");
-                const teamA = teamMap.get(m.team_a_id || "");
-                const teamB = teamMap.get(m.team_b_id || "");
-                const winner = teamMap.get(m.winner_id || "");
-                const isBr =
-                  m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
-
-                return (
-                  <div key={m.id} className="p-4 rounded-2xl border border-white/10 bg-white/[0.02] space-y-2">
-                    <div className="flex items-center justify-between text-[11px] font-mono text-emerald-400">
-                      <span>
-                        {game?.title} · {m.match_code || m.round}
-                      </span>
-                      <span className="tabular-nums">
-                        {isBr ? "BR FINAL" : `FINAL ${m.score_a} - ${m.score_b}`}
-                      </span>
-                    </div>
-                    <div className="text-sm font-bold text-white">
-                      {isBr ? m.round : `${teamA?.team_name || "TBD"} vs ${teamB?.team_name || "TBD"}`}
-                    </div>
-                    {winner && (
-                      <div className="text-xs text-emerald-300 font-semibold flex items-center gap-1.5">
-                        <Trophy size={13} />
-                        <span>{isBr ? `Round Top: ${winner.team_name}` : `Winner: ${winner.team_name}`}</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+          </>
         )}
       </div>
     </div>

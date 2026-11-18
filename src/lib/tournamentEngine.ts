@@ -1680,3 +1680,69 @@ export function normalizeScoringModeLabel(mode?: TournamentScoringMode | string 
       return "Custom Rules";
   }
 }
+
+export interface PreEventLiveBoardState {
+  showPreEventEmptyState: boolean;
+  showStandingsOrBracket: boolean;
+  hasStartedTournament: boolean;
+  hasActiveOrCompletedMatches: boolean;
+  hasPublishedUpcoming: boolean;
+  hasChampion: boolean;
+  emptyStateMessage: string;
+}
+
+export const PRE_EVENT_LIVE_EMPTY_MESSAGE =
+  "Tournament has not started. Live scores, match results and standings will be available once the tournament begins.";
+
+export function computePreEventLiveBoardState(params: {
+  tournaments: Array<Pick<Tournament, "game_id" | "status" | "has_started" | "champion_team_id">>;
+  matches: Array<Pick<Match, "game_id" | "status" | "match_format" | "is_published">>;
+  selectedGameId: string;
+}): PreEventLiveBoardState {
+  const relevantTournaments =
+    params.selectedGameId === "all"
+      ? params.tournaments
+      : params.tournaments.filter((t) => t.game_id === params.selectedGameId);
+
+  const relevantMatches = (
+    params.selectedGameId === "all"
+      ? params.matches
+      : params.matches.filter((m) => m.game_id === params.selectedGameId)
+  ).filter((m) => m.match_format !== "BYE");
+
+  const hasStartedTournament = relevantTournaments.some(
+    (t) => t.has_started === true || t.status === "in_progress" || t.status === "completed"
+  );
+
+  const hasChampion = relevantTournaments.some((t) => Boolean(t.champion_team_id));
+
+  const hasActiveOrCompletedMatches = relevantMatches.some((m) =>
+    ["live", "result_submitted", "completed", "disputed"].includes(m.status)
+  );
+
+  const hasPublishedUpcoming = relevantMatches.some(
+    (m) =>
+      m.is_published !== false &&
+      ["upcoming", "scheduled", "check_in", "ready"].includes(m.status)
+  );
+
+  const showStandingsOrBracket =
+    hasStartedTournament || hasActiveOrCompletedMatches || hasChampion;
+
+  const showPreEventEmptyState =
+    !hasStartedTournament &&
+    !hasActiveOrCompletedMatches &&
+    !hasChampion &&
+    !hasPublishedUpcoming;
+
+  return {
+    showPreEventEmptyState,
+    showStandingsOrBracket,
+    hasStartedTournament,
+    hasActiveOrCompletedMatches,
+    hasPublishedUpcoming,
+    hasChampion,
+    emptyStateMessage: PRE_EVENT_LIVE_EMPTY_MESSAGE,
+  };
+}
+

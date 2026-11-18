@@ -8,7 +8,6 @@ import {
   restoreRegistrationRecord,
   isRegistrationArchived,
   markRegistrationArchivedLocal,
-  sendRegistrationConfirmationEmail,
 } from "@/lib/registrationOperations";
 import { useAuth } from "@/lib/auth";
 import { AdminArchiveConfirmModal } from "@/components/admin/AdminArchiveConfirmModal";
@@ -26,7 +25,6 @@ import {
   PLAYER_INSTITUTION_TYPES,
 } from "@/lib/esportsRegistrationControls";
 import { EsportsRegistrationControlPanel } from "@/components/admin/esports/EsportsRegistrationControlPanel";
-import { EMAIL_DELIVERY_ENABLED } from "@/lib/emailPayload";
 import type { Registration, RegistrationStatus, TeamStatusHistoryEntry, TicketRecord, TournamentSelectionStatus } from "@/types/database";
 import {
   Search,
@@ -66,7 +64,6 @@ export interface EsportsRegistrationItem {
   selection_status?: TournamentSelectionStatus;
   selection_reason?: string | null;
   seed_number?: number | null;
-  email_status?: string | null;
   admin_notes?: string | null;
   submitted_at: string;
   archived_at?: string | null;
@@ -120,7 +117,6 @@ export default function AdminEsportsRegistrations() {
   const canReject = hasPermission("esports:reject");
   const canSelectTeams = hasPermission("tournament:select_teams");
   const canExport = hasPermission("esports:export");
-  const canResend = hasPermission("email_centre:resend");
 
   const canManageGameControls = hasPermission([
     "tournament:manage_games",
@@ -317,7 +313,6 @@ export default function AdminEsportsRegistrations() {
       await recordStatusHistory(item.id, "registration_status", item.status, newStatus, reason);
 
       let ticketNotice = "";
-      let nextEmailStatus: string | undefined;
       if (newStatus === "confirmed") {
         const issuedRes = await issueTicketForRegistration("esports", item.id);
         const issuedTicket = issuedRes.ok ? issuedRes.ticket : null;
@@ -325,7 +320,6 @@ export default function AdminEsportsRegistrations() {
           setSelectedTicket(issuedTicket);
         }
         const teamTicketRef = issuedTicket?.ticket_ref || item.registration_ref;
-        let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
 
         try {
           const teamDoc = await generateTicketPdf({
@@ -340,13 +334,6 @@ export default function AdminEsportsRegistrations() {
             teamName: item.team_name,
             projectTitle: item.gameTitle,
           });
-          pdfAttachments = [
-            {
-              filename: teamDoc.fileName,
-              base64Content: teamDoc.pdfBase64,
-              contentType: "application/pdf",
-            },
-          ];
 
           await archiveTicketToNas(
             teamDoc,
@@ -408,33 +395,6 @@ export default function AdminEsportsRegistrations() {
         }
 
         ticketNotice = ` · Official team ticket issued (${teamTicketRef})`;
-
-        // Best-effort email copy; ticket issuance never depends on email delivery
-        try {
-          const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", false, {
-            recipientEmail: item.email,
-            recipientName: item.captain_name,
-            registrationRef: item.registration_ref,
-            institution: item.institution || undefined,
-            attachments: pdfAttachments,
-          });
-          const emailOk = Boolean(emailRes.ok && !emailRes.simulated);
-          const isUnavailable = Boolean(emailRes.unavailable || !EMAIL_DELIVERY_ENABLED);
-          nextEmailStatus = emailOk
-            ? "sent"
-            : isUnavailable
-            ? item.email_status === "sent"
-              ? "sent"
-              : "unavailable"
-            : "failed";
-          if (emailOk) {
-            ticketNotice += " & emailed to captain.";
-          } else if (isUnavailable) {
-            ticketNotice += " (Email delivery unavailable)";
-          }
-        } catch {
-          nextEmailStatus = EMAIL_DELIVERY_ENABLED ? "failed" : "unavailable";
-        }
       }
 
       setRegistrations((prev) =>
@@ -444,7 +404,6 @@ export default function AdminEsportsRegistrations() {
                 ...r,
                 status: newStatus,
                 ...(shouldResetSelection ? { selection_status: "not_selected" } : {}),
-                ...(nextEmailStatus ? { email_status: nextEmailStatus } : {}),
               }
             : r
         )
@@ -456,7 +415,6 @@ export default function AdminEsportsRegistrations() {
           ...(shouldResetSelection
             ? { selection_status: "not_selected", effectiveSelectionStatus: "not_selected" }
             : {}),
-          ...(nextEmailStatus ? { email_status: nextEmailStatus } : {}),
         });
       }
       setStatusMessage({
@@ -548,88 +506,6 @@ export default function AdminEsportsRegistrations() {
     setRegistrations((prev) => prev.map((r) => (r.id === item.id ? { ...r, seed_number: seedVal } : r)));
     if (selectedReg && selectedReg.id === item.id) {
       setSelectedReg({ ...selectedReg, seed_number: seedVal });
-    }
-  };
-
-  const handleResendEmail = async (item: ProcessedEsportsRegistration) => {
-    if (!canResend || updatingId === item.id) return;
-    setUpdatingId(item.id);
-    setStatusMessage(null);
-    const ticketRef = (item as any).captain_ticket_ref || item.registration_ref;
-    try {
-      let pdfAttachments: { filename: string; base64Content: string; contentType: string }[] | undefined;
-      try {
-        const teamDoc = await generateTicketPdf({
-          ticketRef,
-          recipientName: item.captain_name,
-          category: "Esports Squad",
-          email: item.email,
-          phone: item.phone,
-          institution: item.institution || undefined,
-          registrationType: "esports_team",
-          teamName: item.team_name,
-          projectTitle: item.gameTitle,
-        });
-        pdfAttachments = [
-          {
-            filename: teamDoc.fileName,
-            base64Content: teamDoc.pdfBase64,
-            contentType: "application/pdf",
-          },
-        ];
-      } catch {
-        // continue
-      }
-
-      const emailRes = await sendRegistrationConfirmationEmail(item.id, "esports", true, {
-        recipientEmail: item.email,
-        recipientName: item.captain_name,
-        registrationRef: item.registration_ref,
-        institution: item.institution || undefined,
-        attachments: pdfAttachments,
-      });
-      if (emailRes.ok && !emailRes.simulated) {
-        setStatusMessage({
-          type: "success",
-          text: `Squad confirmation email re-sent successfully to captain (${item.email}).`,
-        });
-        setRegistrations((prev) =>
-          prev.map((r) => (r.id === item.id ? { ...r, email_status: "sent" } : r))
-        );
-        if (selectedReg && selectedReg.id === item.id) {
-          setSelectedReg({ ...selectedReg, email_status: "sent" });
-        }
-      } else if (emailRes.unavailable || !EMAIL_DELIVERY_ENABLED) {
-        const nextStatus = item.email_status === "sent" ? "sent" : "unavailable";
-        setRegistrations((prev) =>
-          prev.map((r) => (r.id === item.id ? { ...r, email_status: nextStatus } : r))
-        );
-        if (selectedReg && selectedReg.id === item.id) {
-          setSelectedReg({ ...selectedReg, email_status: nextStatus });
-        }
-        setStatusMessage({
-          type: "error",
-          text: "Email delivery unavailable — use Download Team Pass PDF instead.",
-        });
-      } else {
-        const nextStatus = item.email_status === "sent" ? "sent" : "failed";
-        setRegistrations((prev) =>
-          prev.map((r) => (r.id === item.id ? { ...r, email_status: nextStatus } : r))
-        );
-        if (selectedReg && selectedReg.id === item.id) {
-          setSelectedReg({ ...selectedReg, email_status: nextStatus });
-        }
-        const statusSuffix = emailRes.httpStatusCode ? ` [HTTP ${emailRes.httpStatusCode}${emailRes.errorType ? ` · ${emailRes.errorType}` : ""}]` : "";
-        throw new Error(`${emailRes.error || "Email delivery failed"}${statusSuffix}`);
-      }
-      setTimeout(() => setStatusMessage(null), 5000);
-    } catch (err: any) {
-      setStatusMessage({
-        type: "error",
-        text: `Failed to resend confirmation email: ${err.message || "Unknown error"}`,
-      });
-    } finally {
-      setUpdatingId(null);
     }
   };
 
@@ -1511,7 +1387,7 @@ export default function AdminEsportsRegistrations() {
                       })}
                     </td>
 
-                    {/* Status Badge, Selection Pill & Email Pill */}
+                    {/* Status Badge & Selection Pill */}
                     <td className="py-3.5 px-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                       <div className="space-y-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -1524,28 +1400,6 @@ export default function AdminEsportsRegistrations() {
                             {SELECTION_BADGE_MAP[item.effectiveSelectionStatus].label}
                           </span>
                         </div>
-                        {item.status === "confirmed" && (
-                          <div>
-                            <span
-                              className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded ${
-                                (item as any).email_status === "sent"
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                  : (item as any).email_status === "failed"
-                                  ? "bg-rose-50 text-rose-700 border border-rose-200"
-                                  : "bg-amber-50 text-amber-700 border border-amber-200"
-                              }`}
-                            >
-                              <Mail size={10} />
-                              <span>
-                                {(item as any).email_status === "sent"
-                                  ? "sent"
-                                  : (item as any).email_status === "failed"
-                                  ? "failed"
-                                  : "Email delivery unavailable"}
-                              </span>
-                            </span>
-                          </div>
-                        )}
                       </div>
                     </td>
 
@@ -1561,18 +1415,6 @@ export default function AdminEsportsRegistrations() {
                           <Eye size={12} />
                           <span>View</span>
                         </button>
-
-                        {item.status === "confirmed" && canResend && (
-                          <button
-                            type="button"
-                            onClick={() => handleResendEmail(item)}
-                            disabled={updatingId === item.id}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition-colors cursor-pointer"
-                            title="Resend squad confirmation email to captain"
-                          >
-                            <Mail size={13} />
-                          </button>
-                        )}
 
                         {canEdit && (
                           item.isArchived ? (
@@ -1823,8 +1665,7 @@ export default function AdminEsportsRegistrations() {
                 )}
               </div>
 
-              {/* Ticketing & Email Dispatch Card */}
-              {/* Squad Ticketing, NAS Archival & Email Dispatch Card */}
+              {/* Squad Ticketing & NAS Archival Card */}
               <div className="p-4 rounded-xl bg-purple-50/60 border border-purple-200 space-y-2.5 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-xs font-bold uppercase tracking-wider text-purple-900">
@@ -1854,18 +1695,6 @@ export default function AdminEsportsRegistrations() {
                   <span className="text-slate-600">Captain Email:</span>
                   <strong className="font-mono text-xs text-purple-900">{selectedReg.email}</strong>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-600">Email Status:</span>
-                  <span className="font-semibold text-slate-800">
-                    {(selectedReg as any).email_status === "sent"
-                      ? "Sent"
-                      : (selectedReg as any).email_status === "failed"
-                      ? "Failed"
-                      : selectedReg.status === "confirmed"
-                      ? "Email delivery unavailable"
-                      : "Pending approval"}
-                  </span>
-                </div>
 
                 {/* NAS Archive Status */}
                 {(() => {
@@ -1893,7 +1722,7 @@ export default function AdminEsportsRegistrations() {
                   );
                 })()}
 
-                <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="pt-2 grid grid-cols-1 gap-2">
                   {selectedReg.status === "confirmed" && !selectedReg.isArchived ? (
                     <button
                       type="button"
@@ -1928,18 +1757,6 @@ export default function AdminEsportsRegistrations() {
                     <div className="py-2 px-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] font-mono font-semibold text-center">
                       Confirm Team to Issue Ticket
                     </div>
-                  )}
-
-                  {canResend && selectedReg.status === "confirmed" && (
-                    <button
-                      type="button"
-                      disabled={updatingId === selectedReg.id}
-                      onClick={() => handleResendEmail(selectedReg)}
-                      className="py-2 px-3 rounded-lg bg-white hover:bg-purple-50 border border-purple-300 text-purple-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Mail size={13} />
-                      <span>Resend Captain Email</span>
-                    </button>
                   )}
                 </div>
               </div>
