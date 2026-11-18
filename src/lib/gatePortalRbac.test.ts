@@ -11,29 +11,29 @@ import { hasCrmPermission, resolveEffectivePermissions } from "./rbac.ts";
 describe("Phase 4, 5 & 7 — Gate Portal Access Isolation, Ticket Verdicts & RBAC Boundaries", () => {
   it("Allows gate portal access only for active gate staff, crm_admin, and super_admin", () => {
     // Allowed gate roles
-    assert.equal(canAccessGatePortal("registration_staff", "active"), true);
     assert.equal(canAccessGatePortal("esports_entry_staff", "active"), true);
     assert.equal(canAccessGatePortal("checkin_staff", "active"), true);
     assert.equal(canAccessGatePortal("crm_admin", "active"), true);
     assert.equal(canAccessGatePortal("super_admin", "active"), true);
 
-    // Non-gate CRM roles blocked from Gate Portal
+    // Non-gate CRM roles (including registration_staff assigned to Registration Desk) blocked from Gate Portal
+    assert.equal(canAccessGatePortal("registration_staff", "active"), false);
     assert.equal(canAccessGatePortal("match_conductor", "active"), false);
     assert.equal(canAccessGatePortal("content_manager", "active"), false);
     assert.equal(canAccessGatePortal("viewer", "active"), false);
     assert.equal(canAccessGatePortal("esports_manager", "active"), false);
 
     // Inactive / deactivated / invited statuses always blocked
-    assert.equal(canAccessGatePortal("registration_staff", "deactivated"), false);
+    assert.equal(canAccessGatePortal("checkin_staff", "deactivated"), false);
     assert.equal(canAccessGatePortal("esports_entry_staff", "revoked"), false);
     assert.equal(canAccessGatePortal("super_admin", "invited"), false);
   });
 
   it("Identifies gate-only staff roles so they cannot open /admin* CRM routes", () => {
-    assert.equal(isGateOnlyRole("registration_staff"), true);
     assert.equal(isGateOnlyRole("esports_entry_staff"), true);
     assert.equal(isGateOnlyRole("checkin_staff"), true);
 
+    assert.equal(isGateOnlyRole("registration_staff"), false);
     assert.equal(isGateOnlyRole("super_admin"), false);
     assert.equal(isGateOnlyRole("crm_admin"), false);
     assert.equal(isGateOnlyRole("esports_manager"), false);

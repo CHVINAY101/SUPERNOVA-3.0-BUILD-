@@ -46,6 +46,7 @@ const CANONICAL_ROLES: CanonicalCrmRole[] = [
   "super_admin",
   "crm_admin",
   "registration_staff",
+  "checkin_staff",
   "esports_entry_staff",
   "esports_manager",
   "match_conductor",

@@ -2,14 +2,14 @@ import type { AdminRole, GateVerdict } from "../types/database.ts";
 import { normalizeRole, type CanonicalCrmRole } from "./rbac.ts";
 
 export const GATE_PORTAL_ROLES: readonly CanonicalCrmRole[] = [
-  "registration_staff",
+  "checkin_staff",
   "esports_entry_staff",
   "crm_admin",
   "super_admin",
 ] as const;
 
 export const GATE_ONLY_ROLES: readonly CanonicalCrmRole[] = [
-  "registration_staff",
+  "checkin_staff",
   "esports_entry_staff",
 ] as const;
 

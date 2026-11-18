@@ -2,6 +2,7 @@ import { Navigate, useLocation, Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { isMisconfigured } from "@/lib/supabase";
 import { canAccessGatePortal } from "@/lib/gatePortal";
+import { isRegistrationDeskOnlyRole } from "@/lib/registrationDesk";
 import { getRoleLabel } from "@/lib/rbac";
 import { ShieldAlert, ServerOff, LogOut, Lock } from "lucide-react";
 
@@ -99,6 +100,10 @@ export function GateGuard({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
+  }
+
+  if (isRegistrationDeskOnlyRole(role)) {
+    return <Navigate to="/registration-desk" replace />;
   }
 
   if (!canAccessGatePortal(role, accountStatus)) {

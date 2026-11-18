@@ -387,6 +387,12 @@ export default function GateLogin() {
                   <span>Sign Out &amp; Switch Account</span>
                 </button>
                 <Link
+                  to="/registration-desk"
+                  className="inline-flex items-center px-3 py-2 rounded-xl border border-amber-400 bg-white text-amber-950 text-xs font-bold no-underline"
+                >
+                  Open Registration Desk
+                </Link>
+                <Link
                   to="/admin/login"
                   className="inline-flex items-center px-3 py-2 rounded-xl border border-amber-400 bg-white text-amber-950 text-xs font-bold no-underline"
                 >

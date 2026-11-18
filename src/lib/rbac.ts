@@ -2,13 +2,14 @@ export type CanonicalCrmRole =
   | "super_admin"
   | "crm_admin"
   | "registration_staff"
+  | "checkin_staff"
   | "esports_entry_staff"
   | "esports_manager"
   | "match_conductor"
   | "content_manager"
   | "viewer";
 
-export type LegacyAdminRole = "event_admin" | "checkin_staff" | "score_operator";
+export type LegacyAdminRole = "event_admin" | "score_operator";
 
 export type AdminRole = CanonicalCrmRole | LegacyAdminRole;
 
@@ -258,6 +259,11 @@ export const ROLE_METADATA: Record<
     badgeTone: "bg-blue-50 text-blue-700 border-blue-200",
   },
   registration_staff: {
+    label: "Registration Staff",
+    description: "Dedicated Registration Desk Portal for walk-in visitor passes, esports squad intake, search, and read-only capacity monitoring.",
+    badgeTone: "bg-sky-50 text-sky-800 border-sky-200",
+  },
+  checkin_staff: {
     label: "Entry Staff (Visitors)",
     description: "Event Entry & Verification Centre for visitor QR scanning, check-in, and wristbands.",
     badgeTone: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -298,8 +304,9 @@ export function normalizeRole(role: string | null | undefined): CanonicalCrmRole
     case "event_admin":
       return "crm_admin";
     case "registration_staff":
-    case "checkin_staff":
       return "registration_staff";
+    case "checkin_staff":
+      return "checkin_staff";
     case "esports_entry_staff":
       return "esports_entry_staff";
     case "participation_manager":
@@ -381,6 +388,13 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<CanonicalCrmRole, PermissionKey[]>
     "visitor:view",
     "visitor:create",
     "visitor:edit",
+    "esports:view",
+    "esports:create",
+    "tickets:view",
+    "tickets:manage",
+  ],
+  checkin_staff: [
+    "visitor:view",
     "entry:view",
     "entry:scan_visitor",
     "entry:checkin_visitor",
@@ -621,6 +635,7 @@ export function isDedicatedOperationsRole(role: string | null | undefined): bool
   const canonical = normalizeRole(role);
   return (
     canonical === "registration_staff" ||
+    canonical === "checkin_staff" ||
     canonical === "esports_entry_staff" ||
     canonical === "match_conductor"
   );
@@ -631,7 +646,10 @@ export function getDefaultAdminRoute(
   effectivePermissions: Set<PermissionKey>
 ): string {
   const canonical = normalizeRole(role);
-  if (canonical === "registration_staff" || canonical === "esports_entry_staff") {
+  if (canonical === "registration_staff") {
+    return "/registration-desk";
+  }
+  if (canonical === "checkin_staff" || canonical === "esports_entry_staff") {
     return "/gate";
   }
   if (canonical === "match_conductor") {

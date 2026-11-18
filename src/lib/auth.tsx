@@ -225,8 +225,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const hasRole = Boolean(resolvedRole && normalizeRole(resolvedRole));
     const finalIsAdmin = isAccountActive && hasRole;
 
+    const canonicalResolvedRole = normalizeRole(resolvedRole);
     const effectiveSet = finalIsAdmin
-      ? rpcEffectivePermissions
+      ? canonicalResolvedRole === "registration_staff"
+        ? resolveEffectivePermissions("registration_staff", resolvedStatus, overrides)
+        : rpcEffectivePermissions
         ? new Set<PermissionKey>(rpcEffectivePermissions)
         : resolveEffectivePermissions(resolvedRole, resolvedStatus, overrides)
       : new Set<PermissionKey>();

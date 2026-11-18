@@ -175,6 +175,13 @@ const ROLE_DEFAULT_PERMISSIONS: Record<string, string[]> = {
     "visitor:view",
     "visitor:create",
     "visitor:edit",
+    "esports:view",
+    "esports:create",
+    "tickets:view",
+    "tickets:manage",
+  ],
+  checkin_staff: [
+    "visitor:view",
     "entry:view",
     "entry:scan_visitor",
     "entry:checkin_visitor",
@@ -260,8 +267,9 @@ function normalizeRole(role: string | null | undefined): string | null {
     case "event_admin":
       return "crm_admin";
     case "registration_staff":
-    case "checkin_staff":
       return "registration_staff";
+    case "checkin_staff":
+      return "checkin_staff";
     case "esports_entry_staff":
       return "esports_entry_staff";
     case "participation_manager":

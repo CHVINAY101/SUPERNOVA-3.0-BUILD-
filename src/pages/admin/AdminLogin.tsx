@@ -302,7 +302,10 @@ export default function AdminLogin() {
   if (!authLoading && session && isAdmin && accountStatus === "active" && !isInviteFlow) {
     const requestedFrom = (location.state as { from?: { pathname: string } })?.from?.pathname;
     const defaultDest = getDefaultAdminRoute(role, permissions);
-    const dest = defaultDest === "/gate" ? "/gate" : (requestedFrom ?? defaultDest);
+    const dest =
+      defaultDest === "/gate" || defaultDest === "/registration-desk"
+        ? defaultDest
+        : requestedFrom ?? defaultDest;
     return <Navigate to={dest} replace />;
   }
 
@@ -871,7 +874,13 @@ export default function AdminLogin() {
             <p className="font-body text-xs text-[#191936]/60 leading-relaxed m-0">
               Public self-signup is disabled. CRM access is provisioned strictly via Super Admin invitations with assigned operational permissions.
             </p>
-            <div className="pt-1">
+            <div className="pt-1 flex flex-col gap-1">
+              <Link
+                to="/registration-desk/login"
+                className="text-xs font-heading font-bold text-[#4549D8] hover:underline no-underline"
+              >
+                Registration Desk Volunteer? Sign in at Registration Desk →
+              </Link>
               <Link
                 to="/gate/login"
                 className="text-xs font-heading font-bold text-[#4549D8] hover:underline no-underline"

@@ -20,10 +20,18 @@ import Animation from "./pages/public/Animation";
 import VisitorInfo from "./pages/public/VisitorInfo";
 import Privacy from "./pages/public/Privacy";
 
-// Admin Pages
+// Gate & Registration Desk Portals
 import { GateGuard } from "./components/admin/GateGuard";
 import GateLogin from "./pages/gate/GateLogin";
 import GatePortal from "./pages/gate/GatePortal";
+import { RegistrationDeskGuard } from "./components/registration-desk/RegistrationDeskGuard";
+import RegistrationDeskLayout from "./components/registration-desk/RegistrationDeskLayout";
+import RegistrationDeskLogin from "./pages/registration-desk/RegistrationDeskLogin";
+import RegistrationDeskDashboard from "./pages/registration-desk/RegistrationDeskDashboard";
+import RegistrationDeskVisitor from "./pages/registration-desk/RegistrationDeskVisitor";
+import RegistrationDeskEsports from "./pages/registration-desk/RegistrationDeskEsports";
+import RegistrationDeskControls from "./pages/registration-desk/RegistrationDeskControls";
+import RegistrationDeskSearch from "./pages/registration-desk/RegistrationDeskSearch";
 import AdminLayout from "./pages/admin/AdminLayout";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -85,6 +93,24 @@ export default function App() {
           </GateGuard>
         }
       />
+
+      {/* Dedicated Registration Desk Portal (Zero Main Admin CRM Sidebar) */}
+      <Route path="/registration-desk/login" element={<RegistrationDeskLogin />} />
+      <Route
+        path="/registration-desk"
+        element={
+          <RegistrationDeskGuard>
+            <RegistrationDeskLayout />
+          </RegistrationDeskGuard>
+        }
+      >
+        <Route index element={<RegistrationDeskDashboard />} />
+        <Route path="visitor" element={<RegistrationDeskVisitor />} />
+        <Route path="esports" element={<RegistrationDeskEsports />} />
+        <Route path="controls" element={<RegistrationDeskControls />} />
+        <Route path="search" element={<RegistrationDeskSearch />} />
+        <Route path="*" element={<Navigate to="/registration-desk" replace />} />
+      </Route>
 
       {/* Staff redirect to dedicated Gate Login */}
       <Route path="/staff" element={<Navigate to="/gate/login" replace />} />

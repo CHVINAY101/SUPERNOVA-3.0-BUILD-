@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { isMisconfigured } from "@/lib/supabase";
 import { getDefaultAdminRoute, getRoleLabel, isDedicatedOperationsRole } from "@/lib/rbac";
 import { isGateOnlyRole } from "@/lib/gatePortal";
+import { isRegistrationDeskOnlyRole } from "@/lib/registrationDesk";
 import { ShieldAlert, ServerOff, LogOut, Lock, ArrowRight } from "lucide-react";
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
@@ -105,6 +106,11 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
   // Block gate-only roles from accessing ANY CRM Admin route (/admin or /admin/*)
   if (isGateOnlyRole(role)) {
     return <Navigate to="/gate" replace />;
+  }
+
+  // Block registration-desk-only role from accessing ANY CRM Admin route (/admin or /admin/*)
+  if (isRegistrationDeskOnlyRole(role)) {
+    return <Navigate to="/registration-desk" replace />;
   }
 
   const normalizedPath = location.pathname.replace(/\/+$/, "") || "/admin";

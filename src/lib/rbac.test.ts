@@ -31,22 +31,38 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
     assert.equal(canAccessAdminRoute("/admin/conductor-matches", perms, "active"), true);
   });
 
-  it("Scenario 21: Entry Staff (registration_staff) can access Event Entry & Verification only; blocked from applications & tournament config", () => {
-    const perms = resolveEffectivePermissions("registration_staff", "active");
+  it("Scenario 21: Registration Staff has Registration Desk permissions only; Entry Staff (checkin_staff) retains Gate Entry permissions", () => {
+    const deskPerms = resolveEffectivePermissions("registration_staff", "active");
     assert.equal(isDedicatedOperationsRole("registration_staff"), true);
-    assert.equal(getDefaultAdminRoute("registration_staff", perms), "/gate");
-    assert.equal(canAccessAdminRoute("/admin/checkin", perms, "active"), true);
-    assert.equal(hasCrmPermission(perms, "entry:scan_visitor", "active"), true);
-    assert.equal(hasCrmPermission(perms, "entry:checkin_visitor", "active"), true);
-    assert.equal(hasCrmPermission(perms, "entry:issue_wristband", "active"), true);
+    assert.equal(getDefaultAdminRoute("registration_staff", deskPerms), "/registration-desk");
+    assert.equal(hasCrmPermission(deskPerms, "visitor:view", "active"), true);
+    assert.equal(hasCrmPermission(deskPerms, "visitor:create", "active"), true);
+    assert.equal(hasCrmPermission(deskPerms, "esports:view", "active"), true);
+    assert.equal(hasCrmPermission(deskPerms, "esports:create", "active"), true);
+    assert.equal(hasCrmPermission(deskPerms, "tickets:manage", "active"), true);
 
-    assert.equal(canAccessAdminRoute("/admin/esports-registrations", perms, "active"), false);
-    assert.equal(canAccessAdminRoute("/admin/esports-control", perms, "active"), false);
-    assert.equal(canAccessAdminRoute("/admin/settings", perms, "active"), false);
-    assert.equal(canAccessAdminRoute("/admin/users", perms, "active"), false);
-    assert.equal(hasCrmPermission(perms, "entry:override_checkin", "active"), false);
-    assert.equal(hasCrmPermission(perms, "entry:manage_wristbands", "active"), false);
-    assert.equal(hasCrmPermission(perms, "tournament:build_bracket", "active"), false);
+    assert.equal(hasCrmPermission(deskPerms, "entry:view", "active"), false);
+    assert.equal(hasCrmPermission(deskPerms, "entry:scan_visitor", "active"), false);
+    assert.equal(hasCrmPermission(deskPerms, "entry:checkin_visitor", "active"), false);
+    assert.equal(hasCrmPermission(deskPerms, "dashboard:view", "active"), false);
+    assert.equal(hasCrmPermission(deskPerms, "system_settings:manage", "active"), false);
+    assert.equal(canAccessAdminRoute("/admin/conductor-matches", deskPerms, "active"), false);
+    assert.equal(canAccessAdminRoute("/admin/esports-control", deskPerms, "active"), false);
+    assert.equal(canAccessAdminRoute("/admin/registration-controls", deskPerms, "active"), false);
+    assert.equal(canAccessAdminRoute("/admin/settings", deskPerms, "active"), false);
+    assert.equal(canAccessAdminRoute("/admin/users", deskPerms, "active"), false);
+    assert.equal(hasCrmPermission(deskPerms, "tournament:build_bracket", "active"), false);
+
+    const gatePerms = resolveEffectivePermissions("checkin_staff", "active");
+    assert.equal(isDedicatedOperationsRole("checkin_staff"), true);
+    assert.equal(getDefaultAdminRoute("checkin_staff", gatePerms), "/gate");
+    assert.equal(canAccessAdminRoute("/admin/checkin", gatePerms, "active"), true);
+    assert.equal(hasCrmPermission(gatePerms, "entry:scan_visitor", "active"), true);
+    assert.equal(hasCrmPermission(gatePerms, "entry:checkin_visitor", "active"), true);
+    assert.equal(hasCrmPermission(gatePerms, "entry:issue_wristband", "active"), true);
+    assert.equal(canAccessAdminRoute("/admin/esports-control", gatePerms, "active"), false);
+    assert.equal(hasCrmPermission(gatePerms, "entry:override_checkin", "active"), false);
+    assert.equal(hasCrmPermission(gatePerms, "entry:manage_wristbands", "active"), false);
   });
 
   it("Scenario 22: Esports Entry Staff can verify/check in esports players only; cannot approve teams or modify tournament selection", () => {
@@ -162,7 +178,8 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
 
   it("Test 11: Backwards compatibility for legacy roles + custom overrides", () => {
     assert.equal(normalizeRole("event_admin"), "crm_admin");
-    assert.equal(normalizeRole("checkin_staff"), "registration_staff");
+    assert.equal(normalizeRole("checkin_staff"), "checkin_staff");
+    assert.equal(normalizeRole("registration_staff"), "registration_staff");
     assert.equal(normalizeRole("score_operator"), "esports_manager");
     assert.equal(normalizeRole("participation_manager"), "viewer");
 
