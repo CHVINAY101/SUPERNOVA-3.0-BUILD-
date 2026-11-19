@@ -71,12 +71,12 @@ export const Footer: FC = () => {
                 <MapPin size={15} className="shrink-0 mt-0.5 text-[#D5F542]" />
                 <span>The National College, Basavanagudi, Bengaluru – 04</span>
               </p>
-              <p className="flex items-center gap-1.5 text-white/80">
+              <p className="flex flex-wrap items-center gap-1.5 text-white/80">
                 <Mail size={15} className="shrink-0 text-[#D5F542]" />
                 <span>Helpdesk:</span>
                 <a
                   href={`mailto:${meta.helpdeskEmail}`}
-                  className="text-[#D5F542] hover:underline"
+                  className="text-[#D5F542] hover:underline break-all"
                 >
                   {meta.helpdeskEmail}
                 </a>

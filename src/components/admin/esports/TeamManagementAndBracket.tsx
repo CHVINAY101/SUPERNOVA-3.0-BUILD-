@@ -557,7 +557,7 @@ export function BracketBuilderSection({
         score_b: m.score_b,
         winner_id: m.winner_id,
         status: m.status,
-        result_status: "pending",
+        result_status: m.match_format === "BYE" ? "confirmed" : "pending",
         next_match_id: m.next_match_id,
         next_match_slot: m.next_match_slot,
         loser_next_match_id: m.loser_next_match_id,

@@ -33,7 +33,7 @@ export default function Contact() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 300px), 1fr))",
               gap: "clamp(36px, 6vw, 64px)",
               alignItems: "flex-start",
               marginBottom: 64,
@@ -335,18 +335,22 @@ export default function Contact() {
                     display: "inline-flex",
                     alignItems: "center",
                     gap: 8,
-                    padding: "10px 20px",
+                    padding: "10px 18px",
                     borderRadius: "9999px",
                     background: "#2E2A8A",
                     color: "#FFFFFF",
                     fontFamily: "'Montserrat', sans-serif",
-                    fontSize: "0.88rem",
+                    fontSize: "0.85rem",
                     fontWeight: 700,
                     textDecoration: "none",
+                    maxWidth: "100%",
+                    boxSizing: "border-box",
                   }}
                 >
-                  <Mail size={16} />
-                  <span>{FESTIVAL_CONFIG.HELPDESK_EMAIL}</span>
+                  <Mail size={16} style={{ flexShrink: 0 }} />
+                  <span style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                    {FESTIVAL_CONFIG.HELPDESK_EMAIL}
+                  </span>
                 </a>
               </div>
 

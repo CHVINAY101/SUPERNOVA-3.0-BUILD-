@@ -195,29 +195,7 @@ export async function archiveTicketToNas(
 
   saveLocalNasArchives(localList);
 
-  // 2. Synchronize with Supabase database (nas_archives table and registration record)
-  try {
-    const { error: rpcErr } = await supabase.rpc("record_nas_archive_entry", {
-      p_ticket_ref: ticket.ticketRef,
-      p_registration_type: options.registrationType,
-      p_registration_id: registrationId || null,
-      p_recipient_name: options.recipientName,
-      p_recipient_email: options.email,
-      p_file_name: ticket.fileName,
-      p_nas_folder: folder,
-      p_nas_relative_path: nasRelativePath,
-      p_file_size_bytes: ticket.fileSizeBytes,
-      p_sha256_checksum: ticket.sha256Checksum,
-      p_status: record.status,
-      p_error_message: record.errorMessage,
-    });
-
-    if (rpcErr) {
-      console.warn("NAS archive DB RPC sync notice:", rpcErr);
-    }
-  } catch (dbErr) {
-    console.warn("NAS archive DB sync warning:", dbErr);
-  }
+  // 2. Local NAS archival registry updated; audit action recorded below without non-existent RPC calls
 
   // 3. Log audit action
   try {
@@ -279,26 +257,6 @@ export async function retryNasArchive(
   item.updatedAt = now;
   localList[idx] = item;
   saveLocalNasArchives(localList);
-
-  // Sync to Supabase
-  try {
-    await supabase.rpc("record_nas_archive_entry", {
-      p_ticket_ref: item.ticketRef,
-      p_registration_type: item.registrationType,
-      p_registration_id: item.registrationId || null,
-      p_recipient_name: item.recipientName,
-      p_recipient_email: item.recipientEmail,
-      p_file_name: item.fileName,
-      p_nas_folder: item.nasFolder,
-      p_nas_relative_path: item.nasRelativePath,
-      p_file_size_bytes: item.fileSizeBytes,
-      p_sha256_checksum: item.sha256Checksum,
-      p_status: "completed",
-      p_error_message: null,
-    });
-  } catch (err) {
-    console.warn("DB update error on retry:", err);
-  }
 
   return { ok: true, record: item };
 }

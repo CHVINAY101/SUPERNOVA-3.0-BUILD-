@@ -11,7 +11,6 @@ import {
   VISITOR_CATEGORY_CARDS,
   type VisitorCategoryId,
 } from "@/lib/visitorCategories";
-import { isValidPhone } from "@/lib/validation";
 import {
   fetchTicketByRegistration,
   issueTicketForRegistration,
@@ -77,6 +76,8 @@ export default function RegistrationDeskVisitor() {
   const [institution, setInstitution] = useState("");
   const [daysAttending, setDaysAttending] = useState("Both");
   const [consent, setConsent] = useState(true);
+  const [promoConsent, setPromoConsent] = useState(false);
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -151,6 +152,22 @@ export default function RegistrationDeskVisitor() {
     });
   };
 
+  const focusFirstInvalidControl = () => {
+    window.requestAnimationFrame(() => {
+      const root = formRef.current;
+      if (!root) return;
+      const target =
+        root.querySelector<HTMLElement>('[aria-invalid="true"]') ||
+        root.querySelector<HTMLElement>('[role="alert"]');
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (typeof (target as any).focus === "function" && target.tagName !== "P" && target.tagName !== "DIV") {
+          target.focus({ preventScroll: true });
+        }
+      }
+    });
+  };
+
   const resetForNextVisitor = () => {
     setFullName("");
     setEmail("");
@@ -161,6 +178,7 @@ export default function RegistrationDeskVisitor() {
     setInstitution("");
     setDaysAttending("Both");
     setConsent(true);
+    setPromoConsent(false);
     setFieldErrors({});
     setSubmitError(null);
     setDuplicateMatch(null);
@@ -211,15 +229,13 @@ export default function RegistrationDeskVisitor() {
       categoryId,
       fullName,
       email,
+      phone,
       studentClass,
       designationOption,
       customDesignation,
       institution,
     });
 
-    if (phone.trim() && !isValidPhone(phone)) {
-      errors.phone = "Enter a valid 10-digit mobile number or leave it blank.";
-    }
     if (!consent) {
       errors.consent = "Visitor consent is required before issuing a pass.";
     }
@@ -227,6 +243,7 @@ export default function RegistrationDeskVisitor() {
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
       setSubmitError(Object.values(errors)[0] || "Please check the required fields.");
+      focusFirstInvalidControl();
       return;
     }
 
@@ -255,7 +272,7 @@ export default function RegistrationDeskVisitor() {
 
       const canonicalCategory = getDbCategoryFromId(categoryId);
       const cleanName = fullName.trim();
-      const cleanPhone = phone.trim() || null;
+      const cleanPhone = phone.trim();
       const cleanClass = categoryId === "student" ? studentClass.trim() : null;
       const cleanDesignation =
         categoryId === "faculty"
@@ -278,6 +295,7 @@ export default function RegistrationDeskVisitor() {
         designation: cleanDesignation,
         daysAttending,
         registrationSource: "walk_in",
+        promoConsent,
       });
 
       const ticketRef = result.ticket?.ticket_ref || result.registrationRef;
@@ -310,7 +328,6 @@ export default function RegistrationDeskVisitor() {
         recipientName: issuedPass.fullName,
         category: issuedPass.subtitle,
         email: issuedPass.email,
-        phone: issuedPass.phone,
         institution: issuedPass.institution,
         registrationType: "visitor",
         daysAttending: issuedPass.daysAttending,
@@ -553,6 +570,7 @@ export default function RegistrationDeskVisitor() {
       ) : !canCreateVisitor ? null : (
         /* Walk-In Registration Form */
         <form
+          ref={formRef}
           onSubmit={handleSubmit}
           noValidate
           className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5 print:hidden"
@@ -608,6 +626,7 @@ export default function RegistrationDeskVisitor() {
                 type="text"
                 autoComplete="name"
                 required
+                aria-invalid={Boolean(fieldErrors.fullName)}
                 disabled={portalClosed || isSubmitting}
                 value={fullName}
                 onChange={(e) => {
@@ -615,7 +634,9 @@ export default function RegistrationDeskVisitor() {
                   clearError("fullName");
                 }}
                 placeholder="Enter visitor full name"
-                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600 ${
+                  fieldErrors.fullName ? "border-rose-500" : "border-slate-300"
+                }`}
               />
               {fieldErrors.fullName && (
                 <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.fullName}</p>
@@ -633,6 +654,7 @@ export default function RegistrationDeskVisitor() {
                 autoCapitalize="none"
                 autoComplete="email"
                 required
+                aria-invalid={Boolean(fieldErrors.email)}
                 disabled={portalClosed || isSubmitting}
                 value={email}
                 onChange={(e) => {
@@ -640,7 +662,9 @@ export default function RegistrationDeskVisitor() {
                   clearError("email");
                 }}
                 placeholder="visitor@example.com"
-                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600 ${
+                  fieldErrors.email ? "border-rose-500" : "border-slate-300"
+                }`}
               />
               {fieldErrors.email && (
                 <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.email}</p>
@@ -649,13 +673,16 @@ export default function RegistrationDeskVisitor() {
 
             <div>
               <label htmlFor="desk-vis-phone" className="text-sm font-semibold text-slate-800 block mb-1.5">
-                Mobile Number (Optional)
+                Contact Mobile Number *
               </label>
               <input
                 id="desk-vis-phone"
                 type="tel"
                 inputMode="tel"
                 autoComplete="tel"
+                required
+                aria-invalid={Boolean(fieldErrors.phone)}
+                maxLength={20}
                 disabled={portalClosed || isSubmitting}
                 value={phone}
                 onChange={(e) => {
@@ -663,8 +690,13 @@ export default function RegistrationDeskVisitor() {
                   clearError("phone");
                 }}
                 placeholder="10-digit mobile number"
-                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600 ${
+                  fieldErrors.phone ? "border-rose-500" : "border-slate-300"
+                }`}
               />
+              <p className="text-xs text-slate-500 mt-1 mb-0">
+                For event coordination; younger students may use a parent or guardian mobile number.
+              </p>
               {fieldErrors.phone && (
                 <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.phone}</p>
               )}
@@ -699,6 +731,7 @@ export default function RegistrationDeskVisitor() {
                   id="desk-vis-class"
                   type="text"
                   required
+                  aria-invalid={Boolean(fieldErrors.studentClass)}
                   disabled={portalClosed || isSubmitting}
                   value={studentClass}
                   onChange={(e) => {
@@ -706,7 +739,9 @@ export default function RegistrationDeskVisitor() {
                     clearError("studentClass");
                   }}
                   placeholder="e.g. 2nd PUC, BCA 2nd Year, Class 10"
-                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
+                  className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600 ${
+                    fieldErrors.studentClass ? "border-rose-500" : "border-slate-300"
+                  }`}
                 />
                 {fieldErrors.studentClass && (
                   <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.studentClass}</p>
@@ -723,13 +758,16 @@ export default function RegistrationDeskVisitor() {
                   <select
                     id="desk-vis-desig"
                     required
+                    aria-invalid={Boolean(fieldErrors.designationOption)}
                     disabled={portalClosed || isSubmitting}
                     value={designationOption}
                     onChange={(e) => {
                       setDesignationOption(e.target.value);
                       clearError("designationOption");
                     }}
-                    className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
+                    className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600 ${
+                      fieldErrors.designationOption ? "border-rose-500" : "border-slate-300"
+                    }`}
                   >
                     <option value="">Select designation...</option>
                     {FACULTY_DESIGNATION_OPTIONS.map((opt) => (
@@ -752,6 +790,7 @@ export default function RegistrationDeskVisitor() {
                       id="desk-vis-custom-desig"
                       type="text"
                       required
+                      aria-invalid={Boolean(fieldErrors.customDesignation)}
                       disabled={portalClosed || isSubmitting}
                       value={customDesignation}
                       onChange={(e) => {
@@ -759,7 +798,9 @@ export default function RegistrationDeskVisitor() {
                         clearError("customDesignation");
                       }}
                       placeholder="Enter official role"
-                      className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
+                      className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600 ${
+                        fieldErrors.customDesignation ? "border-rose-500" : "border-slate-300"
+                      }`}
                     />
                     {fieldErrors.customDesignation && (
                       <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.customDesignation}</p>
@@ -779,6 +820,7 @@ export default function RegistrationDeskVisitor() {
                 id="desk-vis-inst"
                 type="text"
                 required={categoryId !== "general"}
+                aria-invalid={Boolean(fieldErrors.institution)}
                 disabled={portalClosed || isSubmitting}
                 value={institution}
                 onChange={(e) => {
@@ -786,7 +828,9 @@ export default function RegistrationDeskVisitor() {
                   clearError("institution");
                 }}
                 placeholder="School, college, or organization name"
-                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600 ${
+                  fieldErrors.institution ? "border-rose-500" : "border-slate-300"
+                }`}
               />
               {fieldErrors.institution && (
                 <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.institution}</p>
@@ -795,10 +839,11 @@ export default function RegistrationDeskVisitor() {
           </div>
 
           {/* Consent */}
-          <div className="pt-3 border-t border-slate-200">
+          <div className="pt-3 border-t border-slate-200 space-y-2.5">
             <label className="flex items-start gap-3 cursor-pointer text-sm text-slate-700 min-h-[44px]">
               <input
                 type="checkbox"
+                aria-invalid={Boolean(fieldErrors.consent)}
                 checked={consent}
                 disabled={portalClosed || isSubmitting}
                 onChange={(e) => {
@@ -814,6 +859,19 @@ export default function RegistrationDeskVisitor() {
             {fieldErrors.consent && (
               <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.consent}</p>
             )}
+
+            <label className="flex items-start gap-3 cursor-pointer text-xs sm:text-sm text-slate-600 min-h-[44px]">
+              <input
+                type="checkbox"
+                checked={promoConsent}
+                disabled={portalClosed || isSubmitting}
+                onChange={(e) => setPromoConsent(e.target.checked)}
+                className="mt-0.5 w-5 h-5 accent-blue-600 rounded shrink-0"
+              />
+              <span>
+                Optional: Visitor consents to receive future fest &amp; institutional program updates.
+              </span>
+            </label>
           </div>
 
           {submitError && (

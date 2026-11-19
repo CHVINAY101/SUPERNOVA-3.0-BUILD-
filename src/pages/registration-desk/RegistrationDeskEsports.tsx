@@ -38,6 +38,7 @@ export default function RegistrationDeskEsports() {
   const { hasPermission } = useAuth();
   const canCreateEsports = hasPermission("esports:create");
   const submitLockRef = useRef(false);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const cachedPlayersRef = useRef<Required<PlayerInput>[]>([]);
 
   const [loadingGames, setLoadingGames] = useState(true);
@@ -221,6 +222,31 @@ export default function RegistrationDeskEsports() {
     setPlayers(Array.from({ length: requiredPlayerCount }, () => EMPTY_PLAYER()));
   };
 
+  const clearFieldErr = (key: string) => {
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const focusFirstInvalidControl = () => {
+    window.requestAnimationFrame(() => {
+      const root = formRef.current;
+      if (!root) return;
+      const target =
+        root.querySelector<HTMLElement>('[aria-invalid="true"]') ||
+        root.querySelector<HTMLElement>('[role="alert"]');
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (typeof (target as any).focus === "function" && target.tagName !== "P" && target.tagName !== "DIV") {
+          target.focus({ preventScroll: true });
+        }
+      }
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canCreateEsports || submitLockRef.current || isSubmitting) return;
@@ -242,7 +268,7 @@ export default function RegistrationDeskEsports() {
       errors.captainEmail = "Enter a valid representative email address.";
     }
     if (!isValidPhone(captainPhone)) {
-      errors.captainPhone = "Enter a valid 10-digit mobile number.";
+      errors.captainPhone = "Enter a valid 10–15 digit mobile number.";
     }
     if (!isValidInstitution(institution, 150)) {
       errors.institution = "Enter the team's primary college / institution name.";
@@ -269,6 +295,7 @@ export default function RegistrationDeskEsports() {
           rosterCheck.errorMessage ||
           "Please complete all squad & player education fields."
       );
+      focusFirstInvalidControl();
       return;
     }
 
@@ -404,7 +431,7 @@ export default function RegistrationDeskEsports() {
           </div>
         </div>
       ) : (
-        <form onSubmit={handleSubmit} noValidate className="space-y-5">
+        <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
           {/* 1. Game Selector */}
           <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
             <h2 className="text-base font-bold text-slate-900 m-0">
@@ -481,11 +508,17 @@ export default function RegistrationDeskEsports() {
                   id="desk-esp-team"
                   type="text"
                   required
+                  aria-invalid={Boolean(fieldErrors.teamName)}
                   disabled={selectedGameClosed || isSubmitting}
                   value={teamName}
-                  onChange={(e) => setTeamName(e.target.value)}
+                  onChange={(e) => {
+                    setTeamName(e.target.value);
+                    clearFieldErr("teamName");
+                  }}
                   placeholder="Official team name"
-                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                    fieldErrors.teamName ? "border-rose-500" : "border-slate-300"
+                  }`}
                 />
                 {fieldErrors.teamName && (
                   <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.teamName}</p>
@@ -500,11 +533,17 @@ export default function RegistrationDeskEsports() {
                   id="desk-esp-inst"
                   type="text"
                   required
+                  aria-invalid={Boolean(fieldErrors.institution)}
                   disabled={selectedGameClosed || isSubmitting}
                   value={institution}
-                  onChange={(e) => setInstitution(e.target.value)}
+                  onChange={(e) => {
+                    setInstitution(e.target.value);
+                    clearFieldErr("institution");
+                  }}
                   placeholder="Represented college / school name"
-                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                    fieldErrors.institution ? "border-rose-500" : "border-slate-300"
+                  }`}
                 />
                 {fieldErrors.institution && (
                   <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.institution}</p>
@@ -520,11 +559,17 @@ export default function RegistrationDeskEsports() {
                   type="text"
                   autoComplete="name"
                   required
+                  aria-invalid={Boolean(fieldErrors.captainName)}
                   disabled={selectedGameClosed || isSubmitting}
                   value={captainName}
-                  onChange={(e) => setCaptainName(e.target.value)}
+                  onChange={(e) => {
+                    setCaptainName(e.target.value);
+                    clearFieldErr("captainName");
+                  }}
                   placeholder="Captain full name"
-                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                    fieldErrors.captainName ? "border-rose-500" : "border-slate-300"
+                  }`}
                 />
                 {fieldErrors.captainName && (
                   <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.captainName}</p>
@@ -542,11 +587,17 @@ export default function RegistrationDeskEsports() {
                   autoCapitalize="none"
                   autoComplete="email"
                   required
+                  aria-invalid={Boolean(fieldErrors.captainEmail)}
                   disabled={selectedGameClosed || isSubmitting}
                   value={captainEmail}
-                  onChange={(e) => setCaptainEmail(e.target.value)}
+                  onChange={(e) => {
+                    setCaptainEmail(e.target.value);
+                    clearFieldErr("captainEmail");
+                  }}
                   placeholder="captain@example.com"
-                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                    fieldErrors.captainEmail ? "border-rose-500" : "border-slate-300"
+                  }`}
                 />
                 {fieldErrors.captainEmail && (
                   <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.captainEmail}</p>
@@ -563,11 +614,17 @@ export default function RegistrationDeskEsports() {
                   inputMode="tel"
                   autoComplete="tel"
                   required
+                  aria-invalid={Boolean(fieldErrors.captainPhone)}
                   disabled={selectedGameClosed || isSubmitting}
                   value={captainPhone}
-                  onChange={(e) => setCaptainPhone(e.target.value)}
+                  onChange={(e) => {
+                    setCaptainPhone(e.target.value);
+                    clearFieldErr("captainPhone");
+                  }}
                   placeholder="9876543210"
-                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                    fieldErrors.captainPhone ? "border-rose-500" : "border-slate-300"
+                  }`}
                 />
                 {fieldErrors.captainPhone && (
                   <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.captainPhone}</p>
@@ -624,11 +681,14 @@ export default function RegistrationDeskEsports() {
                         <input
                           type="text"
                           required
+                          aria-invalid={Boolean(rowErr.name)}
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.name}
                           onChange={(e) => handlePlayerFieldChange(idx, "name", e.target.value)}
                           placeholder={`Player ${idx + 1} name`}
-                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className={`w-full h-12 px-3.5 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                            rowErr.name ? "border-rose-500" : "border-slate-300"
+                          }`}
                         />
                         {rowErr.name && (
                           <p role="alert" className="text-xs text-rose-600 mt-1 m-0">{rowErr.name}</p>
@@ -642,11 +702,14 @@ export default function RegistrationDeskEsports() {
                         <input
                           type="text"
                           required
+                          aria-invalid={Boolean(rowErr.inGameId)}
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.inGameId}
                           onChange={(e) => handlePlayerFieldChange(idx, "inGameId", e.target.value)}
                           placeholder={selectedGame?.title.includes("VALORANT") ? "Name#TAG" : "UID / Character ID"}
-                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 font-mono"
+                          className={`w-full h-12 px-3.5 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 font-mono ${
+                            rowErr.inGameId ? "border-rose-500" : "border-slate-300"
+                          }`}
                         />
                         {rowErr.inGameId && (
                           <p role="alert" className="text-xs text-rose-600 mt-1 m-0">{rowErr.inGameId}</p>
@@ -659,12 +722,15 @@ export default function RegistrationDeskEsports() {
                         </label>
                         <select
                           required
+                          aria-invalid={Boolean(rowErr.institutionType)}
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.institutionType}
                           onChange={(e) =>
                             handlePlayerFieldChange(idx, "institutionType", e.target.value)
                           }
-                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className={`w-full h-12 px-3.5 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                            rowErr.institutionType ? "border-rose-500" : "border-slate-300"
+                          }`}
                         >
                           <option value="">Select type...</option>
                           {PLAYER_INSTITUTION_TYPES.map((t) => (
@@ -685,13 +751,16 @@ export default function RegistrationDeskEsports() {
                         <input
                           type="text"
                           required
+                          aria-invalid={Boolean(rowErr.institutionName)}
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.institutionName}
                           onChange={(e) =>
                             handlePlayerFieldChange(idx, "institutionName", e.target.value)
                           }
                           placeholder="Full institution name"
-                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className={`w-full h-12 px-3.5 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                            rowErr.institutionName ? "border-rose-500" : "border-slate-300"
+                          }`}
                         />
                         {rowErr.institutionName && (
                           <p role="alert" className="text-xs text-rose-600 mt-1 m-0">{rowErr.institutionName}</p>
@@ -705,6 +774,7 @@ export default function RegistrationDeskEsports() {
                         <input
                           type="text"
                           required
+                          aria-invalid={Boolean(rowErr.courseOrClass)}
                           list={courseDatalistId}
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.courseOrClass}
@@ -712,7 +782,9 @@ export default function RegistrationDeskEsports() {
                             handlePlayerFieldChange(idx, "courseOrClass", e.target.value)
                           }
                           placeholder={suggestions.coursePlaceholder}
-                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className={`w-full h-12 px-3.5 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                            rowErr.courseOrClass ? "border-rose-500" : "border-slate-300"
+                          }`}
                         />
                         <datalist id={courseDatalistId}>
                           {suggestions.courseSuggestions.map((opt) => (
@@ -731,6 +803,7 @@ export default function RegistrationDeskEsports() {
                         <input
                           type="text"
                           required
+                          aria-invalid={Boolean(rowErr.currentYearOrClass)}
                           list={yearDatalistId}
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.currentYearOrClass}
@@ -738,7 +811,9 @@ export default function RegistrationDeskEsports() {
                             handlePlayerFieldChange(idx, "currentYearOrClass", e.target.value)
                           }
                           placeholder={suggestions.yearPlaceholder}
-                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className={`w-full h-12 px-3.5 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 ${
+                            rowErr.currentYearOrClass ? "border-rose-500" : "border-slate-300"
+                          }`}
                         />
                         <datalist id={yearDatalistId}>
                           {suggestions.yearSuggestions.map((opt) => (
@@ -763,9 +838,13 @@ export default function RegistrationDeskEsports() {
             <label className="flex items-start gap-3 cursor-pointer text-sm text-slate-700 min-h-[44px]">
               <input
                 type="checkbox"
+                aria-invalid={Boolean(fieldErrors.rulesAgreed)}
                 checked={rulesAgreed}
                 disabled={selectedGameClosed || isSubmitting}
-                onChange={(e) => setRulesAgreed(e.target.checked)}
+                onChange={(e) => {
+                  setRulesAgreed(e.target.checked);
+                  clearFieldErr("rulesAgreed");
+                }}
                 className="mt-0.5 w-5 h-5 accent-indigo-600 rounded shrink-0"
               />
               <span>
@@ -779,9 +858,13 @@ export default function RegistrationDeskEsports() {
             <label className="flex items-start gap-3 cursor-pointer text-sm text-slate-700 min-h-[44px]">
               <input
                 type="checkbox"
+                aria-invalid={Boolean(fieldErrors.consentAgreed)}
                 checked={consentAgreed}
                 disabled={selectedGameClosed || isSubmitting}
-                onChange={(e) => setConsentAgreed(e.target.checked)}
+                onChange={(e) => {
+                  setConsentAgreed(e.target.checked);
+                  clearFieldErr("consentAgreed");
+                }}
                 className="mt-0.5 w-5 h-5 accent-indigo-600 rounded shrink-0"
               />
               <span>

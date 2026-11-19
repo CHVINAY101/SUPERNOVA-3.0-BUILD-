@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   confirmAndAdvanceMatchResult,
@@ -105,8 +105,16 @@ export function MatchOperationDrawer({
     tournament.format === "group_knockout" ||
     tournament.format === "head_to_head";
 
+  const loadedMatchIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!match) return;
+    if (!match) {
+      loadedMatchIdRef.current = null;
+      return;
+    }
+    if (loadedMatchIdRef.current === match.id) return;
+    loadedMatchIdRef.current = match.id;
+
     setScoreA(match.score_a ?? 0);
     setScoreB(match.score_b ?? 0);
     setAllowDraw(
@@ -133,7 +141,7 @@ export function MatchOperationDrawer({
       .then(({ data: rows }) => {
         if (Array.isArray(rows)) setAttendance(rows as MatchAttendance[]);
       });
-  }, [match?.id, match?.score_a, match?.score_b, match?.winner_id, match?.status, supportsDraw]);
+  }, [match, supportsDraw]);
 
   useEffect(() => {
     if (!match) return;
@@ -330,16 +338,25 @@ export function MatchOperationDrawer({
           .eq("id", match.id);
         if (error) throw error;
       } else {
+        const finalNote = forfeitTeamId
+          ? `${notes.trim() ? `${notes.trim()} · ` : ""}Forfeit by ${teamMap.get(forfeitTeamId)?.team_name || "Opponent"}`
+          : notes.trim() || null;
+
         const rpcRes = await supabase.rpc("confirm_match_result_and_advance", {
           p_match_id: match.id,
           p_winner_id: winnerId,
           p_score_a: isBr ? 0 : scoreA,
           p_score_b: isBr ? 0 : scoreB,
+          p_detailed_scores: {
+            ...(match.detailed_scores || {}),
+            ...(forfeitTeamId ? { forfeit_team_id: forfeitTeamId } : {}),
+          },
           p_br_results: isBr ? match.br_results || [] : null,
-          p_notes: forfeitTeamId
-            ? `${notes ? `${notes} · ` : ""}Forfeit by ${teamMap.get(forfeitTeamId)?.team_name || "Opponent"}`
-            : notes.trim() || null,
         });
+
+        if (!rpcRes.error && finalNote) {
+          await supabase.from("matches").update({ notes: finalNote }).eq("id", match.id);
+        }
 
         if (rpcRes.error) {
           // Client fallback if RPC absent or tournament_id missing

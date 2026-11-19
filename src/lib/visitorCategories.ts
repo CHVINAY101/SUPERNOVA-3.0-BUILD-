@@ -4,6 +4,7 @@ import {
   isValidEmail,
   isValidInstitution,
   isValidName,
+  isValidPhone,
 } from "./validation";
 
 export type VisitorCategoryId = "student" | "faculty" | "general";
@@ -131,6 +132,7 @@ export interface VisitorFormValidationInput {
   categoryId: VisitorCategoryId | null;
   fullName: string;
   email: string;
+  phone: string;
   studentClass: string;
   designationOption: string;
   customDesignation: string;
@@ -152,6 +154,11 @@ export function validateVisitorFormFields(
 
   if (!isValidEmail(input.email)) {
     errors.email = "Please enter a valid email address.";
+  }
+
+  if (!isValidPhone(input.phone)) {
+    errors.phone =
+      "Please enter a valid 10–15 digit contact mobile number (parent or guardian number accepted for younger students).";
   }
 
   if (input.categoryId === "student") {

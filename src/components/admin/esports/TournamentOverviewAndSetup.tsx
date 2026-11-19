@@ -40,11 +40,15 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
   } = data;
 
   const isBr = isBattleRoyaleTournament(tournament, selectedGame);
-  const scheduledMatches = matches.filter((m) => isMatchScheduled(m));
-  const unscheduledMatches = matches.filter((m) => !isMatchScheduled(m) && m.status !== "completed" && m.status !== "cancelled");
-  const liveCount = matches.filter((m) => m.status === "live").length;
-  const confirmQueueCount = matches.filter((m) => m.status === "result_submitted").length;
-  const completedCount = matches.filter((m) => m.status === "completed").length;
+  const realMatches = matches.filter((m) => m.match_format !== "BYE");
+  const byeCount = matches.length - realMatches.length;
+  const scheduledMatches = realMatches.filter((m) => isMatchScheduled(m));
+  const unscheduledMatches = realMatches.filter(
+    (m) => !isMatchScheduled(m) && m.status !== "completed" && m.status !== "cancelled"
+  );
+  const liveCount = realMatches.filter((m) => m.status === "live").length;
+  const confirmQueueCount = realMatches.filter((m) => m.status === "result_submitted").length;
+  const completedCount = realMatches.filter((m) => m.status === "completed").length;
   const openDisputeCount = disputes.filter(
     (d) => d.status !== "resolved" && matches.some((m) => m.id === d.match_id)
   ).length;
@@ -74,16 +78,19 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
     {
       step: "03",
       title: "Bracket & Pairing",
-      done: matches.length > 0,
-      detail: matches.length > 0 ? `${matches.length} fixtures built` : "Auto-pair teams cleanly",
+      done: realMatches.length > 0,
+      detail:
+        realMatches.length > 0
+          ? `${realMatches.length} playable${byeCount > 0 ? ` (+${byeCount} BYE)` : ""}`
+          : "Auto-pair teams cleanly",
       target: "tournament_matches" as EsportsSectionId,
     },
     {
       step: "04",
       title: "IST Scheduling",
-      done: matches.length > 0 && unscheduledMatches.length === 0,
+      done: realMatches.length > 0 && unscheduledMatches.length === 0,
       detail:
-        matches.length === 0
+        realMatches.length === 0
           ? "Awaiting fixtures"
           : unscheduledMatches.length > 0
           ? `${unscheduledMatches.length} awaiting IST slot`
@@ -93,8 +100,8 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
     {
       step: "05",
       title: "Play & Confirmation",
-      done: matches.length > 0 && completedCount === matches.length,
-      detail: `${completedCount}/${matches.length} completed · ${confirmQueueCount} pending confirm`,
+      done: realMatches.length > 0 && completedCount === realMatches.length,
+      detail: `${completedCount}/${realMatches.length} completed · ${confirmQueueCount} pending confirm`,
       target: "live_results" as EsportsSectionId,
     },
   ];

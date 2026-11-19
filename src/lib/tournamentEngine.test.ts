@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   authorizeConductorMatchOperation,
+  buildBracketRoundListGroups,
   buildConnectedBracketLayout,
   calculateBattleRoyaleStandings,
   calculateCumulativeBattleRoyaleStandings,
@@ -879,5 +880,56 @@ describe("Esports Tournament Operations Engine (Scenarios 10–20)", () => {
       assert.equal(forfeitConfirmed.matches[0].winner_id, "t2");
       assert.equal((forfeitConfirmed.matches[0].detailed_scores as any)?.forfeit_team_id, "t1");
     }
+  });
+
+  it("Scenario 28: 64-team List View grouping organizes all 6 rounds cleanly and calculateGroupStandings skips BYE rows", () => {
+    const teams64 = Array.from({ length: 64 }, (_, i) => makeTeam(`t64-${i + 1}`, `Squad ${i + 1}`));
+    const built = generateTournamentMatches({
+      tournamentId: "tour-64",
+      gameId: "g-val",
+      gameTitle: "VALORANT",
+      format: "single_elimination",
+      teams: teams64,
+      seedingMode: "registration_order",
+      leaveUnscheduled: true,
+    });
+    assert.equal(built.ok, true);
+    if (!built.ok) return;
+    assert.equal(built.matches.length, 63);
+
+    const teamNameById = new Map(teams64.map((t) => [t.id, t.team_name]));
+    const groups = buildBracketRoundListGroups({
+      matches: built.matches as unknown as Match[],
+      teamNameById,
+      format: "single_elimination",
+    });
+    assert.equal(groups.length, 6);
+    assert.equal(groups[0].items.length, 32);
+    assert.equal(groups[5].items.length, 1);
+    assert.equal(groups[5].roundLabel, "Grand Final");
+
+    // calculateGroupStandings must ignore BYE placeholders so they never inflate wins/played counts
+    const grp = calculateGroupStandings(["t1", "t2"], [
+      {
+        id: "bye-1",
+        game_id: "g-1",
+        round: "Group A",
+        match_format: "BYE",
+        team_a_id: "t1",
+        team_b_id: null,
+        scheduled_start: null,
+        score_a: 0,
+        score_b: 0,
+        status: "completed",
+        result_status: "confirmed",
+        winner_id: "t1",
+        is_published: true,
+        created_at: "",
+        updated_at: "",
+      },
+    ]);
+    assert.equal(grp[0].played, 0);
+    assert.equal(grp[0].wins, 0);
+    assert.equal(grp[0].points, 0);
   });
 });

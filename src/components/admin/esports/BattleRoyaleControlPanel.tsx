@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   calculateCumulativeBattleRoyaleStandings,
@@ -93,12 +93,18 @@ export function BattleRoyaleControlPanel({
     [brLobbies, selectedLobbyId]
   );
 
+  const loadedLobbyIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!activeLobby) {
+      loadedLobbyIdRef.current = null;
       setDraftRows([]);
       setNotes("");
       return;
     }
+    if (loadedLobbyIdRef.current === activeLobby.id) return;
+    loadedLobbyIdRef.current = activeLobby.id;
+
     const base =
       Array.isArray(activeLobby.br_results) && activeLobby.br_results.length > 0
         ? activeLobby.br_results
@@ -115,7 +121,7 @@ export function BattleRoyaleControlPanel({
           }));
     setDraftRows(base.map((r) => ({ ...r })));
     setNotes(activeLobby.notes || "");
-  }, [activeLobby?.id, activeLobby?.br_results, roster]);
+  }, [activeLobby, roster]);
 
   const validation = useMemo(() => validateBattleRoyaleRows(draftRows), [draftRows]);
 
@@ -406,8 +412,8 @@ export function BattleRoyaleControlPanel({
         p_winner_id: top?.team_id || null,
         p_score_a: 0,
         p_score_b: 0,
+        p_detailed_scores: activeLobby.detailed_scores || {},
         p_br_results: draftRows,
-        p_notes: notes.trim() || null,
       });
       if (rpcRes.error) {
         const { error: uErr } = await supabase
@@ -424,8 +430,11 @@ export function BattleRoyaleControlPanel({
           })
           .eq("id", activeLobby.id);
         if (uErr) throw uErr;
+      } else if (notes.trim()) {
+        await supabase.from("matches").update({ notes: notes.trim() }).eq("id", activeLobby.id);
       }
 
+      loadedLobbyIdRef.current = null;
       await onRefresh(
         `Confirmed ${activeLobby.match_code || activeLobby.round}. Top squad: ${top?.team_name || "Updated"}.`
       );

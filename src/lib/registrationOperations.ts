@@ -326,49 +326,51 @@ export async function archiveRegistrationRecord(
 
     let dbSucceeded = false;
 
-    if (registrationType === "visitor" || registrationType === "esports") {
-      try {
-        const { data, error } = await supabase.rpc("archive_registration", {
-          p_type: registrationType,
-          p_id: registrationId,
-        });
-        if (!error && data?.ok !== false) {
-          dbSucceeded = true;
-        }
-      } catch {
-        // RPC not present in schema cache, proceed to direct update
+    const { error: directError } = await supabase
+      .from(table)
+      .update({ archived_at: new Date().toISOString() })
+      .eq("id", registrationId);
+
+    if (!directError) {
+      dbSucceeded = true;
+    } else if (directError.code === "42703" || directError.message?.includes("archived_at")) {
+      const { data: currentRecord } = await supabase
+        .from(table)
+        .select("admin_notes")
+        .eq("id", registrationId)
+        .maybeSingle();
+
+      const currentNotes = (currentRecord as any)?.admin_notes || "";
+      const updatedNotes = currentNotes
+        ? `${currentNotes}\n[ARCHIVED ${new Date().toISOString()}]`
+        : `[ARCHIVED ${new Date().toISOString()}]`;
+
+      const { error: noteErr } = await supabase
+        .from(table)
+        .update({ admin_notes: updatedNotes })
+        .eq("id", registrationId);
+
+      if (!noteErr) {
+        dbSucceeded = true;
+      } else {
+        return { ok: false, error: noteErr.message || "Failed to archive registration" };
       }
+    } else if (directError.code === "42501" && (registrationType === "visitor" || registrationType === "esports")) {
+      const { data, error: rpcErr } = await supabase.rpc("archive_registration", {
+        p_type: registrationType,
+        p_id: registrationId,
+      });
+      if (!rpcErr && data?.ok !== false) {
+        dbSucceeded = true;
+      } else {
+        return { ok: false, error: rpcErr?.message || directError.message || "Failed to archive registration" };
+      }
+    } else {
+      return { ok: false, error: directError.message || "Failed to archive registration" };
     }
 
     if (!dbSucceeded) {
-      const { error: directError } = await supabase
-        .from(table)
-        .update({ archived_at: new Date().toISOString() })
-        .eq("id", registrationId);
-
-      if (!directError) {
-        dbSucceeded = true;
-      } else if (directError.code === "42703" || directError.message?.includes("archived_at")) {
-        const { data: currentRecord } = await supabase
-          .from(table)
-          .select("admin_notes")
-          .eq("id", registrationId)
-          .maybeSingle();
-
-        const currentNotes = (currentRecord as any)?.admin_notes || "";
-        const updatedNotes = currentNotes
-          ? `${currentNotes}\n[ARCHIVED ${new Date().toISOString()}]`
-          : `[ARCHIVED ${new Date().toISOString()}]`;
-
-        await supabase
-          .from(table)
-          .update({ admin_notes: updatedNotes })
-          .eq("id", registrationId);
-
-        dbSucceeded = true;
-      } else {
-        return { ok: false, error: directError.message || "Failed to archive registration" };
-      }
+      return { ok: false, error: "Failed to archive registration" };
     }
 
     markRegistrationArchivedLocal(registrationId, true);

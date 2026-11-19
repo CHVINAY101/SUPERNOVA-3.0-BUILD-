@@ -214,6 +214,8 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
   const [walkInCategoryId, setWalkInCategoryId] = useState<VisitorCategoryId | null>(null);
   const [walkInName, setWalkInName] = useState("");
   const [walkInEmail, setWalkInEmail] = useState("");
+  const [walkInPhone, setWalkInPhone] = useState("");
+  const [walkInPromoConsent, setWalkInPromoConsent] = useState(false);
   const [walkInStudentClass, setWalkInStudentClass] = useState("");
   const [walkInDesignationOption, setWalkInDesignationOption] = useState("");
   const [walkInCustomDesignation, setWalkInCustomDesignation] = useState("");
@@ -227,11 +229,14 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
   const [walkInCheckingIn, setWalkInCheckingIn] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const walkInFormRef = useRef<HTMLFormElement | null>(null);
 
   const openWalkInModal = (prefillName = "") => {
     setWalkInCategoryId(null);
     setWalkInName(prefillName);
     setWalkInEmail("");
+    setWalkInPhone("");
+    setWalkInPromoConsent(false);
     setWalkInStudentClass("");
     setWalkInDesignationOption("");
     setWalkInCustomDesignation("");
@@ -822,6 +827,22 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
     });
   };
 
+  const focusFirstInvalidWalkInControl = () => {
+    window.requestAnimationFrame(() => {
+      const root = walkInFormRef.current;
+      if (!root) return;
+      const target =
+        root.querySelector<HTMLElement>('[aria-invalid="true"]') ||
+        root.querySelector<HTMLElement>('[role="alert"]');
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (typeof (target as any).focus === "function" && target.tagName !== "P" && target.tagName !== "DIV") {
+          target.focus({ preventScroll: true });
+        }
+      }
+    });
+  };
+
   const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canCreateWalkIn || walkInSubmitting) return;
@@ -830,6 +851,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
       categoryId: walkInCategoryId,
       fullName: walkInName,
       email: walkInEmail,
+      phone: walkInPhone,
       studentClass: walkInStudentClass,
       designationOption: walkInDesignationOption,
       customDesignation: walkInCustomDesignation,
@@ -839,6 +861,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
     if (Object.keys(errors).length > 0 || !walkInCategoryId) {
       setWalkInErrors(errors);
       setWalkInSubmitError(Object.values(errors)[0] || "Please complete all required fields.");
+      focusFirstInvalidWalkInControl();
       return;
     }
 
@@ -850,6 +873,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
       const canonicalCategory = getDbCategoryFromId(walkInCategoryId);
       const cleanName = walkInName.trim();
       const cleanEmail = walkInEmail.trim().toLowerCase();
+      const cleanPhone = walkInPhone.trim();
       const cleanClass = walkInCategoryId === "student" ? walkInStudentClass.trim() : null;
       const cleanDesignation =
         walkInCategoryId === "faculty"
@@ -865,13 +889,14 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
       const submissionRes = await submitVisitorAndIssueTicket({
         fullName: cleanName,
         email: cleanEmail,
-        phone: null,
+        phone: cleanPhone,
         institution: cleanInstitution,
         visitorCategory: canonicalCategory,
         studentClass: cleanClass,
         designation: cleanDesignation,
         daysAttending: "Both",
         registrationSource: "walk_in",
+        promoConsent: walkInPromoConsent,
       });
 
       let ticket = submissionRes.ticket || null;
@@ -1926,7 +1951,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
             )}
 
             {!walkInIssued ? (
-              <form onSubmit={handleWalkInSubmit} noValidate className="space-y-4">
+              <form ref={walkInFormRef} onSubmit={handleWalkInSubmit} noValidate className="space-y-4">
                 <p className="text-xs text-slate-600 m-0">
                   Registers the walk-in visitor directly into the Visitor CRM with a unique verifiable QR ticket pass using the same category rules as public Visitor Registration.
                 </p>
@@ -2004,6 +2029,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                       id="walkin-full-name"
                       type="text"
                       required
+                      aria-invalid={Boolean(walkInErrors.fullName)}
                       maxLength={120}
                       value={walkInName}
                       onChange={(e) => {
@@ -2029,7 +2055,11 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                     <input
                       id="walkin-email"
                       type="email"
+                      inputMode="email"
+                      autoCapitalize="none"
+                      autoComplete="email"
                       required
+                      aria-invalid={Boolean(walkInErrors.email)}
                       maxLength={254}
                       value={walkInEmail}
                       onChange={(e) => {
@@ -2048,6 +2078,38 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                     )}
                   </div>
 
+                  <div className="sm:col-span-2">
+                    <label htmlFor="walkin-phone" className="block text-xs font-bold text-slate-700 mb-1">
+                      Contact Mobile Number *
+                    </label>
+                    <input
+                      id="walkin-phone"
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      required
+                      aria-invalid={Boolean(walkInErrors.phone)}
+                      maxLength={20}
+                      value={walkInPhone}
+                      onChange={(e) => {
+                        setWalkInPhone(e.target.value);
+                        clearWalkInFieldError("phone");
+                      }}
+                      placeholder="10-digit mobile number"
+                      className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
+                        walkInErrors.phone ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
+                      }`}
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1 mb-0">
+                      For event-day coordination only. Younger students may provide a parent or guardian mobile number.
+                    </p>
+                    {walkInErrors.phone && (
+                      <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
+                        {walkInErrors.phone}
+                      </p>
+                    )}
+                  </div>
+
                   {walkInCategoryId === "student" && (
                     <>
                       <div>
@@ -2058,6 +2120,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                           id="walkin-class-course"
                           type="text"
                           required
+                          aria-invalid={Boolean(walkInErrors.studentClass)}
                           maxLength={120}
                           value={walkInStudentClass}
                           onChange={(e) => {
@@ -2084,6 +2147,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                           id="walkin-institution"
                           type="text"
                           required
+                          aria-invalid={Boolean(walkInErrors.institution)}
                           maxLength={150}
                           list="walkin-institutions-list"
                           value={walkInInstitution}
@@ -2114,6 +2178,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                         <select
                           id="walkin-designation"
                           required
+                          aria-invalid={Boolean(walkInErrors.designationOption)}
                           value={walkInDesignationOption}
                           onChange={(e) => {
                             setWalkInDesignationOption(e.target.value);
@@ -2148,6 +2213,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                           id="walkin-institution"
                           type="text"
                           required
+                          aria-invalid={Boolean(walkInErrors.institution)}
                           maxLength={150}
                           list="walkin-institutions-list"
                           value={walkInInstitution}
@@ -2176,6 +2242,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                             id="walkin-custom-designation"
                             type="text"
                             required
+                            aria-invalid={Boolean(walkInErrors.customDesignation)}
                             maxLength={120}
                             value={walkInCustomDesignation}
                             onChange={(e) => {
@@ -2205,6 +2272,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                       <input
                         id="walkin-institution"
                         type="text"
+                        aria-invalid={Boolean(walkInErrors.institution)}
                         maxLength={150}
                         list="walkin-institutions-list"
                         value={walkInInstitution}
@@ -2231,6 +2299,18 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                     <option key={inst} value={inst} />
                   ))}
                 </datalist>
+
+                <label className="flex items-start gap-2.5 cursor-pointer text-xs text-slate-600 pt-1">
+                  <input
+                    type="checkbox"
+                    checked={walkInPromoConsent}
+                    onChange={(e) => setWalkInPromoConsent(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-blue-600 rounded shrink-0"
+                  />
+                  <span>
+                    Optional: Visitor agrees to receive updates about future college fest events and institutional programs.
+                  </span>
+                </label>
 
                 <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                   <button

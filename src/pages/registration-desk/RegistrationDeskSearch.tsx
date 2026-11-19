@@ -7,6 +7,7 @@ import { issueTicketForRegistration } from "@/lib/ticketClient";
 import { buildTicketQrContent, downloadTicketPdfFile } from "@/lib/ticketPdfService";
 import { TicketPassModal, type TicketPassModalProps } from "@/components/TicketPassModal";
 import { formatIstTimestamp } from "@/lib/registrationDesk";
+import { isValidPhone } from "@/lib/validation";
 import type { TicketRecord } from "@/types/database";
 import {
   AlertCircle,
@@ -75,6 +76,7 @@ export default function RegistrationDeskSearch() {
   const canViewEsports = hasPermission("esports:view");
   const canViewTickets = hasPermission(["tickets:view", "tickets:manage"]);
   const canManageTickets = hasPermission("tickets:manage");
+  const canEditVisitor = hasPermission("visitor:edit");
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -86,6 +88,9 @@ export default function RegistrationDeskSearch() {
   const [ticketsByKey, setTicketsByKey] = useState<Record<string, TicketRecord>>({});
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [editingPhoneId, setEditingPhoneId] = useState<string | null>(null);
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [modalProps, setModalProps] = useState<Omit<TicketPassModalProps, "isOpen" | "onClose"> | null>(null);
   const [printTarget, setPrintTarget] = useState<PrintTarget | null>(null);
   const [printQrUrl, setPrintQrUrl] = useState("");
@@ -241,6 +246,32 @@ export default function RegistrationDeskSearch() {
     }
   };
 
+  const handleSaveVisitorPhone = async (v: VisitorSearchRow) => {
+    if (!canEditVisitor) return;
+    const trimmed = phoneDraft.trim();
+    if (!isValidPhone(trimmed)) {
+      setPhoneError("Enter a valid 10–15 digit contact mobile number.");
+      return;
+    }
+    setBusyId(v.id);
+    setPhoneError(null);
+    try {
+      const { error: updateErr } = await supabase
+        .from("visitor_registrations")
+        .update({ phone: trimmed })
+        .eq("id", v.id);
+      if (updateErr) throw updateErr;
+
+      setVisitors((prev) => prev.map((row) => (row.id === v.id ? { ...row, phone: trimmed } : row)));
+      setEditingPhoneId(null);
+      setPhoneDraft("");
+    } catch (err: any) {
+      setPhoneError(err?.message || "Failed to update contact mobile number.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleDownloadVisitorPdf = async (v: VisitorSearchRow) => {
     setBusyId(v.id);
     try {
@@ -256,7 +287,6 @@ export default function RegistrationDeskSearch() {
         recipientName: v.full_name,
         category: subtitle,
         email: v.email,
-        phone: v.phone || undefined,
         institution: v.institution || undefined,
         registrationType: "visitor",
         daysAttending: v.days_attending || "Both",
@@ -465,8 +495,62 @@ export default function RegistrationDeskSearch() {
                       </p>
                       <p className="text-xs font-mono text-slate-500 m-0 break-all">
                         {v.email}
-                        {v.phone ? ` · ${v.phone}` : ""} · {formatIstTimestamp(v.created_at)}
+                        {v.phone ? ` · ${v.phone}` : " · No mobile on file"} · {formatIstTimestamp(v.created_at)}
                       </p>
+
+                      {canEditVisitor && (
+                        editingPhoneId === v.id ? (
+                          <div className="pt-1.5 flex flex-wrap items-center gap-2">
+                            <input
+                              type="tel"
+                              inputMode="tel"
+                              value={phoneDraft}
+                              onChange={(e) => {
+                                setPhoneDraft(e.target.value);
+                                setPhoneError(null);
+                              }}
+                              placeholder="10-digit mobile number"
+                              aria-label="Contact mobile number"
+                              className="h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs font-mono text-slate-900 w-44"
+                            />
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleSaveVisitorPhone(v)}
+                              className="h-9 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                            >
+                              Save Mobile
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingPhoneId(null);
+                                setPhoneError(null);
+                              }}
+                              className="h-9 px-3 rounded-lg border border-slate-300 text-xs text-slate-600 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            {phoneError && (
+                              <p role="alert" className="w-full text-xs text-rose-600 m-0">
+                                {phoneError}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingPhoneId(v.id);
+                              setPhoneDraft(v.phone || "");
+                              setPhoneError(null);
+                            }}
+                            className="text-xs font-semibold text-blue-700 hover:underline bg-transparent border-0 p-0 cursor-pointer mt-0.5"
+                          >
+                            {v.phone ? "Update Mobile Number" : "+ Add Missing Mobile Number"}
+                          </button>
+                        )
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 shrink-0">

@@ -40,6 +40,7 @@ test("validates Student Visitor conditional mandatory fields strictly", () => {
     categoryId: "student",
     fullName: "",
     email: "bad-email",
+    phone: "",
     studentClass: "",
     designationOption: "",
     customDesignation: "",
@@ -47,6 +48,7 @@ test("validates Student Visitor conditional mandatory fields strictly", () => {
   });
   assert.ok(emptyErrors.fullName);
   assert.ok(emptyErrors.email);
+  assert.ok(emptyErrors.phone);
   assert.ok(emptyErrors.studentClass);
   assert.ok(emptyErrors.institution);
 
@@ -54,6 +56,7 @@ test("validates Student Visitor conditional mandatory fields strictly", () => {
     categoryId: "student",
     fullName: "Aarav Kulkarni",
     email: "aarav@example.edu",
+    phone: "9876543210",
     studentClass: "II PUC Science",
     designationOption: "",
     customDesignation: "",
@@ -62,11 +65,51 @@ test("validates Student Visitor conditional mandatory fields strictly", () => {
   assert.deepEqual(validErrors, {});
 });
 
+test("enforces valid 10-15 digit contact mobile number and accepts parent/guardian guidance", () => {
+  const missingPhone = validateVisitorFormFields({
+    categoryId: "general",
+    fullName: "Diya Sharma",
+    email: "diya@example.com",
+    phone: "   ",
+    studentClass: "",
+    designationOption: "",
+    customDesignation: "",
+    institution: "",
+  });
+  assert.ok(missingPhone.phone);
+  assert.match(missingPhone.phone, /parent or guardian/i);
+
+  const shortPhone = validateVisitorFormFields({
+    categoryId: "student",
+    fullName: "Diya Sharma",
+    email: "diya@example.com",
+    phone: "12345",
+    studentClass: "Class 9",
+    designationOption: "",
+    customDesignation: "",
+    institution: "National Public School",
+  });
+  assert.ok(shortPhone.phone);
+
+  const validInternational = validateVisitorFormFields({
+    categoryId: "student",
+    fullName: "Diya Sharma",
+    email: "diya@example.com",
+    phone: "+91 98765-43210",
+    studentClass: "Class 9",
+    designationOption: "",
+    customDesignation: "",
+    institution: "National Public School",
+  });
+  assert.deepEqual(validInternational, {});
+});
+
 test("validates Faculty & Institutional Delegates designation, Other custom field, and institution", () => {
   const missingDesig = validateVisitorFormFields({
     categoryId: "faculty",
     fullName: "Prof. Meenakshi Rao",
     email: "meenakshi@college.edu",
+    phone: "9845012345",
     studentClass: "",
     designationOption: "",
     customDesignation: "",
@@ -79,6 +122,7 @@ test("validates Faculty & Institutional Delegates designation, Other custom fiel
     categoryId: "faculty",
     fullName: "Prof. Meenakshi Rao",
     email: "meenakshi@college.edu",
+    phone: "9845012345",
     studentClass: "",
     designationOption: "Other",
     customDesignation: " ",
@@ -90,6 +134,7 @@ test("validates Faculty & Institutional Delegates designation, Other custom fiel
     categoryId: "faculty",
     fullName: "Prof. Meenakshi Rao",
     email: "meenakshi@college.edu",
+    phone: "9845012345",
     studentClass: "",
     designationOption: "Other",
     customDesignation: "Academic Dean",
@@ -103,6 +148,7 @@ test("validates General Visitor without class/course and treats institution as o
     categoryId: "general",
     fullName: "Ramesh Gowda",
     email: "ramesh@example.com",
+    phone: "9900112233",
     studentClass: "",
     designationOption: "",
     customDesignation: "",
@@ -114,6 +160,7 @@ test("validates General Visitor without class/course and treats institution as o
     categoryId: "general",
     fullName: "Ramesh Gowda",
     email: "ramesh@example.com",
+    phone: "9900112233",
     studentClass: "",
     designationOption: "",
     customDesignation: "",
@@ -127,6 +174,7 @@ test("requires selecting one of the three categories before submission", () => {
     categoryId: null,
     fullName: "Ananya Verma",
     email: "ananya@example.com",
+    phone: "9900112233",
     studentClass: "",
     designationOption: "",
     customDesignation: "",

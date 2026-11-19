@@ -226,14 +226,16 @@ export const RegisterPage: React.FC = () => {
     };
   }, [searchParams]);
 
-  // Three-Category Visitor Form State (No Registration Number / No Mobile)
+  // Three-Category Visitor Form State
   const [visCategoryId, setVisCategoryId] = useState<VisitorCategoryId | null>(null);
   const [visName, setVisName] = useState("");
   const [visEmail, setVisEmail] = useState("");
+  const [visPhone, setVisPhone] = useState("");
   const [visStudentClass, setVisStudentClass] = useState("");
   const [visDesignationOption, setVisDesignationOption] = useState("");
   const [visCustomDesignation, setVisCustomDesignation] = useState("");
   const [visInstitution, setVisInstitution] = useState("");
+  const [visPromoConsent, setVisPromoConsent] = useState(false);
 
   // Esports Form State
   const [espTeamName, setEspTeamName] = useState("");
@@ -254,6 +256,8 @@ export const RegisterPage: React.FC = () => {
   const [privacyAgreed, setPrivacyAgreed] = useState(false);
   const [honeypot, setHoneypot] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitLockRef = useRef(false);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [registeredRef, setRegisteredRef] = useState<string | null>(null);
   const [issuedVisitorTicket, setIssuedVisitorTicket] = useState<TicketRecord | null>(null);
@@ -271,6 +275,25 @@ export const RegisterPage: React.FC = () => {
       const next = { ...prev };
       delete next[key];
       return next;
+    });
+  };
+
+  const focusFirstInvalidControl = () => {
+    window.requestAnimationFrame(() => {
+      const root = formRef.current;
+      if (!root) return;
+      const invalidEl = root.querySelector<HTMLElement>(
+        '[aria-invalid="true"], input[aria-invalid="true"], select[aria-invalid="true"]'
+      );
+      const target =
+        invalidEl ||
+        root.querySelector<HTMLElement>('[role="alert"]');
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (typeof (target as any).focus === "function" && target.tagName !== "P" && target.tagName !== "DIV") {
+          target.focus({ preventScroll: true });
+        }
+      }
     });
   };
 
@@ -409,6 +432,7 @@ export const RegisterPage: React.FC = () => {
       body += `Visitor Category: ${catLabel}\n`;
       body += `Full Name: ${visName}\n`;
       body += `Email: ${visEmail}\n`;
+      body += `Contact Mobile: ${visPhone}\n`;
       if (visCategoryId === "student") {
         body += `Class / Course: ${visStudentClass}\n`;
         body += `College / Institution Name: ${visInstitution}\n`;
@@ -455,7 +479,7 @@ export const RegisterPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (honeypot) return; // bot detected
+    if (honeypot || submitLockRef.current || isSubmitting) return;
 
     const errors: Record<string, string> = {};
     let nextPlayerErrors: Record<number, PlayerFieldErrors> = {};
@@ -466,6 +490,7 @@ export const RegisterPage: React.FC = () => {
         categoryId: visCategoryId,
         fullName: visName,
         email: visEmail,
+        phone: visPhone,
         studentClass: visStudentClass,
         designationOption: visDesignationOption,
         customDesignation: visCustomDesignation,
@@ -489,7 +514,7 @@ export const RegisterPage: React.FC = () => {
         errors.espEmail = "Please enter a valid representative email address.";
       }
       if (!isValidPhone(espPhone)) {
-        errors.espPhone = "Please enter a valid 10-digit mobile number.";
+        errors.espPhone = "Please enter a valid 10–15 digit mobile number.";
       }
       if (!isValidInstitution(espInstitution, 150)) {
         errors.espInstitution = "Please enter your college or institution name.";
@@ -521,11 +546,13 @@ export const RegisterPage: React.FC = () => {
       setPlayerFieldErrors(nextPlayerErrors);
       const firstMsg = errors.selectedGameId || Object.values(errors)[0] || rosterErrorMsg;
       setSubmitError(firstMsg || "Please complete all required fields before submitting.");
+      focusFirstInvalidControl();
       return;
     }
 
     setFieldErrors({});
     setPlayerFieldErrors({});
+    submitLockRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
     setIssuedVisitorTicket(null);
@@ -537,6 +564,7 @@ export const RegisterPage: React.FC = () => {
         const canonicalCategory = getDbCategoryFromId(visCategoryId);
         const cleanName = visName.trim();
         const cleanEmail = visEmail.trim().toLowerCase();
+        const cleanPhone = visPhone.trim();
         const cleanClass = visCategoryId === "student" ? visStudentClass.trim() : null;
         const cleanDesignation =
           visCategoryId === "faculty"
@@ -552,12 +580,13 @@ export const RegisterPage: React.FC = () => {
         const submissionRes = await submitVisitorAndIssueTicket({
           fullName: cleanName,
           email: cleanEmail,
-          phone: null,
+          phone: cleanPhone,
           institution: cleanInstitution,
           visitorCategory: canonicalCategory,
           studentClass: cleanClass,
           designation: cleanDesignation,
           daysAttending: "Both",
+          promoConsent: visPromoConsent,
         });
 
         const ticketRef = submissionRes.ticket?.ticket_ref || submissionRes.registrationRef;
@@ -659,6 +688,7 @@ export const RegisterPage: React.FC = () => {
       setSubmitError(err.message || "An error occurred during submission.");
     } finally {
       setIsSubmitting(false);
+      submitLockRef.current = false;
     }
   };
 
@@ -965,10 +995,12 @@ export const RegisterPage: React.FC = () => {
                         setVisCategoryId(null);
                         setVisName("");
                         setVisEmail("");
+                        setVisPhone("");
                         setVisStudentClass("");
                         setVisDesignationOption("");
                         setVisCustomDesignation("");
                         setVisInstitution("");
+                        setVisPromoConsent(false);
                       } else if (selectedType === "esports") {
                         setEspTeamName("");
                         setEspRep("");
@@ -991,7 +1023,7 @@ export const RegisterPage: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                <form onSubmit={handleSubmit} noValidate className="space-y-6">
+                <form ref={formRef} onSubmit={handleSubmit} noValidate className="space-y-6">
                   {/* Honeypot field (hidden) */}
                   <input
                     type="text"
@@ -1086,6 +1118,7 @@ export const RegisterPage: React.FC = () => {
                             type="text"
                             autoComplete="name"
                             required
+                            aria-invalid={Boolean(fieldErrors.fullName)}
                             maxLength={120}
                             value={visName}
                             onChange={(e) => {
@@ -1114,6 +1147,7 @@ export const RegisterPage: React.FC = () => {
                             autoCapitalize="none"
                             autoComplete="email"
                             required
+                            aria-invalid={Boolean(fieldErrors.email)}
                             maxLength={254}
                             value={visEmail}
                             onChange={(e) => {
@@ -1130,6 +1164,37 @@ export const RegisterPage: React.FC = () => {
                           )}
                         </div>
 
+                        <div>
+                          <label htmlFor="visitor-phone" className="form-label">
+                            Contact Mobile Number *
+                          </label>
+                          <input
+                            id="visitor-phone"
+                            name="phone"
+                            type="tel"
+                            inputMode="tel"
+                            autoComplete="tel"
+                            required
+                            aria-invalid={Boolean(fieldErrors.phone)}
+                            maxLength={20}
+                            value={visPhone}
+                            onChange={(e) => {
+                              setVisPhone(e.target.value);
+                              clearFieldError("phone");
+                            }}
+                            placeholder="10-digit mobile number"
+                            className={`form-input ${fieldErrors.phone ? "!border-red-500" : ""}`}
+                          />
+                          <p className="text-xs text-[#191936]/70 mt-1 mb-0">
+                            Used only for event check-in coordination or important event-day updates. Younger students may provide a parent or guardian mobile number.
+                          </p>
+                          {fieldErrors.phone && (
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
+                              {fieldErrors.phone}
+                            </p>
+                          )}
+                        </div>
+
                         {/* Conditional: STUDENT VISITOR */}
                         {visCategoryId === "student" && (
                           <>
@@ -1142,6 +1207,7 @@ export const RegisterPage: React.FC = () => {
                                 name="student_class"
                                 type="text"
                                 required
+                                aria-invalid={Boolean(fieldErrors.studentClass)}
                                 maxLength={120}
                                 value={visStudentClass}
                                 onChange={(e) => {
@@ -1167,6 +1233,7 @@ export const RegisterPage: React.FC = () => {
                                 name="institution"
                                 type="text"
                                 required
+                                aria-invalid={Boolean(fieldErrors.institution)}
                                 maxLength={150}
                                 list="visitor-institutions-list"
                                 value={visInstitution}
@@ -1197,6 +1264,7 @@ export const RegisterPage: React.FC = () => {
                                 id="visitor-designation"
                                 name="designation"
                                 required
+                                aria-invalid={Boolean(fieldErrors.designationOption)}
                                 value={visDesignationOption}
                                 onChange={(e) => {
                                   setVisDesignationOption(e.target.value);
@@ -1230,6 +1298,7 @@ export const RegisterPage: React.FC = () => {
                                 name="institution"
                                 type="text"
                                 required
+                                aria-invalid={Boolean(fieldErrors.institution)}
                                 maxLength={150}
                                 list="visitor-institutions-list"
                                 value={visInstitution}
@@ -1257,6 +1326,7 @@ export const RegisterPage: React.FC = () => {
                                   name="custom_designation"
                                   type="text"
                                   required
+                                  aria-invalid={Boolean(fieldErrors.customDesignation)}
                                   maxLength={120}
                                   value={visCustomDesignation}
                                   onChange={(e) => {
@@ -1286,6 +1356,7 @@ export const RegisterPage: React.FC = () => {
                               id="visitor-institution"
                               name="institution"
                               type="text"
+                              aria-invalid={Boolean(fieldErrors.institution)}
                               maxLength={150}
                               list="visitor-institutions-list"
                               value={visInstitution}
@@ -1344,6 +1415,7 @@ export const RegisterPage: React.FC = () => {
                             id="esp-team-name"
                             type="text"
                             required
+                            aria-invalid={Boolean(fieldErrors.espTeamName)}
                             value={espTeamName}
                             onChange={(e) => {
                               setEspTeamName(e.target.value);
@@ -1363,6 +1435,7 @@ export const RegisterPage: React.FC = () => {
                           <label htmlFor="esp-game-select" className="form-label">Game Title *</label>
                           <select
                             id="esp-game-select"
+                            aria-invalid={Boolean(fieldErrors.selectedGameId)}
                             value={selectedGameId}
                             onChange={(e) => handleGameChange(e.target.value)}
                             className={`form-input ${fieldErrors.selectedGameId ? "!border-red-500" : ""}`}
@@ -1396,6 +1469,7 @@ export const RegisterPage: React.FC = () => {
                             type="text"
                             autoComplete="name"
                             required
+                            aria-invalid={Boolean(fieldErrors.espRep)}
                             value={espRep}
                             onChange={(e) => {
                               setEspRep(e.target.value);
@@ -1420,6 +1494,7 @@ export const RegisterPage: React.FC = () => {
                             autoCapitalize="none"
                             autoComplete="email"
                             required
+                            aria-invalid={Boolean(fieldErrors.espEmail)}
                             value={espEmail}
                             onChange={(e) => {
                               setEspEmail(e.target.value);
@@ -1443,6 +1518,7 @@ export const RegisterPage: React.FC = () => {
                             inputMode="tel"
                             autoComplete="tel"
                             required
+                            aria-invalid={Boolean(fieldErrors.espPhone)}
                             value={espPhone}
                             onChange={(e) => {
                               setEspPhone(e.target.value);
@@ -1464,6 +1540,7 @@ export const RegisterPage: React.FC = () => {
                             id="esp-institution"
                             type="text"
                             required
+                            aria-invalid={Boolean(fieldErrors.espInstitution)}
                             list="visitor-institutions-list"
                             value={espInstitution}
                             onChange={(e) => {
@@ -1525,6 +1602,7 @@ export const RegisterPage: React.FC = () => {
                                       id={`player-${idx}-name`}
                                       type="text"
                                       required
+                                      aria-invalid={Boolean(rowErr.name)}
                                       value={player.name}
                                       onChange={(e) => handlePlayerChange(idx, "name", e.target.value)}
                                       placeholder={`Player ${idx + 1} Full Name`}
@@ -1545,6 +1623,7 @@ export const RegisterPage: React.FC = () => {
                                       id={`player-${idx}-ign`}
                                       type="text"
                                       required
+                                      aria-invalid={Boolean(rowErr.inGameId)}
                                       value={player.inGameId}
                                       onChange={(e) => handlePlayerChange(idx, "inGameId", e.target.value)}
                                       placeholder={`Player ${idx + 1} In-Game Tag/ID`}
@@ -1564,6 +1643,7 @@ export const RegisterPage: React.FC = () => {
                                     <select
                                       id={`player-${idx}-inst-type`}
                                       required
+                                      aria-invalid={Boolean(rowErr.institutionType)}
                                       value={player.institutionType}
                                       onChange={(e) =>
                                         handlePlayerChange(idx, "institutionType", e.target.value)
@@ -1592,6 +1672,7 @@ export const RegisterPage: React.FC = () => {
                                       id={`player-${idx}-inst-name`}
                                       type="text"
                                       required
+                                      aria-invalid={Boolean(rowErr.institutionName)}
                                       maxLength={150}
                                       list="visitor-institutions-list"
                                       value={player.institutionName}
@@ -1616,6 +1697,7 @@ export const RegisterPage: React.FC = () => {
                                       id={`player-${idx}-course`}
                                       type="text"
                                       required
+                                      aria-invalid={Boolean(rowErr.courseOrClass)}
                                       maxLength={100}
                                       list={`sn3-player-course-${idx}`}
                                       value={player.courseOrClass}
@@ -1645,6 +1727,7 @@ export const RegisterPage: React.FC = () => {
                                       id={`player-${idx}-year`}
                                       type="text"
                                       required
+                                      aria-invalid={Boolean(rowErr.currentYearOrClass)}
                                       maxLength={80}
                                       list={`sn3-player-year-${idx}`}
                                       value={player.currentYearOrClass}
@@ -1678,6 +1761,7 @@ export const RegisterPage: React.FC = () => {
                           <input
                             type="checkbox"
                             required
+                            aria-invalid={Boolean(fieldErrors.espRulesAgreed)}
                             checked={espRulesAgreed}
                             onChange={(e) => {
                               setEspRulesAgreed(e.target.checked);
@@ -1702,12 +1786,13 @@ export const RegisterPage: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Common Privacy Policy Checkbox */}
-                  <div className="pt-2">
+                  {/* Common Privacy Policy & Optional Updates Checkboxes */}
+                  <div className="pt-2 space-y-3">
                     <label className="flex items-start gap-3 cursor-pointer text-sm text-[#191936] min-h-[44px]">
                       <input
                         type="checkbox"
                         required
+                        aria-invalid={Boolean(fieldErrors.privacyAgreed)}
                         checked={privacyAgreed}
                         onChange={(e) => {
                           setPrivacyAgreed(e.target.checked);
@@ -1721,6 +1806,24 @@ export const RegisterPage: React.FC = () => {
                       <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                         {fieldErrors.privacyAgreed}
                       </p>
+                    )}
+
+                    {selectedType === "visitor" && (
+                      <label
+                        htmlFor="visitor-promo-consent"
+                        className="flex items-start gap-3 cursor-pointer text-xs sm:text-sm text-[#191936]/80 min-h-[44px]"
+                      >
+                        <input
+                          id="visitor-promo-consent"
+                          type="checkbox"
+                          checked={visPromoConsent}
+                          onChange={(e) => setVisPromoConsent(e.target.checked)}
+                          className="w-5 h-5 mt-0.5 rounded border-gray-300 text-[#4549D8] shrink-0"
+                        />
+                        <span>
+                          Optional: Send me updates about future college fest events and institutional programs.
+                        </span>
+                      </label>
                     )}
                   </div>
 

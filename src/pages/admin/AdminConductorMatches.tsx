@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { useRealtimeSubscription } from "@/lib/realtime/useRealtimeSubscription";
@@ -126,8 +126,16 @@ export default function AdminConductorMatches() {
     return visibleMatches.find((m) => m.id === selectedMatchId) || visibleMatches[0];
   }, [visibleMatches, selectedMatchId]);
 
+  const loadedMatchIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!activeMatch) return;
+    if (!activeMatch) {
+      loadedMatchIdRef.current = null;
+      return;
+    }
+    if (loadedMatchIdRef.current === activeMatch.id) return;
+    loadedMatchIdRef.current = activeMatch.id;
+
     setDraftScoreA(activeMatch.score_a ?? 0);
     setDraftScoreB(activeMatch.score_b ?? 0);
     setDraftWinnerId(activeMatch.winner_id || "");
@@ -156,7 +164,7 @@ export default function AdminConductorMatches() {
     } else {
       setDraftBrRows([]);
     }
-  }, [activeMatch?.id, activeMatch?.br_results, teams]);
+  }, [activeMatch, teams]);
 
   const teamMap = useMemo(() => {
     const map = new Map<string, Registration>();

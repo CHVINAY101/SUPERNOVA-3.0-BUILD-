@@ -24,6 +24,7 @@ export interface VisitorTicketSubmitPayload {
   competitionNotes?: string | null;
   daysAttending?: string;
   registrationSource?: "public" | "walk_in";
+  promoConsent?: boolean;
 }
 
 export interface VisitorTicketSubmitResult {
@@ -82,12 +83,23 @@ export async function submitVisitorAndIssueTicket(
     ...baseRpcArgs,
     p_registration_source: payload.registrationSource || "public",
   };
+  const rpcArgsWithPromo = {
+    ...rpcArgsWithSource,
+    p_promo_consent: Boolean(payload.promoConsent),
+  };
 
   // 1. Primary unified RPC returning registration_ref + authoritative ticket + qr_token
   let { data: ticketRpcData, error: ticketRpcErr } = await supabase.rpc(
     "submit_visitor_and_issue_ticket",
-    rpcArgsWithSource
+    rpcArgsWithPromo
   );
+
+  // Fallback to 18-param signature if 20261129 migration has not been applied yet
+  if (ticketRpcErr && isMissingRpcError(ticketRpcErr)) {
+    const sourceTry = await supabase.rpc("submit_visitor_and_issue_ticket", rpcArgsWithSource);
+    ticketRpcData = sourceTry.data;
+    ticketRpcErr = sourceTry.error;
+  }
 
   // Fallback to 17-param signature if 20261118 migration has not been applied yet
   if (ticketRpcErr && isMissingRpcError(ticketRpcErr)) {
@@ -113,8 +125,13 @@ export async function submitVisitorAndIssueTicket(
   // 2. Fallback to submit_visitor_registration_v2
   let { data: v2Data, error: v2Error } = await supabase.rpc(
     "submit_visitor_registration_v2",
-    rpcArgsWithSource
+    rpcArgsWithPromo
   );
+  if (v2Error && isMissingRpcError(v2Error)) {
+    const sourceV2 = await supabase.rpc("submit_visitor_registration_v2", rpcArgsWithSource);
+    v2Data = sourceV2.data;
+    v2Error = sourceV2.error;
+  }
   if (v2Error && isMissingRpcError(v2Error)) {
     const legacyV2 = await supabase.rpc("submit_visitor_registration_v2", baseRpcArgs);
     v2Data = legacyV2.data;

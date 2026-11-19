@@ -1171,7 +1171,7 @@ export function calculateGroupStandings(
   }
 
   for (const m of matches) {
-    if (m.status !== "completed" || !m.team_a_id || !m.team_b_id) continue;
+    if (m.status !== "completed" || m.match_format === "BYE" || !m.team_a_id || !m.team_b_id) continue;
     const rowA = map.get(m.team_a_id);
     const rowB = map.get(m.team_b_id);
     if (!rowA || !rowB) continue;
@@ -2358,5 +2358,125 @@ export function buildConnectedBracketLayout(params: {
     hasConnectedBracket: true,
   };
 }
+
+export interface BracketRoundListItem {
+  match: Match;
+  teamALabel: string;
+  teamBLabel: string;
+  teamAIsPlaceholder: boolean;
+  teamBIsPlaceholder: boolean;
+  isBye: boolean;
+  stageTag: string;
+}
+
+export interface BracketRoundListGroup {
+  key: string;
+  roundLabel: string;
+  bracketSide: "winners" | "losers" | "grand_final" | "knockout";
+  items: BracketRoundListItem[];
+}
+
+export function buildBracketRoundListGroups(params: {
+  matches: Match[];
+  teamNameById: Map<string, string>;
+  format?: TournamentFormat | string | null;
+}): BracketRoundListGroup[] {
+  const bracketMatches = params.matches.filter(
+    (m) => m.bracket_side !== "battle_royale" && !(m.match_format || "").toUpperCase().includes("BR")
+  );
+  if (bracketMatches.length === 0) return [];
+
+  const matchById = new Map(bracketMatches.map((m) => [m.id, m]));
+  const winnerFeedersByTarget = new Map<string, { a?: Match; b?: Match }>();
+  const loserFeedersByTarget = new Map<string, { a?: Match; b?: Match }>();
+
+  for (const m of bracketMatches) {
+    if (m.next_match_id) {
+      const entry = winnerFeedersByTarget.get(m.next_match_id) || {};
+      if (m.next_match_slot === "b") entry.b = m;
+      else entry.a = m;
+      winnerFeedersByTarget.set(m.next_match_id, entry);
+    }
+    if (m.loser_next_match_id) {
+      const entry = loserFeedersByTarget.get(m.loser_next_match_id) || {};
+      if (m.loser_next_match_slot === "b") entry.b = m;
+      else entry.a = m;
+      loserFeedersByTarget.set(m.loser_next_match_id, entry);
+    }
+  }
+
+  const resolveSlot = (m: Match, slot: "a" | "b"): { label: string; isPlaceholder: boolean } => {
+    const teamId = slot === "a" ? m.team_a_id : m.team_b_id;
+    if (teamId) {
+      return { label: params.teamNameById.get(teamId) || "Squad", isPlaceholder: false };
+    }
+    if (m.match_format === "BYE" && slot === "b") {
+      return { label: "BYE", isPlaceholder: true };
+    }
+    const wf = winnerFeedersByTarget.get(m.id)?.[slot];
+    if (wf && matchById.has(wf.id)) {
+      return { label: `Winner of ${wf.match_code || wf.round}`, isPlaceholder: true };
+    }
+    const lf = loserFeedersByTarget.get(m.id)?.[slot];
+    if (lf && matchById.has(lf.id)) {
+      return { label: `Loser of ${lf.match_code || lf.round}`, isPlaceholder: true };
+    }
+    return { label: "TBD", isPlaceholder: true };
+  };
+
+  const hasLosers = bracketMatches.some((m) => m.bracket_side === "losers");
+  const sideOrder: Record<string, number> = hasLosers
+    ? { winners: 1, losers: 2, grand_final: 3, knockout: 1, group: 0 }
+    : { group: 0, knockout: 1, winners: 1, grand_final: 2, losers: 3 };
+
+  const groupMap = new Map<string, BracketRoundListGroup>();
+
+  const sortedMatches = [...bracketMatches].sort((a, b) => {
+    const sA = sideOrder[a.bracket_side || "knockout"] ?? 9;
+    const sB = sideOrder[b.bracket_side || "knockout"] ?? 9;
+    if (sA !== sB) return sA - sB;
+    const rA = a.round_number || 1;
+    const rB = b.round_number || 1;
+    if (rA !== rB) return rA - rB;
+    return (a.match_number || 1) - (b.match_number || 1);
+  });
+
+  for (const m of sortedMatches) {
+    const side: BracketRoundListGroup["bracketSide"] =
+      m.bracket_side === "losers"
+        ? "losers"
+        : m.bracket_side === "grand_final"
+        ? "grand_final"
+        : hasLosers && m.bracket_side === "winners"
+        ? "winners"
+        : "knockout";
+    const rNum = m.round_number || 1;
+    const key = `${side}::${rNum}::${m.round || ""}`;
+    let grp = groupMap.get(key);
+    if (!grp) {
+      const roundLabel =
+        side === "grand_final"
+          ? "Grand Final"
+          : m.round?.trim() || (side === "losers" ? `Losers Round ${rNum}` : `Round ${rNum}`);
+      grp = { key, roundLabel, bracketSide: side, items: [] };
+      groupMap.set(key, grp);
+    }
+
+    const slotA = resolveSlot(m, "a");
+    const slotB = resolveSlot(m, "b");
+    grp.items.push({
+      match: m,
+      teamALabel: slotA.label,
+      teamBLabel: slotB.label,
+      teamAIsPlaceholder: slotA.isPlaceholder,
+      teamBIsPlaceholder: slotB.isPlaceholder,
+      isBye: m.match_format === "BYE",
+      stageTag: side === "losers" ? "Losers" : side === "grand_final" ? "Final" : hasLosers ? "Winners" : m.group_name || "Bracket",
+    });
+  }
+
+  return Array.from(groupMap.values());
+}
+
 
 

@@ -69,6 +69,7 @@ export function TournamentResetRecoverySection({
   const [reason, setReason] = useState("");
   const [confirmationText, setConfirmationText] = useState("");
   const [preview, setPreview] = useState<EsportsResetPreview | null>(null);
+  const [previewUnavailable, setPreviewUnavailable] = useState(false);
   const [backups, setBackups] = useState<EsportsResetBackupSummary[]>([]);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [executing, setExecuting] = useState(false);
@@ -82,8 +83,12 @@ export function TournamentResetRecoverySection({
 
   const effectiveGameId = scope === "full_reset" ? null : targetGameId || selectedGame?.id || null;
 
-  const loadPreviewAndBackups = useCallback(async () => {
+  const loadPreviewAndBackups = useCallback(async (forceRetry = false) => {
     if (!isSuperAdmin) return;
+    if (previewUnavailable && !forceRetry) return;
+    if (forceRetry) {
+      setPreviewUnavailable(false);
+    }
     setLoadingPreview(true);
     try {
       const [prevRes, backupRes] = await Promise.all([
@@ -100,7 +105,13 @@ export function TournamentResetRecoverySection({
 
       if (!prevRes.error && prevRes.data) {
         setPreview(prevRes.data as EsportsResetPreview);
+        setPreviewUnavailable(false);
       } else {
+        const errCode = String((prevRes.error as any)?.code || "");
+        const errMsg = String((prevRes.error as any)?.message || "").toLowerCase();
+        if (errCode === "PGRST202" || errCode === "42883" || errMsg.includes("could not find the function") || errMsg.includes("404")) {
+          setPreviewUnavailable(true);
+        }
         setPreview(null);
       }
 
@@ -112,10 +123,10 @@ export function TournamentResetRecoverySection({
     } finally {
       setLoadingPreview(false);
     }
-  }, [isSuperAdmin, scope, effectiveGameId]);
+  }, [isSuperAdmin, scope, effectiveGameId, previewUnavailable]);
 
   useEffect(() => {
-    loadPreviewAndBackups();
+    void loadPreviewAndBackups(false);
   }, [loadPreviewAndBackups]);
 
   if (!isSuperAdmin) {
@@ -171,7 +182,7 @@ export function TournamentResetRecoverySection({
 
       setConfirmationText("");
       setReason("");
-      await loadPreviewAndBackups();
+      await loadPreviewAndBackups(false);
 
       const label =
         scope === "results_only"
@@ -206,7 +217,7 @@ export function TournamentResetRecoverySection({
           </div>
           <button
             type="button"
-            onClick={loadPreviewAndBackups}
+            onClick={() => void loadPreviewAndBackups(true)}
             disabled={loadingPreview}
             className="min-h-[38px] px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 inline-flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
           >

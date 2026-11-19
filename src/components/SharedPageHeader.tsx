@@ -40,13 +40,14 @@ export function SharedPageHeader({ title, subtitle, tag }: SharedPageHeaderProps
     });
   };
 
-  const chars = title.split("");
+  const words = title.split(" ");
+  let globalCharIndex = 0;
 
   return (
     <div
       style={{
         position: "relative",
-        height: "clamp(220px, 30vh, 320px)",
+        minHeight: "clamp(220px, 30vh, 320px)",
         width: "100%",
         background: "linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%)",
         display: "flex",
@@ -126,7 +127,7 @@ export function SharedPageHeader({ title, subtitle, tag }: SharedPageHeaderProps
           style={{
             fontFamily: "'Bricolage Grotesque', sans-serif",
             fontWeight: 800,
-            fontSize: "clamp(2.2rem, 5.2vw, 4rem)",
+            fontSize: "clamp(1.85rem, 5.2vw, 4rem)",
             lineHeight: 1.08,
             color: "#0F172A",
             letterSpacing: "-0.02em",
@@ -134,16 +135,29 @@ export function SharedPageHeader({ title, subtitle, tag }: SharedPageHeaderProps
             userSelect: "none",
           }}
         >
-          {chars.map((c, i) => (
+          {words.map((word, wIdx) => (
             <span
-              key={i}
-              ref={(el) => (lettersRef.current[i] = el)}
-              style={{
-                display: "inline-block",
-                transition: "transform 0.15s ease, color 0.15s ease",
-              }}
+              key={wIdx}
+              style={{ display: "inline-block", whiteSpace: "nowrap" }}
             >
-              {c === " " ? "\u00A0" : c}
+              {word.split("").map((c) => {
+                const idx = globalCharIndex++;
+                return (
+                  <span
+                    key={idx}
+                    ref={(el) => {
+                      lettersRef.current[idx] = el;
+                    }}
+                    style={{
+                      display: "inline-block",
+                      transition: "transform 0.15s ease, color 0.15s ease",
+                    }}
+                  >
+                    {c}
+                  </span>
+                );
+              })}
+              {wIdx < words.length - 1 && <span>{"\u00A0"}</span>}
             </span>
           ))}
         </h1>

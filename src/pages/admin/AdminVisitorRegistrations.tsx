@@ -18,6 +18,7 @@ import {
   normalizeVisitorCategory,
   type CanonicalVisitorCategory,
 } from "@/lib/visitorCategories";
+import { isValidPhone } from "@/lib/validation";
 import { 
   Gamepad2, 
   Search, 
@@ -51,6 +52,7 @@ export interface VisitorRegistrationRecord {
   competition_notes?: string | null;
   days_attending?: string | null;
   status: string;
+  promo_consent?: boolean | null;
   check_in_status?: string | null;
   checked_in_at?: string | null;
   checked_in_by_email?: string | null;
@@ -89,10 +91,19 @@ export default function AdminVisitorRegistrations() {
 
   // Detail Drawer
   const [inspectedRecord, setInspectedRecord] = useState<VisitorRegistrationRecord | null>(null);
+  const [editingPhone, setEditingPhone] = useState(false);
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const [phoneError, setPhoneError] = useState<string | null>(null);
 
   // Safe Archive Modal
   const [archiveTarget, setArchiveTarget] = useState<VisitorRegistrationRecord | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
+
+  useEffect(() => {
+    setEditingPhone(false);
+    setPhoneDraft(inspectedRecord?.phone || "");
+    setPhoneError(null);
+  }, [inspectedRecord?.id]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -162,6 +173,39 @@ export default function AdminVisitorRegistrations() {
     } catch (err: any) {
       console.error("Status update error:", err);
       setStatusMsg({ type: "error", text: "Failed to update registration status. Try again." });
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleSavePhone = async () => {
+    if (!inspectedRecord || !canEdit) return;
+    const trimmed = phoneDraft.trim();
+    if (!isValidPhone(trimmed)) {
+      setPhoneError("Enter a valid 10–15 digit contact mobile number.");
+      return;
+    }
+    setPhoneError(null);
+    setSavingId(inspectedRecord.id);
+    try {
+      const { error: updateErr } = await supabase
+        .from("visitor_registrations")
+        .update({ phone: trimmed })
+        .eq("id", inspectedRecord.id);
+      if (updateErr) throw updateErr;
+
+      setRegistrations((prev) =>
+        prev ? prev.map((item) => (item.id === inspectedRecord.id ? { ...item, phone: trimmed } : item)) : null
+      );
+      setInspectedRecord({ ...inspectedRecord, phone: trimmed });
+      setEditingPhone(false);
+      setStatusMsg({
+        type: "success",
+        text: `Updated contact mobile number for ${inspectedRecord.full_name}.`,
+      });
+      setTimeout(() => setStatusMsg(null), 4000);
+    } catch (err: any) {
+      setPhoneError(err?.message || "Failed to update contact mobile number.");
     } finally {
       setSavingId(null);
     }
@@ -368,6 +412,7 @@ export default function AdminVisitorRegistrations() {
           item.ticket_ref ?? "",
           item.full_name,
           item.email,
+          item.phone ?? "",
           item.institution ?? "",
           item.student_class ?? "",
           item.designation ?? "",
@@ -426,6 +471,8 @@ export default function AdminVisitorRegistrations() {
       "Full Name",
       "Category",
       "Email",
+      "Contact Phone",
+      "Promo Updates Opt-In",
       "Class / Course",
       "Designation / Role",
       "College / Institution",
@@ -442,6 +489,8 @@ export default function AdminVisitorRegistrations() {
       sanitizeCsv(r.full_name),
       sanitizeCsv(getParsedCategory(r)),
       sanitizeCsv(r.email),
+      sanitizeCsv(r.phone || ""),
+      sanitizeCsv(r.promo_consent ? "YES" : "NO"),
       sanitizeCsv(r.student_class || ""),
       sanitizeCsv(r.designation || ""),
       sanitizeCsv(r.institution || ""),
@@ -777,9 +826,12 @@ export default function AdminVisitorRegistrations() {
                         )}
                       </td>
 
-                      {/* Email */}
+                      {/* Contact Email & Mobile */}
                       <td className="py-3.5 px-4 font-mono text-xs">
                         <span className="block text-slate-800 truncate max-w-[200px]">{row.email}</span>
+                        <span className="block text-[11px] text-slate-500 mt-0.5">
+                          {row.phone || "No mobile on file"}
+                        </span>
                       </td>
 
                       {/* Status & Gate Check-In */}
@@ -1050,6 +1102,68 @@ export default function AdminVisitorRegistrations() {
                   <a href={`mailto:${inspectedRecord.email}`} className="text-blue-700 font-mono hover:underline">
                     {inspectedRecord.email}
                   </a>
+                </div>
+                <div className="space-y-1.5 py-1 border-y border-slate-200/70">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-slate-500">Contact Mobile:</span>
+                    {!editingPhone ? (
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-semibold text-slate-900">
+                          {inspectedRecord.phone || "Not recorded"}
+                        </span>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPhoneDraft(inspectedRecord.phone || "");
+                              setPhoneError(null);
+                              setEditingPhone(true);
+                            }}
+                            className="px-2 py-0.5 rounded bg-white border border-slate-300 text-[11px] font-semibold text-blue-700 hover:bg-blue-50 cursor-pointer"
+                          >
+                            {inspectedRecord.phone ? "Edit" : "Add Mobile"}
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="tel"
+                          inputMode="tel"
+                          value={phoneDraft}
+                          onChange={(e) => {
+                            setPhoneDraft(e.target.value);
+                            setPhoneError(null);
+                          }}
+                          placeholder="10-digit mobile"
+                          className="h-8 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-mono text-slate-900 w-36"
+                        />
+                        <button
+                          type="button"
+                          disabled={savingId === inspectedRecord.id}
+                          onClick={handleSavePhone}
+                          className="h-8 px-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold cursor-pointer disabled:opacity-50"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingPhone(false);
+                            setPhoneError(null);
+                          }}
+                          className="h-8 px-2 rounded-lg border border-slate-300 text-[11px] text-slate-600 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {phoneError && (
+                    <p role="alert" className="text-[11px] text-rose-600 m-0 text-right">
+                      {phoneError}
+                    </p>
+                  )}
                 </div>
                 {(getParsedCategory(inspectedRecord) === "Student Visitor" || Boolean(inspectedRecord.student_class)) && (
                   <div className="flex justify-between">
