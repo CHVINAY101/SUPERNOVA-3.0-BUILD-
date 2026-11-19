@@ -26,6 +26,9 @@ export type AuthErrorCategory =
 export interface SignInResult {
   error: string | null;
   isAdmin?: boolean;
+  role?: AdminRole | null;
+  accountStatus?: AccountStatus | null;
+  permissions?: Set<PermissionKey>;
   errorCategory?: AuthErrorCategory;
   rawError?: any;
   statusCode?: number;
@@ -44,7 +47,12 @@ interface AuthContextValue {
   canAccessRoute: (pathname: string) => boolean;
   signIn: (email: string, password: string) => Promise<SignInResult>;
   signOut: () => Promise<void>;
-  refreshRole: () => Promise<void>;
+  refreshRole: () => Promise<{
+    isAdmin: boolean;
+    role: AdminRole | null;
+    accountStatus: AccountStatus | null;
+    permissions: Set<PermissionKey>;
+  } | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -481,7 +489,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
 
       setLoading(false);
-      return { error: null, isAdmin: true };
+      return {
+        error: null,
+        isAdmin: true,
+        role: adminResult.role,
+        accountStatus: adminResult.accountStatus,
+        permissions: adminResult.permissions,
+      };
     } catch (err: any) {
       setLoading(false);
       const errMsg = err?.message || "";
@@ -520,9 +534,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshRole = async () => {
     if (session) {
       setLoading(true);
-      await verifyAdminStatus(session);
+      const resolved = await verifyAdminStatus(session);
       setLoading(false);
+      return resolved;
     }
+    return null;
   };
 
   const hasPermission = useCallback(

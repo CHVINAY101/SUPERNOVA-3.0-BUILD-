@@ -665,14 +665,14 @@ export const RegisterPage: React.FC = () => {
 
 
   return (
-    <div className="w-full bg-[#F8F7FC] min-h-screen pb-24">
+    <div className="w-full bg-[#F8F7FC] min-h-screen pb-20">
       {/* Header Band */}
-      <div className="pt-8 sm:pt-12 pb-12 sm:pb-16 bg-white border-b border-[#EAEAF2] relative">
-        <div className="max-w-5xl mx-auto px-6 sm:px-8 text-center">
-          <span className="inline-block text-xs uppercase tracking-[0.2em] font-mono text-blue-600 font-bold mb-3">
+      <div className="pt-8 sm:pt-12 pb-8 sm:pb-12 bg-white border-b border-[#EAEAF2] relative">
+        <div className="max-w-3xl mx-auto px-4 sm:px-8 text-center">
+          <span className="inline-block text-xs uppercase tracking-[0.2em] font-mono text-blue-600 font-bold mb-2">
             {content.eyebrow}
           </span>
-          <h1 className="text-3xl sm:text-5xl md:text-6xl font-display font-extrabold uppercase tracking-tight text-[#0F172A] mb-4">
+          <h1 className="text-3xl sm:text-5xl font-display font-extrabold uppercase tracking-tight text-[#0F172A] mb-3">
             {content.heading}
           </h1>
           <p className="font-mono text-xs sm:text-sm font-semibold text-slate-600 max-w-2xl mx-auto">
@@ -689,10 +689,10 @@ export const RegisterPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-6 sm:px-8 pt-12">
+      <div className="max-w-3xl mx-auto px-4 sm:px-8 pt-8 sm:pt-10">
         {/* Step 1: Choose Option + Existing Pass Lookup CTA */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div className="text-center sm:text-left">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+          <div>
             <label className="text-base sm:text-lg font-bold text-[#191936] block">
               {content.chooseLabel}
             </label>
@@ -703,15 +703,15 @@ export const RegisterPage: React.FC = () => {
               setLookupResult(null);
               setLookupOpen(true);
             }}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border-2 border-[#191936] bg-white hover:bg-[#D5F542] text-xs font-mono font-bold text-[#191936] shadow-[3px_3px_0px_#191936] transition-all cursor-pointer"
+            className="min-h-[44px] w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border-2 border-[#191936] bg-white hover:bg-[#D5F542] text-xs font-mono font-bold text-[#191936] shadow-[3px_3px_0px_#191936] transition-all cursor-pointer"
           >
-            <Ticket className="w-4 h-4 text-[#4549D8]" />
-            <span>Already Registered? View / Download Official Pass</span>
+            <Ticket className="w-4 h-4 text-[#4549D8] shrink-0" />
+            <span>Already Registered? Find Pass</span>
           </button>
         </div>
 
         {/* Two Registration Cards (Visitor Pass & Esports) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 mb-8 sm:mb-10">
           {content.cards.map((card) => {
             const isSelected = selectedType === card.id;
 
@@ -719,6 +719,7 @@ export const RegisterPage: React.FC = () => {
               <button
                 key={card.id}
                 type="button"
+                aria-pressed={isSelected}
                 onClick={() => {
                   const nextType = card.id as FormType;
                   setSelectedType(nextType);
@@ -729,223 +730,200 @@ export const RegisterPage: React.FC = () => {
                   setSubmitError(null);
                   setFieldErrors({});
                 }}
-                className={`text-left p-6 rounded-[20px] bg-white transition-all duration-200 relative min-h-[200px] flex flex-col justify-between cursor-pointer ${
+                className={`text-left p-5 rounded-2xl bg-white transition-all duration-200 relative flex flex-col justify-start gap-2 cursor-pointer ${
                   isSelected
-                    ? "border-[3px] border-[#191936] shadow-[6px_6px_0px_#191936] -translate-y-1"
+                    ? "border-[3px] border-[#191936] shadow-[5px_5px_0px_#191936] -translate-y-0.5"
                     : "border border-[#EAEAF2] hover:border-[#191936]/40 hover:shadow-md"
                 }`}
               >
-                {/* Top Badge & Check Icon */}
-                <div className="flex items-center justify-between w-full mb-4">
-                  <span
-                    className="inline-block px-3.5 py-2 rounded-full text-xs font-mono font-bold uppercase tracking-wider text-[#191936] leading-none"
-                    style={{ backgroundColor: card.badgeBg }}
-                  >
-                    {card.badge}
-                  </span>
+                <div className="flex items-center justify-between gap-2 w-full mb-2">
+                  <h3 className="font-heading text-xl sm:text-2xl font-black text-[#191936] uppercase m-0">
+                    {card.title}
+                  </h3>
                   {isSelected && (
-                    <CheckCircle2 className="w-6 h-6 text-[#4549D8] flex-shrink-0" />
+                    <CheckCircle2 className="w-6 h-6 text-[#4549D8] shrink-0" />
                   )}
                 </div>
 
-                {/* Title & One Line Only */}
-                <div>
-                  <h3 className="font-heading text-2xl font-black text-[#191936] uppercase mb-2">
-                    {card.title}
-                  </h3>
-                  <p className="text-sm font-medium text-[#191936]/80 leading-relaxed">
-                    {card.line}
-                  </p>
-                </div>
+                <p className="text-sm font-medium text-[#191936]/80 leading-relaxed m-0">
+                  {card.line}
+                </p>
               </button>
             );
           })}
         </div>
 
-        {/* Step 2: Form Panel (48px below cards, max 760px, centered, white, 20px radius) */}
+        {/* Step 2: Single-Column Form Panel */}
         <AnimatePresence mode="wait">
           {selectedType && (
             <motion.div
               key={selectedType}
-              initial={{ opacity: 0, y: 16 }}
+              initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -16 }}
-              transition={{ duration: 0.2 }}
-              className="max-w-[760px] mx-auto bg-white rounded-[24px] border-2 border-[#191936] shadow-[6px_6px_0px_#191936] p-6 sm:p-10"
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.18 }}
+              className="max-w-xl mx-auto bg-white rounded-2xl border-2 border-[#191936] shadow-[5px_5px_0px_#191936] p-5 sm:p-8"
             >
               {/* Form Title */}
-              <div className="mb-8 pb-4 border-b border-[#EAEAF2]">
-                <h2 className="font-heading text-2xl sm:text-3xl font-black uppercase text-[#191936]">
-                  {selectedType === "visitor" && "Visitor form"}
-                  {selectedType === "esports" && "Esports team form"}
+              <div className="mb-6 pb-4 border-b border-[#EAEAF2]">
+                <h2 className="font-heading text-2xl font-black uppercase text-[#191936] m-0">
+                  {selectedType === "visitor" && "Visitor Registration"}
+                  {selectedType === "esports" && "Esports Registration"}
                 </h2>
-                <p className="text-sm text-[#191936]/70 mt-1">
-                  Please complete the details below. Required fields are marked with an asterisk (*).
+                <p className="text-sm text-[#191936]/75 mt-1 mb-0">
+                  Fields marked with * are required.
                 </p>
               </div>
 
               {submitSuccess ? (
-                <div className="text-center py-6 space-y-5">
-                  <div
-                    className={`w-16 h-16 rounded-full border-2 border-[#191936] mx-auto flex items-center justify-center text-[#191936] ${
-                      selectedType === "visitor" ? "bg-[#D5F542]" : "bg-[#FFF3CD]"
-                    }`}
-                  >
-                    {selectedType === "visitor" ? (
-                      <CheckCircle2 className="w-8 h-8" />
-                    ) : (
-                      <Clock className="w-8 h-8" />
-                    )}
-                  </div>
-                  <div>
-                    <h3 className="font-heading text-2xl sm:text-3xl font-black text-[#191936] uppercase tracking-tight">
-                      {selectedType === "visitor"
-                        ? "Registration Successful — Official Pass Issued"
-                        : "Esports Registration Submitted"}
-                    </h3>
-                    <p className="text-xs sm:text-sm text-[#191936]/80 max-w-md mx-auto mt-1">
-                      {selectedType === "visitor"
-                        ? "Your visitor pass is active immediately. View or download your PDF QR ticket below."
-                        : "Your registration is currently pending confirmation. Your official pass will be issued once approved."}
-                    </p>
+                <div className="py-2 space-y-5">
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={`w-11 h-11 rounded-xl border-2 border-[#191936] shrink-0 flex items-center justify-center text-[#191936] ${
+                        selectedType === "visitor" ? "bg-[#D5F542]" : "bg-[#FFF3CD]"
+                      }`}
+                    >
+                      {selectedType === "visitor" ? (
+                        <CheckCircle2 className="w-6 h-6" />
+                      ) : (
+                        <Clock className="w-6 h-6" />
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="font-heading text-xl sm:text-2xl font-black text-[#191936] uppercase tracking-tight m-0">
+                        {selectedType === "visitor"
+                          ? "Registration Complete"
+                          : "Esports Application Submitted"}
+                      </h3>
+                      <p className="text-sm text-[#191936]/80 mt-1 m-0">
+                        {selectedType === "visitor"
+                          ? "Your visitor pass and QR code are ready below."
+                          : "Pending coordinator approval. Your pass unlocks once approved."}
+                      </p>
+                    </div>
                   </div>
 
-                  {/* Primary Registration / Ticket Reference */}
+                  {/* Primary Registration / Ticket Reference & QR */}
                   {registeredRef && (
-                    <div className="bg-[#0B1120] text-white border-2 border-[#191936] rounded-2xl p-5 sm:p-6 max-w-xl mx-auto text-left shadow-[6px_6px_0px_#4549D8] space-y-4">
+                    <div className="bg-[#0B1120] text-white border-2 border-[#191936] rounded-2xl p-5 space-y-4">
                       <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <span className="text-[11px] font-mono uppercase tracking-wider text-slate-300 font-bold">
-                          {selectedType === "visitor"
-                            ? "Unique Ticket Reference"
-                            : "Esports Application Reference"}
+                        <span className="text-xs font-mono uppercase tracking-wider text-slate-300 font-bold">
+                          Registration Reference
                         </span>
                         <span
-                          className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase ${
-                            selectedType === "visitor"
-                              ? "bg-[#D5F542] text-[#0B1120]"
-                              : "bg-amber-400/20 text-amber-300 border border-amber-400/40"
+                          className={`text-xs font-mono font-bold uppercase ${
+                            selectedType === "visitor" ? "text-[#D5F542]" : "text-amber-300"
                           }`}
                         >
-                          {selectedType === "visitor"
-                            ? "Confirmed · Active Pass"
-                            : "Pending Approval — No Ticket Yet"}
+                          {selectedType === "visitor" ? "Active Pass" : "Pending Approval"}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-xl sm:text-2xl font-black text-[#D5F542] tracking-wider select-all">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="font-mono text-xl sm:text-2xl font-black text-[#D5F542] tracking-wider select-all break-all">
                           {registeredRef}
                         </span>
                         <button
                           type="button"
                           onClick={copyRefToClipboard}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-600 bg-slate-800 text-xs font-mono font-bold text-white hover:bg-slate-700 transition-colors cursor-pointer"
+                          className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl border border-slate-600 bg-slate-800 text-xs font-mono font-bold text-white hover:bg-slate-700 transition-colors cursor-pointer"
                         >
-                          <Copy className="w-3.5 h-3.5" />
-                          {copiedRef ? "Copied!" : "Copy"}
+                          <Copy className="w-4 h-4" />
+                          <span>{copiedRef ? "Copied" : "Copy"}</span>
                         </button>
                       </div>
 
-                      {/* Immediate Visitor QR Preview + View Ticket + Download PDF */}
+                      {/* Immediate Visitor QR Preview + Download Pass */}
                       {selectedType === "visitor" && (
-                        <div className="pt-4 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-[1fr_152px] gap-4 items-center">
-                          <div className="space-y-3">
-                            <div className="text-xs text-slate-300 space-y-1">
-                              <p className="font-bold text-white m-0">
-                                {visName.trim() || "Visitor"} ·{" "}
-                                {buildVisitorDisplaySubtitle({
-                                  visitorCategory: visCategoryId
-                                    ? getDbCategoryFromId(visCategoryId)
-                                    : "General Visitor",
-                                  studentClass: visCategoryId === "student" ? visStudentClass : null,
-                                  designation:
-                                    visCategoryId === "faculty"
-                                      ? resolveFacultyDesignationValue(
-                                          visDesignationOption,
-                                          visCustomDesignation
-                                        )
-                                      : null,
-                                })}
-                              </p>
-                              <p className="text-slate-400 m-0">
-                                {visInstitution.trim() ? `${visInstitution.trim()} · ` : ""}
-                                20–21 November 2026
-                              </p>
-                              <p className="text-cyan-300 text-[11px] m-0">
-                                Present this QR pass (digital or printed PDF) with valid photo ID at the venue entrance.
-                              </p>
-                            </div>
-
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setPassModalOpen(true)}
-                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-mono font-bold text-white cursor-pointer"
-                              >
-                                <Eye className="w-3.5 h-3.5 text-cyan-300" />
-                                <span>View Ticket</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  downloadTicketPdfFile({
-                                    ticketRef: issuedVisitorTicket?.ticket_ref || registeredRef,
-                                    qrToken: issuedVisitorTicket?.qr_token,
-                                    recipientName: visName.trim() || "Visitor",
-                                    category: buildVisitorDisplaySubtitle({
-                                      visitorCategory: visCategoryId
-                                        ? getDbCategoryFromId(visCategoryId)
-                                        : "General Visitor",
-                                      studentClass:
-                                        visCategoryId === "student" ? visStudentClass : null,
-                                      designation:
-                                        visCategoryId === "faculty"
-                                          ? resolveFacultyDesignationValue(
-                                              visDesignationOption,
-                                              visCustomDesignation
-                                            )
-                                          : null,
-                                    }),
-                                    email: visEmail.trim(),
-                                    institution: visInstitution.trim() || undefined,
-                                    registrationType: "visitor",
-                                    daysAttending: "Both",
-                                  })
-                                }
-                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#D5F542] hover:bg-[#c6e830] text-xs font-mono font-black text-[#0B1120] cursor-pointer"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                                <span>Download PDF</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Inline QR Preview */}
-                          <div className="bg-white rounded-2xl p-2.5 text-center border-2 border-cyan-400/70 mx-auto w-[152px]">
+                        <div className="pt-4 border-t border-slate-800 space-y-4 text-center">
+                          <div className="bg-white rounded-2xl p-3 text-center border-2 border-cyan-400/70 mx-auto w-[184px]">
                             {visitorQrPreviewUrl ? (
                               <img
                                 src={visitorQrPreviewUrl}
                                 alt={`Visitor QR Code ${registeredRef}`}
-                                className="w-32 h-32 mx-auto block"
+                                className="w-40 h-40 mx-auto block"
                               />
                             ) : (
-                              <div className="w-32 h-32 mx-auto flex items-center justify-center text-[11px] font-mono text-slate-500">
+                              <div className="w-40 h-40 mx-auto flex items-center justify-center text-xs font-mono text-slate-500">
                                 Loading QR...
                               </div>
                             )}
-                            <span className="block mt-1 text-[10px] font-mono font-bold text-[#0B1120] uppercase">
-                              QR Preview
-                            </span>
+                          </div>
+
+                          <div className="text-left text-xs text-slate-300 space-y-1">
+                            <p className="font-bold text-white text-sm m-0">
+                              {visName.trim() || "Visitor"} ·{" "}
+                              {buildVisitorDisplaySubtitle({
+                                visitorCategory: visCategoryId
+                                  ? getDbCategoryFromId(visCategoryId)
+                                  : "General Visitor",
+                                studentClass: visCategoryId === "student" ? visStudentClass : null,
+                                designation:
+                                  visCategoryId === "faculty"
+                                    ? resolveFacultyDesignationValue(
+                                        visDesignationOption,
+                                        visCustomDesignation
+                                      )
+                                    : null,
+                              })}
+                            </p>
+                            {visInstitution.trim() && (
+                              <p className="text-slate-400 m-0">{visInstitution.trim()}</p>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                downloadTicketPdfFile({
+                                  ticketRef: issuedVisitorTicket?.ticket_ref || registeredRef,
+                                  qrToken: issuedVisitorTicket?.qr_token,
+                                  recipientName: visName.trim() || "Visitor",
+                                  category: buildVisitorDisplaySubtitle({
+                                    visitorCategory: visCategoryId
+                                      ? getDbCategoryFromId(visCategoryId)
+                                      : "General Visitor",
+                                    studentClass:
+                                      visCategoryId === "student" ? visStudentClass : null,
+                                    designation:
+                                      visCategoryId === "faculty"
+                                        ? resolveFacultyDesignationValue(
+                                            visDesignationOption,
+                                            visCustomDesignation
+                                          )
+                                        : null,
+                                  }),
+                                  email: visEmail.trim(),
+                                  institution: visInstitution.trim() || undefined,
+                                  registrationType: "visitor",
+                                  daysAttending: "Both",
+                                })
+                              }
+                              className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-[#D5F542] hover:bg-[#c6e830] text-sm font-mono font-black text-[#0B1120] cursor-pointer"
+                            >
+                              <Download className="w-4 h-4" />
+                              <span>Download Pass</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setPassModalOpen(true)}
+                              className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-mono font-bold text-white cursor-pointer"
+                            >
+                              <Eye className="w-4 h-4 text-cyan-300" />
+                              <span>View Full Ticket</span>
+                            </button>
                           </div>
                         </div>
                       )}
 
                       {/* Pending approval instructions for Esports */}
                       {selectedType === "esports" && (
-                        <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <span className="text-xs text-slate-300">
-                            Save your reference code to check approval status & download your PDF pass later.
-                          </span>
+                        <div className="pt-3 border-t border-slate-800 space-y-3">
+                          <p className="text-xs text-slate-300 m-0">
+                            Save your reference code to check coordinator approval status and download your squad pass once approved.
+                          </p>
                           <button
                             type="button"
                             onClick={() => {
@@ -955,31 +933,21 @@ export const RegisterPage: React.FC = () => {
                               setLookupResult(null);
                               setLookupOpen(true);
                             }}
-                            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-mono font-bold text-cyan-300 cursor-pointer"
+                            className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-mono font-bold text-cyan-300 cursor-pointer"
                           >
-                            <Search className="w-3.5 h-3.5" />
+                            <Search className="w-4 h-4" />
                             <span>Check Pass Status</span>
                           </button>
                         </div>
                       )}
 
                       {emailNotice && (
-                        <p className="text-[11px] text-slate-300 leading-relaxed border-t border-slate-800 pt-3 m-0">
+                        <p className="text-xs text-slate-300 leading-relaxed border-t border-slate-800 pt-3 m-0">
                           {emailNotice}
                         </p>
                       )}
                     </div>
                   )}
-
-                  {/* Event Details Card */}
-                  <div className="p-3.5 rounded-xl bg-[#F0F2FD] border border-[#4549D8]/30 max-w-xl mx-auto text-left text-xs text-[#191936]">
-                    <div className="font-bold uppercase tracking-wider text-[11px] text-[#4549D8] mb-1">
-                      Confirmed Venue & Dates
-                    </div>
-                    <div>
-                      20–21 November 2026 · The National College, Basavanagudi, Bengaluru – 04 · Schedule: TBA
-                    </div>
-                  </div>
 
                   <button
                     type="button"
@@ -989,10 +957,37 @@ export const RegisterPage: React.FC = () => {
                       setIssuedVisitorTicket(null);
                       setVisitorQrPreviewUrl("");
                       setEmailNotice(null);
+                      setFieldErrors({});
+                      setPlayerFieldErrors({});
+                      setSubmitError(null);
+                      setPrivacyAgreed(false);
+                      if (selectedType === "visitor") {
+                        setVisCategoryId(null);
+                        setVisName("");
+                        setVisEmail("");
+                        setVisStudentClass("");
+                        setVisDesignationOption("");
+                        setVisCustomDesignation("");
+                        setVisInstitution("");
+                      } else if (selectedType === "esports") {
+                        setEspTeamName("");
+                        setEspRep("");
+                        setEspEmail("");
+                        setEspPhone("");
+                        setEspInstitution("");
+                        setEspRulesAgreed(false);
+                        cachedPlayersRef.current = {};
+                        const selectedGame = activeGames.find((g) => g.id === selectedGameId);
+                        const expectedCount = getOfficialTeamSize(
+                          selectedGame?.title,
+                          selectedGame?.team_size
+                        );
+                        setEspPlayers(Array.from({ length: expectedCount }, () => EMPTY_PLAYER_ROW()));
+                      }
                     }}
-                    className="mt-2 inline-flex items-center justify-center px-5 py-2.5 rounded-xl border-2 border-[#191936] bg-white hover:bg-[#F0F2FD] text-xs font-mono font-bold text-[#191936] shadow-[3px_3px_0px_#191936] transition-all cursor-pointer"
+                    className="min-h-[48px] w-full inline-flex items-center justify-center px-5 rounded-xl border-2 border-[#191936] bg-white hover:bg-[#F0F2FD] text-sm font-mono font-bold text-[#191936] shadow-[3px_3px_0px_#191936] transition-all cursor-pointer"
                   >
-                    Submit another response
+                    {selectedType === "esports" ? "Register Next Team" : "Register Next Visitor"}
                   </button>
                 </div>
               ) : (
@@ -1014,9 +1009,9 @@ export const RegisterPage: React.FC = () => {
                       {/* Visitor Category Selector Cards */}
                       <div>
                         <label className="form-label mb-2.5 block">
-                          Select Visitor Category *
+                          Visitor Category *
                         </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                        <div className="grid grid-cols-1 gap-3">
                           {VISITOR_CATEGORY_CARDS.map((card) => {
                             const isSelected = visCategoryId === card.id;
                             const IconComp =
@@ -1040,47 +1035,47 @@ export const RegisterPage: React.FC = () => {
                                   clearFieldError("customDesignation");
                                   clearFieldError("institution");
                                 }}
-                                className={`text-left p-4 rounded-2xl transition-all duration-150 flex flex-col justify-between min-h-[144px] cursor-pointer ${
+                                className={`text-left p-4 rounded-xl transition-all duration-150 flex items-center justify-between gap-3 min-h-[68px] cursor-pointer ${
                                   isSelected
-                                    ? "bg-[#F0F2FD] border-2 border-[#191936] shadow-[4px_4px_0px_#191936] -translate-y-0.5"
+                                    ? "bg-[#F0F2FD] border-2 border-[#191936] shadow-[3px_3px_0px_#191936]"
                                     : "bg-[#F8F7FC] border border-[#EAEAF2] hover:border-[#191936]/50 hover:bg-white"
                                 }`}
                               >
-                                <div className="flex items-start justify-between gap-2 mb-3">
+                                <div className="flex items-center gap-3 min-w-0">
                                   <div
-                                    className={`w-9 h-9 rounded-xl flex items-center justify-center border ${
+                                    className={`w-10 h-10 rounded-xl flex items-center justify-center border shrink-0 ${
                                       isSelected
                                         ? "bg-[#4549D8] text-white border-[#191936]"
                                         : "bg-white text-[#4549D8] border-[#EAEAF2]"
                                     }`}
                                   >
-                                    <IconComp className="w-4 h-4" />
+                                    <IconComp className="w-5 h-5" />
                                   </div>
-                                  {isSelected && (
-                                    <CheckCircle2 className="w-5 h-5 text-[#4549D8] shrink-0" />
-                                  )}
+                                  <div className="min-w-0">
+                                    <h3 className="font-heading text-sm font-black uppercase tracking-tight text-[#191936] m-0">
+                                      {card.title}
+                                    </h3>
+                                    <p className="text-xs text-[#191936]/75 leading-snug mt-0.5 mb-0">
+                                      {card.shortDescription}
+                                    </p>
+                                  </div>
                                 </div>
-                                <div>
-                                  <h3 className="font-heading text-xs sm:text-[13px] font-black uppercase tracking-tight text-[#191936] mb-1 leading-snug">
-                                    {card.title}
-                                  </h3>
-                                  <p className="text-[11px] text-[#191936]/75 leading-relaxed m-0">
-                                    {card.shortDescription}
-                                  </p>
-                                </div>
+                                {isSelected && (
+                                  <CheckCircle2 className="w-5 h-5 text-[#4549D8] shrink-0" />
+                                )}
                               </button>
                             );
                           })}
                         </div>
                         {fieldErrors.category && (
-                          <p role="alert" className="text-xs font-medium text-red-600 mt-2">
+                          <p role="alert" className="text-sm font-medium text-red-600 mt-2">
                             {fieldErrors.category}
                           </p>
                         )}
                       </div>
 
-                      {/* Common Mandatory Fields (Full Name + Email Address) */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* Common Mandatory Fields (Single-Column Mobile-First) */}
+                      <div className="grid grid-cols-1 gap-4">
                         <div>
                           <label htmlFor="visitor-full-name" className="form-label">
                             Full Name *
@@ -1089,6 +1084,7 @@ export const RegisterPage: React.FC = () => {
                             id="visitor-full-name"
                             name="full_name"
                             type="text"
+                            autoComplete="name"
                             required
                             maxLength={120}
                             value={visName}
@@ -1100,7 +1096,7 @@ export const RegisterPage: React.FC = () => {
                             className={`form-input ${fieldErrors.fullName ? "!border-red-500" : ""}`}
                           />
                           {fieldErrors.fullName && (
-                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                               {fieldErrors.fullName}
                             </p>
                           )}
@@ -1114,6 +1110,9 @@ export const RegisterPage: React.FC = () => {
                             id="visitor-email"
                             name="email"
                             type="email"
+                            inputMode="email"
+                            autoCapitalize="none"
+                            autoComplete="email"
                             required
                             maxLength={254}
                             value={visEmail}
@@ -1125,7 +1124,7 @@ export const RegisterPage: React.FC = () => {
                             className={`form-input ${fieldErrors.email ? "!border-red-500" : ""}`}
                           />
                           {fieldErrors.email && (
-                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                               {fieldErrors.email}
                             </p>
                           )}
@@ -1149,11 +1148,11 @@ export const RegisterPage: React.FC = () => {
                                   setVisStudentClass(e.target.value);
                                   clearFieldError("studentClass");
                                 }}
-                                placeholder="e.g. II PUC Science, B.Sc. Computer Science, 10th Standard"
+                                placeholder="e.g. II PUC Science, B.Sc., 10th Standard"
                                 className={`form-input ${fieldErrors.studentClass ? "!border-red-500" : ""}`}
                               />
                               {fieldErrors.studentClass && (
-                                <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                                   {fieldErrors.studentClass}
                                 </p>
                               )}
@@ -1175,11 +1174,11 @@ export const RegisterPage: React.FC = () => {
                                   setVisInstitution(e.target.value);
                                   clearFieldError("institution");
                                 }}
-                                placeholder="Enter your school, college or institution name"
+                                placeholder="Enter your school or college name"
                                 className={`form-input ${fieldErrors.institution ? "!border-red-500" : ""}`}
                               />
                               {fieldErrors.institution && (
-                                <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                                   {fieldErrors.institution}
                                 </p>
                               )}
@@ -1216,7 +1215,7 @@ export const RegisterPage: React.FC = () => {
                                 ))}
                               </select>
                               {fieldErrors.designationOption && (
-                                <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                                   {fieldErrors.designationOption}
                                 </p>
                               )}
@@ -1238,18 +1237,18 @@ export const RegisterPage: React.FC = () => {
                                   setVisInstitution(e.target.value);
                                   clearFieldError("institution");
                                 }}
-                                placeholder="Enter your school, college or institution name"
+                                placeholder="Enter your school or college name"
                                 className={`form-input ${fieldErrors.institution ? "!border-red-500" : ""}`}
                               />
                               {fieldErrors.institution && (
-                                <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                                   {fieldErrors.institution}
                                 </p>
                               )}
                             </div>
 
                             {visDesignationOption === "Other" && (
-                              <div className="md:col-span-2">
+                              <div>
                                 <label htmlFor="visitor-custom-designation" className="form-label">
                                   Specify Designation / Role *
                                 </label>
@@ -1264,11 +1263,11 @@ export const RegisterPage: React.FC = () => {
                                     setVisCustomDesignation(e.target.value);
                                     clearFieldError("customDesignation");
                                   }}
-                                  placeholder="e.g. Research Coordinator, Academic Advisor, Dean"
+                                  placeholder="e.g. Research Coordinator, Dean"
                                   className={`form-input ${fieldErrors.customDesignation ? "!border-red-500" : ""}`}
                                 />
                                 {fieldErrors.customDesignation && (
-                                  <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                                  <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                                     {fieldErrors.customDesignation}
                                   </p>
                                 )}
@@ -1279,7 +1278,7 @@ export const RegisterPage: React.FC = () => {
 
                         {/* Conditional: GENERAL VISITOR */}
                         {visCategoryId === "general" && (
-                          <div className="md:col-span-2">
+                          <div>
                             <label htmlFor="visitor-institution" className="form-label">
                               College / Institution Name (Optional)
                             </label>
@@ -1294,11 +1293,11 @@ export const RegisterPage: React.FC = () => {
                                 setVisInstitution(e.target.value);
                                 clearFieldError("institution");
                               }}
-                              placeholder="Optional — school, college, organization or community affiliation"
+                              placeholder="Optional affiliation"
                               className={`form-input ${fieldErrors.institution ? "!border-red-500" : ""}`}
                             />
                             {fieldErrors.institution && (
-                              <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                              <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                                 {fieldErrors.institution}
                               </p>
                             )}
@@ -1307,9 +1306,8 @@ export const RegisterPage: React.FC = () => {
                       </div>
 
                       {!visCategoryId && (
-                        <div className="p-3.5 rounded-xl bg-[#F8F7FC] border border-[#EAEAF2] text-xs text-[#191936]/75">
-                          Please choose one of the three visitor categories above (<strong>Student Visitor</strong>,{" "}
-                          <strong>Faculty &amp; Institutional Delegates</strong>, or <strong>General Visitor</strong>) to complete your registration details.
+                        <div className="p-3.5 rounded-xl bg-[#F8F7FC] border border-[#EAEAF2] text-sm text-[#191936]/75">
+                          Choose a visitor category above to complete your registration.
                         </div>
                       )}
 
@@ -1339,7 +1337,7 @@ export const RegisterPage: React.FC = () => {
                         </div>
                       )}
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div className="grid grid-cols-1 gap-4">
                         <div>
                           <label htmlFor="esp-team-name" className="form-label">Team Name *</label>
                           <input
@@ -1355,7 +1353,7 @@ export const RegisterPage: React.FC = () => {
                             className={`form-input ${fieldErrors.espTeamName ? "!border-red-500" : ""}`}
                           />
                           {fieldErrors.espTeamName && (
-                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                               {fieldErrors.espTeamName}
                             </p>
                           )}
@@ -1385,7 +1383,7 @@ export const RegisterPage: React.FC = () => {
                             )}
                           </select>
                           {fieldErrors.selectedGameId && (
-                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                               {fieldErrors.selectedGameId}
                             </p>
                           )}
@@ -1396,6 +1394,7 @@ export const RegisterPage: React.FC = () => {
                           <input
                             id="esp-rep-name"
                             type="text"
+                            autoComplete="name"
                             required
                             value={espRep}
                             onChange={(e) => {
@@ -1406,7 +1405,7 @@ export const RegisterPage: React.FC = () => {
                             className={`form-input ${fieldErrors.espRep ? "!border-red-500" : ""}`}
                           />
                           {fieldErrors.espRep && (
-                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                               {fieldErrors.espRep}
                             </p>
                           )}
@@ -1417,6 +1416,9 @@ export const RegisterPage: React.FC = () => {
                           <input
                             id="esp-rep-email"
                             type="email"
+                            inputMode="email"
+                            autoCapitalize="none"
+                            autoComplete="email"
                             required
                             value={espEmail}
                             onChange={(e) => {
@@ -1427,7 +1429,7 @@ export const RegisterPage: React.FC = () => {
                             className={`form-input ${fieldErrors.espEmail ? "!border-red-500" : ""}`}
                           />
                           {fieldErrors.espEmail && (
-                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                               {fieldErrors.espEmail}
                             </p>
                           )}
@@ -1438,17 +1440,19 @@ export const RegisterPage: React.FC = () => {
                           <input
                             id="esp-rep-phone"
                             type="tel"
+                            inputMode="tel"
+                            autoComplete="tel"
                             required
                             value={espPhone}
                             onChange={(e) => {
                               setEspPhone(e.target.value);
                               clearFieldError("espPhone");
                             }}
-                            placeholder="+91 98765 43210"
+                            placeholder="10-digit mobile number"
                             className={`form-input ${fieldErrors.espPhone ? "!border-red-500" : ""}`}
                           />
                           {fieldErrors.espPhone && (
-                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                               {fieldErrors.espPhone}
                             </p>
                           )}
@@ -1470,7 +1474,7 @@ export const RegisterPage: React.FC = () => {
                             className={`form-input ${fieldErrors.espInstitution ? "!border-red-500" : ""}`}
                           />
                           {fieldErrors.espInstitution && (
-                            <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                            <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                               {fieldErrors.espInstitution}
                             </p>
                           )}
@@ -1479,32 +1483,21 @@ export const RegisterPage: React.FC = () => {
 
                       {/* Player Rows: Official Team Sizes + Mandatory 4 Educational Fields Per Player */}
                       <div className="pt-4 border-t border-[#EAEAF2]">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                          <div>
-                            <label className="form-label font-bold text-base mb-0">
-                              Team Players &amp; Educational Details (
-                              {activeGames.find((g) => g.id === selectedGameId)?.title || "Official Title"} —{" "}
-                              {getOfficialTeamSize(
-                                activeGames.find((g) => g.id === selectedGameId)?.title,
-                                activeGames.find((g) => g.id === selectedGameId)?.team_size
-                              )}{" "}
-                              players required)
-                            </label>
-                            <p className="text-xs text-[#191936]/60 mt-0.5">
-                              Substitutes are not permitted. Full name, In-Game ID, and all 4 educational fields are mandatory for every player.
-                            </p>
-                          </div>
-                          <span className="self-start sm:self-auto font-mono text-xs font-bold px-2.5 py-1 rounded bg-blue-50 border border-blue-200 text-blue-700">
-                            {espPlayers.length} /{" "}
+                        <div className="mb-3 space-y-1">
+                          <label className="form-label font-bold text-base mb-0">
+                            Team Players ({espPlayers.length} /{" "}
                             {getOfficialTeamSize(
                               activeGames.find((g) => g.id === selectedGameId)?.title,
                               activeGames.find((g) => g.id === selectedGameId)?.team_size
                             )}{" "}
-                            Required
-                          </span>
+                            Required) *
+                          </label>
+                          <p className="text-xs text-[#191936]/70 m-0">
+                            Full name, In-Game ID, and all 4 educational details are required for every player.
+                          </p>
                         </div>
 
-                        <div className="space-y-3.5">
+                        <div className="space-y-4">
                           {espPlayers.map((player, idx) => {
                             const rowErr = playerFieldErrors[idx] || {};
                             const eduSug = getEducationSuggestionsForType(player.institutionType);
@@ -1512,27 +1505,20 @@ export const RegisterPage: React.FC = () => {
                               <div
                                 key={idx}
                                 data-player-card={idx + 1}
-                                className="p-4 rounded-2xl bg-[#F8F7FC] border border-[#EAEAF2] space-y-3"
+                                className="p-4 rounded-2xl bg-[#F8F7FC] border border-[#EAEAF2] space-y-3.5"
                               >
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-mono text-xs font-bold px-2.5 py-0.5 rounded bg-white border border-[#EAEAF2] text-[#191936]">
-                                      Player #{idx + 1}
-                                    </span>
-                                    {idx === 0 && (
-                                      <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
-                                        Squad Lead
-                                      </span>
-                                    )}
-                                  </div>
-                                  <span className="text-[10px] font-mono uppercase text-[#191936]/55">
-                                    All 6 Fields Required *
+                                <div className="flex items-center justify-between gap-2 border-b border-[#EAEAF2] pb-2">
+                                  <span className="font-mono text-xs font-bold text-[#191936]">
+                                    Player #{idx + 1} {idx === 0 ? "· Squad Lead" : ""}
+                                  </span>
+                                  <span className="text-xs font-medium text-[#191936]/65">
+                                    All fields required *
                                   </span>
                                 </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 gap-3.5">
                                   <div>
-                                    <label htmlFor={`player-${idx}-name`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                    <label htmlFor={`player-${idx}-name`} className="block text-sm font-bold text-[#191936] mb-1">
                                       Player {idx + 1} Full Name *
                                     </label>
                                     <input
@@ -1542,17 +1528,17 @@ export const RegisterPage: React.FC = () => {
                                       value={player.name}
                                       onChange={(e) => handlePlayerChange(idx, "name", e.target.value)}
                                       placeholder={`Player ${idx + 1} Full Name`}
-                                      className={`form-input !h-10 text-sm w-full ${rowErr.name ? "!border-red-500" : ""}`}
+                                      className={`form-input w-full ${rowErr.name ? "!border-red-500" : ""}`}
                                     />
                                     {rowErr.name && (
-                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                      <p role="alert" className="text-xs font-medium text-red-600 mt-1 m-0">
                                         {rowErr.name}
                                       </p>
                                     )}
                                   </div>
 
                                   <div>
-                                    <label htmlFor={`player-${idx}-ign`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                    <label htmlFor={`player-${idx}-ign`} className="block text-sm font-bold text-[#191936] mb-1">
                                       Player {idx + 1} In-Game ID / Tag *
                                     </label>
                                     <input
@@ -1562,20 +1548,17 @@ export const RegisterPage: React.FC = () => {
                                       value={player.inGameId}
                                       onChange={(e) => handlePlayerChange(idx, "inGameId", e.target.value)}
                                       placeholder={`Player ${idx + 1} In-Game Tag/ID`}
-                                      className={`form-input !h-10 text-sm w-full font-mono ${rowErr.inGameId ? "!border-red-500" : ""}`}
+                                      className={`form-input w-full font-mono ${rowErr.inGameId ? "!border-red-500" : ""}`}
                                     />
                                     {rowErr.inGameId && (
-                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                      <p role="alert" className="text-xs font-medium text-red-600 mt-1 m-0">
                                         {rowErr.inGameId}
                                       </p>
                                     )}
                                   </div>
-                                </div>
 
-                                {/* 4 Mandatory Educational Details */}
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#EAEAF2]/80">
                                   <div>
-                                    <label htmlFor={`player-${idx}-inst-type`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                    <label htmlFor={`player-${idx}-inst-type`} className="block text-sm font-bold text-[#191936] mb-1">
                                       Institution Type *
                                     </label>
                                     <select
@@ -1585,7 +1568,7 @@ export const RegisterPage: React.FC = () => {
                                       onChange={(e) =>
                                         handlePlayerChange(idx, "institutionType", e.target.value)
                                       }
-                                      className={`form-input !h-10 text-sm w-full bg-white ${rowErr.institutionType ? "!border-red-500" : ""}`}
+                                      className={`form-input w-full bg-white ${rowErr.institutionType ? "!border-red-500" : ""}`}
                                     >
                                       <option value="">Select School / College / Other...</option>
                                       {PLAYER_INSTITUTION_TYPES.map((t) => (
@@ -1595,14 +1578,14 @@ export const RegisterPage: React.FC = () => {
                                       ))}
                                     </select>
                                     {rowErr.institutionType && (
-                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                      <p role="alert" className="text-xs font-medium text-red-600 mt-1 m-0">
                                         {rowErr.institutionType}
                                       </p>
                                     )}
                                   </div>
 
                                   <div>
-                                    <label htmlFor={`player-${idx}-inst-name`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                    <label htmlFor={`player-${idx}-inst-name`} className="block text-sm font-bold text-[#191936] mb-1">
                                       School / College / Institution Name *
                                     </label>
                                     <input
@@ -1616,17 +1599,17 @@ export const RegisterPage: React.FC = () => {
                                         handlePlayerChange(idx, "institutionName", e.target.value)
                                       }
                                       placeholder="Full school, college or institution name"
-                                      className={`form-input !h-10 text-sm w-full ${rowErr.institutionName ? "!border-red-500" : ""}`}
+                                      className={`form-input w-full ${rowErr.institutionName ? "!border-red-500" : ""}`}
                                     />
                                     {rowErr.institutionName && (
-                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                      <p role="alert" className="text-xs font-medium text-red-600 mt-1 m-0">
                                         {rowErr.institutionName}
                                       </p>
                                     )}
                                   </div>
 
                                   <div>
-                                    <label htmlFor={`player-${idx}-course`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                    <label htmlFor={`player-${idx}-course`} className="block text-sm font-bold text-[#191936] mb-1">
                                       {eduSug.courseLabel}
                                     </label>
                                     <input
@@ -1640,7 +1623,7 @@ export const RegisterPage: React.FC = () => {
                                         handlePlayerChange(idx, "courseOrClass", e.target.value)
                                       }
                                       placeholder={eduSug.coursePlaceholder}
-                                      className={`form-input !h-10 text-sm w-full ${rowErr.courseOrClass ? "!border-red-500" : ""}`}
+                                      className={`form-input w-full ${rowErr.courseOrClass ? "!border-red-500" : ""}`}
                                     />
                                     <datalist id={`sn3-player-course-${idx}`}>
                                       {eduSug.courseSuggestions.map((s) => (
@@ -1648,14 +1631,14 @@ export const RegisterPage: React.FC = () => {
                                       ))}
                                     </datalist>
                                     {rowErr.courseOrClass && (
-                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                      <p role="alert" className="text-xs font-medium text-red-600 mt-1 m-0">
                                         {rowErr.courseOrClass}
                                       </p>
                                     )}
                                   </div>
 
                                   <div>
-                                    <label htmlFor={`player-${idx}-year`} className="block text-[11px] font-bold text-[#191936]/80 mb-1">
+                                    <label htmlFor={`player-${idx}-year`} className="block text-sm font-bold text-[#191936] mb-1">
                                       {eduSug.yearLabel}
                                     </label>
                                     <input
@@ -1669,7 +1652,7 @@ export const RegisterPage: React.FC = () => {
                                         handlePlayerChange(idx, "currentYearOrClass", e.target.value)
                                       }
                                       placeholder={eduSug.yearPlaceholder}
-                                      className={`form-input !h-10 text-sm w-full ${rowErr.currentYearOrClass ? "!border-red-500" : ""}`}
+                                      className={`form-input w-full ${rowErr.currentYearOrClass ? "!border-red-500" : ""}`}
                                     />
                                     <datalist id={`sn3-player-year-${idx}`}>
                                       {eduSug.yearSuggestions.map((s) => (
@@ -1677,7 +1660,7 @@ export const RegisterPage: React.FC = () => {
                                       ))}
                                     </datalist>
                                     {rowErr.currentYearOrClass && (
-                                      <p role="alert" className="text-[11px] font-medium text-red-600 mt-1 m-0">
+                                      <p role="alert" className="text-xs font-medium text-red-600 mt-1 m-0">
                                         {rowErr.currentYearOrClass}
                                       </p>
                                     )}
@@ -1691,7 +1674,7 @@ export const RegisterPage: React.FC = () => {
 
                       {/* Rules Checkbox */}
                       <div className="pt-2">
-                        <label className="flex items-start gap-3 cursor-pointer text-sm text-[#191936]">
+                        <label className="flex items-start gap-3 cursor-pointer text-sm text-[#191936] min-h-[44px]">
                           <input
                             type="checkbox"
                             required
@@ -1700,12 +1683,12 @@ export const RegisterPage: React.FC = () => {
                               setEspRulesAgreed(e.target.checked);
                               clearFieldError("espRulesAgreed");
                             }}
-                            className="w-4 h-4 mt-0.5 rounded border-gray-300 text-[#4549D8]"
+                            className="w-5 h-5 mt-0.5 rounded border-gray-300 text-[#4549D8] shrink-0"
                           />
                           <span>{content.rulesCheckboxLabel}</span>
                         </label>
                         {fieldErrors.espRulesAgreed && (
-                          <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                          <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                             {fieldErrors.espRulesAgreed}
                           </p>
                         )}
@@ -1721,7 +1704,7 @@ export const RegisterPage: React.FC = () => {
 
                   {/* Common Privacy Policy Checkbox */}
                   <div className="pt-2">
-                    <label className="flex items-start gap-3 cursor-pointer text-sm text-[#191936]">
+                    <label className="flex items-start gap-3 cursor-pointer text-sm text-[#191936] min-h-[44px]">
                       <input
                         type="checkbox"
                         required
@@ -1730,12 +1713,12 @@ export const RegisterPage: React.FC = () => {
                           setPrivacyAgreed(e.target.checked);
                           clearFieldError("privacyAgreed");
                         }}
-                        className="w-4 h-4 mt-0.5 rounded border-gray-300 text-[#4549D8]"
+                        className="w-5 h-5 mt-0.5 rounded border-gray-300 text-[#4549D8] shrink-0"
                       />
                       <span>{content.privacyCheckboxLabel}</span>
                     </label>
                     {fieldErrors.privacyAgreed && (
-                      <p role="alert" className="text-xs font-medium text-red-600 mt-1">
+                      <p role="alert" className="text-sm font-medium text-red-600 mt-1">
                         {fieldErrors.privacyAgreed}
                       </p>
                     )}
@@ -1743,17 +1726,17 @@ export const RegisterPage: React.FC = () => {
 
                   {/* Error Message */}
                   {submitError && (
-                    <div role="alert" className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
+                    <div role="alert" className="p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700 font-medium">
                       {submitError}
                     </div>
                   )}
 
                   {/* Submit Button */}
-                  <div className="pt-4 flex flex-col sm:flex-row items-center gap-4">
+                  <div className="pt-2 flex flex-col gap-3">
                     <button
                       type="submit"
                       disabled={isSubmitting || selectedGameClosed}
-                      className="btn-primary w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="btn-primary w-full justify-center text-base disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {selectedGameClosed
                         ? "Registrations Closed for Selected Game"
@@ -1765,7 +1748,7 @@ export const RegisterPage: React.FC = () => {
                     {!selectedGameClosed && (
                       <a
                         href={generateMailtoUrl()}
-                        className="text-xs font-semibold text-[#4549D8] hover:underline"
+                        className="text-center text-xs font-semibold text-[#4549D8] hover:underline py-2"
                       >
                         Or submit via email client →
                       </a>

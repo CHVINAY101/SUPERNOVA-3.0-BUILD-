@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import { buildVisitorDisplaySubtitle } from "@/lib/visitorCategories";
 import { issueTicketForRegistration } from "@/lib/ticketClient";
 import { buildTicketQrContent, downloadTicketPdfFile } from "@/lib/ticketPdfService";
@@ -69,6 +70,12 @@ interface PrintTarget {
 }
 
 export default function RegistrationDeskSearch() {
+  const { hasPermission } = useAuth();
+  const canViewVisitors = hasPermission("visitor:view");
+  const canViewEsports = hasPermission("esports:view");
+  const canViewTickets = hasPermission(["tickets:view", "tickets:manage"]);
+  const canManageTickets = hasPermission("tickets:manage");
+
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -195,6 +202,7 @@ export default function RegistrationDeskSearch() {
   const resolveOrIssueVisitorTicket = async (v: VisitorSearchRow): Promise<TicketRecord | null> => {
     const existing = ticketsByKey[`visitor:${v.id}`];
     if (existing) return existing;
+    if (!canManageTickets) return null;
     const res = await issueTicketForRegistration("visitor", v.id);
     if (res.ok && res.ticket) {
       setTicketsByKey((prev) => ({
@@ -342,64 +350,63 @@ export default function RegistrationDeskSearch() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-2xl mx-auto space-y-5">
       {/* Screen Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 pb-4 print:hidden">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3 print:hidden">
         <div>
-          <p className="text-xs font-mono uppercase tracking-wider text-slate-500 m-0">
-            Pass Retrieval & Application Status
-          </p>
-          <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 tracking-tight mt-1 mb-0">
-            Search Existing Registration
+          <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight m-0">
+            Search Registrations
           </h1>
+          <p className="text-sm text-slate-600 mt-1 mb-0">
+            Find visitor passes or check esports approval status.
+          </p>
         </div>
         <button
           type="button"
           onClick={loadDirectory}
           disabled={loading}
-          className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60 self-start sm:self-auto"
+          className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60 shrink-0"
         >
-          <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
           <span>Refresh</span>
         </button>
       </div>
 
       {/* Search & Filter Toolbar */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4 print:hidden">
-        <div className="flex flex-col md:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search size={16} className="text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by Name, Team, Ticket / Registration Ref, Email, Phone, or Institution..."
-              className="w-full h-11 pl-10 pr-4 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
-            />
-          </div>
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3 print:hidden">
+        <div className="relative">
+          <Search size={18} className="text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, team, ref, email, or phone..."
+            aria-label="Search registrations"
+            className="w-full h-12 pl-10 pr-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
+          />
+        </div>
 
-          <div className="inline-flex rounded-xl bg-slate-100 p-1 self-start">
-            {(
-              [
-                { id: "all", label: "All Records" },
-                { id: "visitor", label: `Visitors (${visitors.length})` },
-                { id: "esports", label: `Esports (${esports.length})` },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => setTab(opt.id)}
-                className={`min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-                  tab === opt.id
-                    ? "bg-white text-slate-900 shadow-2xs"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+        <div className="flex flex-wrap gap-1.5 rounded-xl bg-slate-100 p-1">
+          {(
+            [
+              { id: "all", label: "All" },
+              { id: "visitor", label: `Visitors (${visitors.length})` },
+              { id: "esports", label: `Esports (${esports.length})` },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setTab(opt.id)}
+              className={`min-h-[40px] flex-1 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                tab === opt.id
+                  ? "bg-white text-slate-900 shadow-2xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
 
         {errorMsg && (
@@ -411,7 +418,7 @@ export default function RegistrationDeskSearch() {
       </div>
 
       {/* Visitors Results */}
-      {tab !== "esports" && (
+      {canViewVisitors && tab !== "esports" && (
         <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden print:hidden">
           <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
             <h2 className="text-sm font-bold text-slate-900 m-0">
@@ -456,40 +463,46 @@ export default function RegistrationDeskSearch() {
                         })}
                         {v.institution ? ` · ${v.institution}` : ""}
                       </p>
-                      <p className="text-xs font-mono text-slate-500 m-0">
+                      <p className="text-xs font-mono text-slate-500 m-0 break-all">
                         {v.email}
                         {v.phone ? ` · ${v.phone}` : ""} · {formatIstTimestamp(v.created_at)}
                       </p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => handleOpenVisitorPass(v)}
-                        className="min-h-[40px] inline-flex items-center gap-1.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
-                      >
-                        <QrCode size={14} />
-                        <span>View QR</span>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => handleDownloadVisitorPdf(v)}
-                        className="min-h-[40px] inline-flex items-center gap-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60"
-                      >
-                        <Download size={14} />
-                        <span>PDF</span>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => handlePrintVisitor(v)}
-                        className="min-h-[40px] inline-flex items-center gap-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60"
-                      >
-                        <Printer size={14} />
-                        <span>Print</span>
-                      </button>
+                      {(canViewTickets && (tkt || canManageTickets)) ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => handleOpenVisitorPass(v)}
+                            className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
+                          >
+                            <QrCode size={14} />
+                            <span>View QR</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => handleDownloadVisitorPdf(v)}
+                            className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60"
+                          >
+                            <Download size={14} />
+                            <span>PDF</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => handlePrintVisitor(v)}
+                            className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60"
+                          >
+                            <Printer size={14} />
+                            <span>Print</span>
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-xs text-slate-500">Ticket access restricted</span>
+                      )}
                     </div>
                   </div>
                 );
@@ -500,7 +513,7 @@ export default function RegistrationDeskSearch() {
       )}
 
       {/* Esports Results */}
-      {tab !== "visitor" && (
+      {canViewEsports && tab !== "visitor" && (
         <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden print:hidden">
           <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
             <h2 className="text-sm font-bold text-slate-900 m-0">
@@ -550,18 +563,18 @@ export default function RegistrationDeskSearch() {
                         Captain: {e.captain_name}
                         {e.institution ? ` · ${e.institution}` : ""} · {(e.players || []).length} players
                       </p>
-                      <p className="text-xs font-mono text-slate-500 m-0">
+                      <p className="text-xs font-mono text-slate-500 m-0 break-all">
                         {e.email} · {e.phone} · {formatIstTimestamp(e.submitted_at)}
                       </p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      {confirmedTicket ? (
+                      {confirmedTicket && canViewTickets ? (
                         <>
                           <button
                             type="button"
                             onClick={() => handleOpenConfirmedEsportsPass(e, confirmedTicket)}
-                            className="min-h-[40px] inline-flex items-center gap-1.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
+                            className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
                           >
                             <QrCode size={14} />
                             <span>View QR</span>
@@ -570,7 +583,7 @@ export default function RegistrationDeskSearch() {
                             type="button"
                             disabled={busyId === e.id}
                             onClick={() => handleDownloadConfirmedEsportsPdf(e, confirmedTicket)}
-                            className="min-h-[40px] inline-flex items-center gap-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                            className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
                           >
                             <Download size={14} />
                             <span>PDF</span>
@@ -588,12 +601,14 @@ export default function RegistrationDeskSearch() {
                                 daysAttending: "Both",
                               })
                             }
-                            className="min-h-[40px] inline-flex items-center gap-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
+                            className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer"
                           >
                             <Printer size={14} />
                             <span>Print</span>
                           </button>
                         </>
+                      ) : confirmedTicket ? (
+                        <span className="text-xs text-slate-500">Ticket access restricted</span>
                       ) : (
                         <span className="inline-flex items-center gap-1.5 text-xs text-slate-500 font-medium">
                           <Clock size={14} className="text-amber-600" />
@@ -601,7 +616,7 @@ export default function RegistrationDeskSearch() {
                             {e.status === "pending"
                               ? "Awaiting Coordinator Approval — Pass Not Issued"
                               : e.status === "confirmed"
-                              ? "Approved (Pass Pending Issuance by Coordinator)"
+                              ? "Approved (Pass Pending Issuance)"
                               : `No Pass Issued (${e.status})`}
                           </span>
                         </span>

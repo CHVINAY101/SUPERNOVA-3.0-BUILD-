@@ -120,7 +120,7 @@ export function RegistrationDeskGuard({ children }: { children: React.ReactNode 
             Registration Desk Access Restricted
           </h2>
           <p className="text-sm text-slate-600 leading-relaxed mb-6">
-            The Registration Desk Portal is restricted to <strong>Registration Staff</strong>,{" "}
+            The Registration Desk Portal is restricted to <strong>Registration Desk Clerk</strong>,{" "}
             <strong>CRM Admin</strong>, and <strong>Super Admin</strong> accounts.
           </p>
           <div className="flex flex-col gap-2.5">

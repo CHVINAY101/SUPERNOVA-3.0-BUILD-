@@ -8,7 +8,9 @@ import {
   pingSupabaseAuth,
 } from "@/lib/supabase";
 import { canAccessGatePortal } from "@/lib/gatePortal";
+import { isRegistrationDeskOnlyRole, resolvePostLoginRoute } from "@/lib/registrationDesk";
 import { getRoleLabel } from "@/lib/rbac";
+import { StaffPortalSwitcher } from "@/components/auth/StaffPortalSwitcher";
 import {
   Eye,
   EyeOff,
@@ -160,6 +162,7 @@ export default function GateLogin() {
   const {
     session,
     role,
+    permissions,
     accountStatus,
     loading: authLoading,
     signIn,
@@ -197,6 +200,11 @@ export default function GateLogin() {
       setIsInviteFlow(true);
     }
   }, [session, accountStatus]);
+
+  // Registration Desk Clerks -> redirect straight to /registration-desk
+  if (!authLoading && session && isRegistrationDeskOnlyRole(role) && accountStatus === "active" && !isInviteFlow) {
+    return <Navigate to="/registration-desk" replace />;
+  }
 
   // Authorized gate user already signed in -> proceed directly to /gate
   if (!authLoading && session && canAccessGatePortal(role, accountStatus) && !isInviteFlow) {
@@ -250,10 +258,15 @@ export default function GateLogin() {
         // Fallback if RPC not yet applied
       }
 
-      await refreshRole();
+      const refreshed = await refreshRole();
       setIsInviteFlow(false);
       setLoading(false);
-      navigate("/gate", { replace: true });
+      const dest = resolvePostLoginRoute({
+        portal: "gate",
+        role: refreshed?.role ?? role,
+        permissions: refreshed?.permissions ?? permissions,
+      });
+      navigate(dest, { replace: true });
     } catch (err: any) {
       setLoading(false);
       setAuthError(classifyGateAuthError(err));
@@ -278,7 +291,12 @@ export default function GateLogin() {
     if (result.error) {
       setAuthError(classifyGateAuthError(result.rawError || result.error, result.errorCategory));
     } else {
-      navigate("/gate", { replace: true });
+      const dest = resolvePostLoginRoute({
+        portal: "gate",
+        role: result.role ?? role,
+        permissions: result.permissions ?? permissions,
+      });
+      navigate(dest, { replace: true });
     }
   };
 
@@ -323,18 +341,15 @@ export default function GateLogin() {
       <header className="relative z-10 w-full max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-3 py-2">
         <Link
           to="/"
-          className="inline-flex items-center gap-2 text-xs sm:text-sm font-heading font-extrabold uppercase tracking-wider text-[#191936] hover:text-[#4549D8] transition-colors"
+          className="min-h-[44px] inline-flex items-center gap-2 text-xs sm:text-sm font-heading font-bold text-[#191936] hover:text-[#4549D8] transition-colors"
         >
           <ArrowLeft size={16} />
-          <span>Return to Festival Homepage</span>
+          <span>Back to Homepage</span>
         </Link>
 
-        <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#D5F542] border border-[#191936]" />
-          <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#191936]/70">
-            GATE ENTRY OPERATIONS
-          </span>
-        </div>
+        <span className="text-xs font-semibold text-[#191936]/70">
+          Gate Entry Portal
+        </span>
       </header>
 
       <main className="relative z-10 w-full max-w-[460px] mx-auto my-auto py-6 sm:py-8">
@@ -356,6 +371,8 @@ export default function GateLogin() {
                 : "Sign in to access live QR scanning, ticket verification, walk-in passes, and wristband check-in."}
             </p>
           </div>
+
+          <StaffPortalSwitcher activePortal="gate" variant="neobrutal" />
 
           {hasNonGateSignedInRole && (
             <div
@@ -564,12 +581,14 @@ export default function GateLogin() {
                   <input
                     id="gate-email"
                     type="email"
+                    inputMode="email"
+                    autoCapitalize="none"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="gate.staff@nationalcollege.edu"
                     required
                     autoComplete="email"
-                    className="w-full h-[50px] pl-11 pr-4 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none focus:bg-white focus:border-[#4549D8]"
+                    className="w-full h-12 pl-11 pr-4 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-base font-body border-2 border-[#191936] rounded-xl outline-none focus:bg-white focus:border-[#4549D8]"
                   />
                   <Mail size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
                 </div>
@@ -579,15 +598,15 @@ export default function GateLogin() {
                 <div className="flex items-center justify-between">
                   <label
                     htmlFor="gate-password"
-                    className="font-heading text-xs sm:text-[13px] font-bold text-[#191936] tracking-wide uppercase"
+                    className="font-heading text-sm font-bold text-[#191936]"
                   >
-                    Password
+                    Password *
                   </label>
                   <button
                     type="button"
                     onClick={handleResetPassword}
                     disabled={resetLoading}
-                    className="text-[11px] sm:text-xs font-heading font-bold text-[#4549D8] hover:underline cursor-pointer disabled:opacity-50"
+                    className="min-h-[36px] text-xs font-heading font-bold text-[#4549D8] hover:underline cursor-pointer disabled:opacity-50"
                   >
                     {resetLoading ? "Sending reset link..." : "Forgot password?"}
                   </button>
@@ -599,16 +618,16 @@ export default function GateLogin() {
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••••••"
+                    placeholder="Enter your password"
                     required
                     autoComplete="current-password"
-                    className="w-full h-[50px] pl-11 pr-11 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none focus:bg-white focus:border-[#4549D8]"
+                    className="w-full h-12 pl-11 pr-12 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-base font-body border-2 border-[#191936] rounded-xl outline-none focus:bg-white focus:border-[#4549D8]"
                   />
                   <Lock size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
                   <button
                     type="button"
                     onClick={() => setShowPassword((prev) => !prev)}
-                    className="absolute right-3 p-1.5 text-[#191936]/60 hover:text-[#191936] transition-colors cursor-pointer"
+                    className="absolute right-1.5 min-w-[40px] min-h-[40px] flex items-center justify-center text-[#191936]/60 hover:text-[#191936] transition-colors cursor-pointer"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
                     {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -619,15 +638,15 @@ export default function GateLogin() {
               <button
                 type="submit"
                 disabled={loading}
-                className="mt-2 w-full h-[52px] rounded-full bg-[#D5F542] text-[#191936] font-heading font-bold text-sm sm:text-base uppercase tracking-wider border-2 border-[#191936] shadow-[3px_3px_0px_#191936] hover:bg-[#E2FF4A] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+                className="mt-2 w-full h-12 rounded-xl bg-[#D5F542] text-[#191936] font-heading font-bold text-base border-2 border-[#191936] shadow-[3px_3px_0px_#191936] hover:bg-[#E2FF4A] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
               >
                 {loading ? (
                   <>
                     <Loader2 size={18} className="animate-spin text-[#191936]" />
-                    <span>Verifying Credentials...</span>
+                    <span>Signing In...</span>
                   </>
                 ) : (
-                  <span>Sign In to Gate Portal</span>
+                  <span>Sign In</span>
                 )}
               </button>
             </form>

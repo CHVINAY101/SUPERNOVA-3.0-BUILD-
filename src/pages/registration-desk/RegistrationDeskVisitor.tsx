@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import {
   buildVisitorDisplaySubtitle,
   FACULTY_DESIGNATION_OPTIONS,
@@ -58,6 +58,9 @@ interface IssuedPassView {
 }
 
 export default function RegistrationDeskVisitor() {
+  const { hasPermission } = useAuth();
+  const canCreateVisitor = hasPermission("visitor:create");
+  const canIssueTicket = hasPermission("tickets:manage");
   const submitLockRef = useRef(false);
 
   const [portalLoading, setPortalLoading] = useState(true);
@@ -170,7 +173,7 @@ export default function RegistrationDeskVisitor() {
     setSubmitError(null);
     try {
       let ticket: TicketRecord | null = await fetchTicketByRegistration("visitor", match.id);
-      if (!ticket) {
+      if (!ticket && canIssueTicket) {
         const res = await issueTicketForRegistration("visitor", match.id);
         if (res.ok && res.ticket) {
           ticket = res.ticket;
@@ -202,7 +205,7 @@ export default function RegistrationDeskVisitor() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitLockRef.current || isSubmitting || portalClosed) return;
+    if (!canCreateVisitor || submitLockRef.current || isSubmitting || portalClosed) return;
 
     const errors = validateVisitorFormFields({
       categoryId,
@@ -325,27 +328,32 @@ export default function RegistrationDeskVisitor() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-2xl mx-auto space-y-5">
       {/* Screen Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 pb-4 print:hidden">
-        <div>
-          <p className="text-xs font-mono uppercase tracking-wider text-slate-500 m-0">
-            Walk-In Entry Pass · Instant QR Issuance
-          </p>
-          <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 tracking-tight mt-1 mb-0">
-            General Visitor Registration
-          </h1>
-        </div>
-        <Link
-          to="/registration-desk/search"
-          className="min-h-[40px] inline-flex items-center px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 no-underline self-start sm:self-auto"
-        >
-          Search Existing Visitors
-        </Link>
+      <div className="border-b border-slate-200 pb-3 print:hidden">
+        <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight m-0">
+          General Visitor Registration
+        </h1>
+        <p className="text-sm text-slate-600 mt-1 mb-0">
+          Enter visitor details to issue an entry pass immediately. Fields marked * are required.
+        </p>
       </div>
 
+      {/* Permission Restriction Banner */}
+      {!canCreateVisitor && (
+        <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-3 print:hidden">
+          <Lock size={18} className="text-amber-700 shrink-0 mt-0.5" />
+          <div className="text-xs sm:text-sm space-y-1">
+            <p className="font-bold m-0">Visitor Registration Permission Restricted</p>
+            <p className="m-0 text-amber-900">
+              Your account does not currently hold the <code className="font-mono text-xs">visitor:create</code> permission. Contact a Super Admin if you need walk-in registration access restored.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Closed Banner */}
-      {!portalLoading && portalClosed && (
+      {canCreateVisitor && !portalLoading && portalClosed && (
         <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 flex items-start gap-3 print:hidden">
           <Lock size={18} className="text-rose-600 shrink-0 mt-0.5" />
           <div className="text-xs sm:text-sm space-y-1">
@@ -397,119 +405,104 @@ export default function RegistrationDeskVisitor() {
       {/* Post-Submit Official Pass Screen */}
       {issuedPass ? (
         <>
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-7 space-y-6 print:hidden">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-              <div className="flex items-start gap-3">
-                <CheckCircle2 size={24} className="text-emerald-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-xs font-mono uppercase tracking-wider text-emerald-700 font-semibold m-0">
-                    Walk-In Pass Issued
-                  </p>
-                  <h2 className="text-xl font-display font-bold text-slate-900 m-0 mt-0.5">
-                    {issuedPass.fullName}
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5 m-0">
-                    {issuedPass.subtitle}
-                    {issuedPass.institution ? ` · ${issuedPass.institution}` : ""}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 self-start">
-                <div>
-                  <span className="text-[10px] font-mono uppercase text-slate-500 block">
-                    Ticket Reference
-                  </span>
-                  <span className="font-mono text-base font-bold text-slate-900 tabular-nums">
-                    {issuedPass.ticketRef}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleCopyRef}
-                  className="min-h-[36px] inline-flex items-center gap-1 px-2.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-xs font-medium text-slate-700 cursor-pointer"
-                >
-                  <Copy size={12} />
-                  <span>{copiedRef ? "Copied" : "Copy"}</span>
-                </button>
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5 print:hidden">
+            <div className="flex items-start gap-3 pb-4 border-b border-slate-200">
+              <CheckCircle2 size={24} className="text-emerald-600 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-emerald-700 m-0">
+                  Pass Issued
+                </p>
+                <h2 className="text-xl font-display font-bold text-slate-900 m-0 mt-0.5 break-words">
+                  {issuedPass.fullName}
+                </h2>
+                <p className="text-sm text-slate-600 mt-0.5 m-0 break-words">
+                  {issuedPass.subtitle}
+                  {issuedPass.institution ? ` · ${issuedPass.institution}` : ""}
+                </p>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6 items-center">
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center mx-auto w-[220px]">
-                {qrDataUrl ? (
-                  <img
-                    src={qrDataUrl}
-                    alt={`QR Pass for ${issuedPass.ticketRef}`}
-                    className="w-44 h-44 mx-auto block rounded-lg bg-white p-1.5 border border-slate-200"
-                  />
-                ) : (
-                  <div className="w-44 h-44 mx-auto flex items-center justify-center text-xs font-mono text-slate-500">
-                    <RefreshCw size={16} className="animate-spin mr-1.5" />
-                    Generating QR...
-                  </div>
-                )}
-                <p className="text-[11px] font-mono font-semibold text-slate-700 mt-2 mb-0">
-                  {issuedPass.ticketRef}
-                </p>
-              </div>
+            <div className="flex flex-col items-center text-center gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+              {qrDataUrl ? (
+                <img
+                  src={qrDataUrl}
+                  alt={`QR Pass for ${issuedPass.ticketRef}`}
+                  className="w-48 h-48 mx-auto block rounded-xl bg-white p-2 border border-slate-200"
+                />
+              ) : (
+                <div className="w-48 h-48 mx-auto flex items-center justify-center text-sm text-slate-500">
+                  <RefreshCw size={18} className="animate-spin mr-2" />
+                  Generating QR...
+                </div>
+              )}
 
-              <div className="space-y-4">
-                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs sm:text-sm m-0">
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                    <dt className="text-[11px] font-mono uppercase text-slate-500">Registration Ref</dt>
-                    <dd className="font-mono font-bold text-slate-900 mt-0.5 m-0 tabular-nums">
-                      {issuedPass.registrationRef}
-                    </dd>
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                    <dt className="text-[11px] font-mono uppercase text-slate-500">Attendance</dt>
-                    <dd className="font-semibold text-slate-900 mt-0.5 m-0">
-                      {issuedPass.daysAttending} (20–21 Nov 2026)
-                    </dd>
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                    <dt className="text-[11px] font-mono uppercase text-slate-500">Email</dt>
-                    <dd className="text-slate-900 mt-0.5 m-0 break-all">{issuedPass.email}</dd>
-                  </div>
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                    <dt className="text-[11px] font-mono uppercase text-slate-500">Phone</dt>
-                    <dd className="font-mono text-slate-900 mt-0.5 m-0">
-                      {issuedPass.phone || "Not provided"}
-                    </dd>
-                  </div>
-                </dl>
-
-                <div className="flex flex-wrap gap-3 pt-1">
+              <div className="space-y-1">
+                <span className="text-xs font-medium text-slate-500 block">
+                  Registration Reference
+                </span>
+                <div className="flex items-center justify-center gap-2 flex-wrap">
+                  <span className="font-mono text-lg font-bold text-slate-900 tabular-nums">
+                    {issuedPass.ticketRef}
+                  </span>
                   <button
                     type="button"
-                    disabled={downloadingPdf}
-                    onClick={handleDownloadPdf}
-                    className="min-h-[44px] inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold cursor-pointer disabled:opacity-60"
+                    onClick={handleCopyRef}
+                    className="min-h-[44px] inline-flex items-center gap-1.5 px-3 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-xs font-semibold text-slate-700 cursor-pointer"
                   >
-                    <Download size={16} />
-                    <span>{downloadingPdf ? "Preparing PDF..." : "Download PDF Ticket"}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => window.print()}
-                    className="min-h-[44px] inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs sm:text-sm font-semibold cursor-pointer"
-                  >
-                    <Printer size={16} />
-                    <span>Print Pass</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={resetForNextVisitor}
-                    className="min-h-[44px] inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold cursor-pointer"
-                  >
-                    <UserPlus size={16} />
-                    <span>Register Next Visitor</span>
+                    <Copy size={14} />
+                    <span>{copiedRef ? "Copied" : "Copy"}</span>
                   </button>
                 </div>
               </div>
+            </div>
+
+            <dl className="grid grid-cols-1 gap-2.5 text-sm m-0">
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                <dt className="text-slate-500 font-medium">Attendance</dt>
+                <dd className="font-semibold text-slate-900 m-0 text-right">
+                  {issuedPass.daysAttending} (20–21 Nov 2026)
+                </dd>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                <dt className="text-slate-500 font-medium shrink-0">Email</dt>
+                <dd className="text-slate-900 m-0 break-all text-right">{issuedPass.email}</dd>
+              </div>
+              {issuedPass.phone && (
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                  <dt className="text-slate-500 font-medium">Phone</dt>
+                  <dd className="font-mono text-slate-900 m-0 text-right">{issuedPass.phone}</dd>
+                </div>
+              )}
+            </dl>
+
+            <div className="grid grid-cols-1 gap-3 pt-1">
+              <button
+                type="button"
+                disabled={downloadingPdf}
+                onClick={handleDownloadPdf}
+                className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-base font-semibold cursor-pointer disabled:opacity-60"
+              >
+                <Download size={18} />
+                <span>{downloadingPdf ? "Preparing Pass..." : "Download Pass"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={resetForNextVisitor}
+                className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-base font-semibold cursor-pointer"
+              >
+                <UserPlus size={18} />
+                <span>Register Next Visitor</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-sm font-semibold cursor-pointer"
+              >
+                <Printer size={16} />
+                <span>Print Pass</span>
+              </button>
             </div>
           </div>
 
@@ -557,19 +550,19 @@ export default function RegistrationDeskVisitor() {
             </div>
           </section>
         </>
-      ) : (
+      ) : !canCreateVisitor ? null : (
         /* Walk-In Registration Form */
         <form
           onSubmit={handleSubmit}
           noValidate
-          className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-7 space-y-6 print:hidden"
+          className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5 print:hidden"
         >
           {/* Step 1: Visitor Category */}
           <div>
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-700 block mb-2.5">
-              1. Visitor Category *
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <span className="text-sm font-semibold text-slate-800 block mb-2.5">
+              Visitor Category *
+            </span>
+            <div className="grid grid-cols-1 gap-2.5">
               {VISITOR_CATEGORY_CARDS.map((card) => {
                 const selected = categoryId === card.id;
                 return (
@@ -585,14 +578,14 @@ export default function RegistrationDeskVisitor() {
                       clearError("customDesignation");
                       clearError("institution");
                     }}
-                    className={`text-left p-4 rounded-xl border transition-colors min-h-[84px] cursor-pointer disabled:opacity-60 ${
+                    className={`text-left p-4 rounded-xl border transition-colors min-h-[60px] cursor-pointer disabled:opacity-60 ${
                       selected
-                        ? "border-blue-600 bg-blue-50/70 text-slate-900"
+                        ? "border-blue-600 bg-blue-50 text-slate-900"
                         : "border-slate-200 bg-white hover:bg-slate-50 text-slate-700"
                     }`}
                   >
-                    <span className="text-xs font-bold block">{card.title}</span>
-                    <span className="text-[11px] text-slate-500 block mt-1 leading-snug">
+                    <span className="text-sm font-bold block">{card.title}</span>
+                    <span className="text-xs text-slate-600 block mt-0.5 leading-snug">
                       {card.shortDescription}
                     </span>
                   </button>
@@ -600,19 +593,21 @@ export default function RegistrationDeskVisitor() {
               })}
             </div>
             {fieldErrors.category && (
-              <p className="text-xs text-rose-600 mt-1.5 m-0">{fieldErrors.category}</p>
+              <p role="alert" className="text-sm text-rose-600 mt-1.5 m-0">{fieldErrors.category}</p>
             )}
           </div>
 
-          {/* Step 2: Attendee Details */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Step 2: Attendee Details (Single Column Mobile-First) */}
+          <div className="grid grid-cols-1 gap-4">
             <div>
-              <label htmlFor="desk-vis-name" className="text-xs font-semibold text-slate-700 block mb-1.5">
+              <label htmlFor="desk-vis-name" className="text-sm font-semibold text-slate-800 block mb-1.5">
                 Full Name *
               </label>
               <input
                 id="desk-vis-name"
                 type="text"
+                autoComplete="name"
+                required
                 disabled={portalClosed || isSubmitting}
                 value={fullName}
                 onChange={(e) => {
@@ -620,20 +615,24 @@ export default function RegistrationDeskVisitor() {
                   clearError("fullName");
                 }}
                 placeholder="Enter visitor full name"
-                className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
               />
               {fieldErrors.fullName && (
-                <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.fullName}</p>
+                <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.fullName}</p>
               )}
             </div>
 
             <div>
-              <label htmlFor="desk-vis-email" className="text-xs font-semibold text-slate-700 block mb-1.5">
+              <label htmlFor="desk-vis-email" className="text-sm font-semibold text-slate-800 block mb-1.5">
                 Email Address *
               </label>
               <input
                 id="desk-vis-email"
                 type="email"
+                inputMode="email"
+                autoCapitalize="none"
+                autoComplete="email"
+                required
                 disabled={portalClosed || isSubmitting}
                 value={email}
                 onChange={(e) => {
@@ -641,20 +640,22 @@ export default function RegistrationDeskVisitor() {
                   clearError("email");
                 }}
                 placeholder="visitor@example.com"
-                className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
               />
               {fieldErrors.email && (
-                <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.email}</p>
+                <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.email}</p>
               )}
             </div>
 
             <div>
-              <label htmlFor="desk-vis-phone" className="text-xs font-semibold text-slate-700 block mb-1.5">
+              <label htmlFor="desk-vis-phone" className="text-sm font-semibold text-slate-800 block mb-1.5">
                 Mobile Number (Optional)
               </label>
               <input
                 id="desk-vis-phone"
                 type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 disabled={portalClosed || isSubmitting}
                 value={phone}
                 onChange={(e) => {
@@ -662,15 +663,15 @@ export default function RegistrationDeskVisitor() {
                   clearError("phone");
                 }}
                 placeholder="10-digit mobile number"
-                className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
               />
               {fieldErrors.phone && (
-                <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.phone}</p>
+                <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.phone}</p>
               )}
             </div>
 
             <div>
-              <label htmlFor="desk-vis-days" className="text-xs font-semibold text-slate-700 block mb-1.5">
+              <label htmlFor="desk-vis-days" className="text-sm font-semibold text-slate-800 block mb-1.5">
                 Days Attending
               </label>
               <select
@@ -678,7 +679,7 @@ export default function RegistrationDeskVisitor() {
                 disabled={portalClosed || isSubmitting}
                 value={daysAttending}
                 onChange={(e) => setDaysAttending(e.target.value)}
-                className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
               >
                 <option value="Both">Both Days (20–21 Nov 2026)</option>
                 <option value="Day 1">Day 1 Only (20 Nov 2026)</option>
@@ -688,15 +689,16 @@ export default function RegistrationDeskVisitor() {
           </div>
 
           {/* Step 3: Category-Specific Fields */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
+          <div className="grid grid-cols-1 gap-4 pt-3 border-t border-slate-200">
             {categoryId === "student" && (
               <div>
-                <label htmlFor="desk-vis-class" className="text-xs font-semibold text-slate-700 block mb-1.5">
+                <label htmlFor="desk-vis-class" className="text-sm font-semibold text-slate-800 block mb-1.5">
                   Class / Course *
                 </label>
                 <input
                   id="desk-vis-class"
                   type="text"
+                  required
                   disabled={portalClosed || isSubmitting}
                   value={studentClass}
                   onChange={(e) => {
@@ -704,10 +706,10 @@ export default function RegistrationDeskVisitor() {
                     clearError("studentClass");
                   }}
                   placeholder="e.g. 2nd PUC, BCA 2nd Year, Class 10"
-                  className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
+                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
                 />
                 {fieldErrors.studentClass && (
-                  <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.studentClass}</p>
+                  <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.studentClass}</p>
                 )}
               </div>
             )}
@@ -715,18 +717,19 @@ export default function RegistrationDeskVisitor() {
             {categoryId === "faculty" && (
               <>
                 <div>
-                  <label htmlFor="desk-vis-desig" className="text-xs font-semibold text-slate-700 block mb-1.5">
+                  <label htmlFor="desk-vis-desig" className="text-sm font-semibold text-slate-800 block mb-1.5">
                     Designation / Role *
                   </label>
                   <select
                     id="desk-vis-desig"
+                    required
                     disabled={portalClosed || isSubmitting}
                     value={designationOption}
                     onChange={(e) => {
                       setDesignationOption(e.target.value);
                       clearError("designationOption");
                     }}
-                    className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
+                    className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
                   >
                     <option value="">Select designation...</option>
                     {FACULTY_DESIGNATION_OPTIONS.map((opt) => (
@@ -736,18 +739,19 @@ export default function RegistrationDeskVisitor() {
                     ))}
                   </select>
                   {fieldErrors.designationOption && (
-                    <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.designationOption}</p>
+                    <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.designationOption}</p>
                   )}
                 </div>
 
                 {designationOption === "Other" && (
                   <div>
-                    <label htmlFor="desk-vis-custom-desig" className="text-xs font-semibold text-slate-700 block mb-1.5">
+                    <label htmlFor="desk-vis-custom-desig" className="text-sm font-semibold text-slate-800 block mb-1.5">
                       Specify Designation *
                     </label>
                     <input
                       id="desk-vis-custom-desig"
                       type="text"
+                      required
                       disabled={portalClosed || isSubmitting}
                       value={customDesignation}
                       onChange={(e) => {
@@ -755,18 +759,18 @@ export default function RegistrationDeskVisitor() {
                         clearError("customDesignation");
                       }}
                       placeholder="Enter official role"
-                      className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
+                      className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
                     />
                     {fieldErrors.customDesignation && (
-                      <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.customDesignation}</p>
+                      <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.customDesignation}</p>
                     )}
                   </div>
                 )}
               </>
             )}
 
-            <div className={categoryId === "general" ? "sm:col-span-2" : ""}>
-              <label htmlFor="desk-vis-inst" className="text-xs font-semibold text-slate-700 block mb-1.5">
+            <div>
+              <label htmlFor="desk-vis-inst" className="text-sm font-semibold text-slate-800 block mb-1.5">
                 {categoryId === "general"
                   ? "Institution / Organization (Optional)"
                   : "College / Institution Name *"}
@@ -774,6 +778,7 @@ export default function RegistrationDeskVisitor() {
               <input
                 id="desk-vis-inst"
                 type="text"
+                required={categoryId !== "general"}
                 disabled={portalClosed || isSubmitting}
                 value={institution}
                 onChange={(e) => {
@@ -781,17 +786,17 @@ export default function RegistrationDeskVisitor() {
                   clearError("institution");
                 }}
                 placeholder="School, college, or organization name"
-                className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-blue-600"
+                className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600"
               />
               {fieldErrors.institution && (
-                <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.institution}</p>
+                <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.institution}</p>
               )}
             </div>
           </div>
 
           {/* Consent */}
-          <div className="pt-2 border-t border-slate-100">
-            <label className="flex items-start gap-3 cursor-pointer text-xs sm:text-sm text-slate-700">
+          <div className="pt-3 border-t border-slate-200">
+            <label className="flex items-start gap-3 cursor-pointer text-sm text-slate-700 min-h-[44px]">
               <input
                 type="checkbox"
                 checked={consent}
@@ -800,39 +805,39 @@ export default function RegistrationDeskVisitor() {
                   setConsent(e.target.checked);
                   clearError("consent");
                 }}
-                className="mt-1 w-4 h-4 accent-blue-600 rounded"
+                className="mt-0.5 w-5 h-5 accent-blue-600 rounded shrink-0"
               />
               <span>
-                Visitor confirms campus entry details are accurate and agrees to Supernova 3.0 event guidelines.
+                Visitor details are accurate and visitor agrees to event guidelines.
               </span>
             </label>
             {fieldErrors.consent && (
-              <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.consent}</p>
+              <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.consent}</p>
             )}
           </div>
 
           {submitError && (
-            <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs sm:text-sm text-rose-800 font-medium flex items-start gap-2">
-              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-600" />
+            <div role="alert" className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-800 font-medium flex items-start gap-2.5">
+              <AlertCircle size={18} className="shrink-0 mt-0.5 text-rose-600" />
               <span>{submitError}</span>
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-3 pt-2">
+          <div className="pt-1">
             <button
               type="submit"
               disabled={portalClosed || isSubmitting}
-              className="min-h-[48px] w-full sm:w-auto px-6 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+              className="min-h-[48px] w-full px-6 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-base font-semibold inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
               {isSubmitting ? (
                 <>
-                  <RefreshCw size={16} className="animate-spin" />
-                  <span>Issuing Walk-In Pass...</span>
+                  <RefreshCw size={18} className="animate-spin" />
+                  <span>Issuing Pass...</span>
                 </>
               ) : (
                 <>
-                  <UserPlus size={16} />
-                  <span>Register Walk-In & Issue Pass</span>
+                  <UserPlus size={18} />
+                  <span>Complete Registration & Issue Pass</span>
                 </>
               )}
             </button>

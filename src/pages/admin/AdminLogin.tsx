@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Navigate, useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth, type AuthErrorCategory } from "@/lib/auth";
-import { getDefaultAdminRoute } from "@/lib/rbac";
+import { resolvePostLoginRoute } from "@/lib/registrationDesk";
+import { StaffPortalSwitcher } from "@/components/auth/StaffPortalSwitcher";
 import {
   supabase,
   checkSupabaseClientConfig,
@@ -301,11 +302,12 @@ export default function AdminLogin() {
   // Already active authenticated admin -> redirect to role-appropriate workspace
   if (!authLoading && session && isAdmin && accountStatus === "active" && !isInviteFlow) {
     const requestedFrom = (location.state as { from?: { pathname: string } })?.from?.pathname;
-    const defaultDest = getDefaultAdminRoute(role, permissions);
-    const dest =
-      defaultDest === "/gate" || defaultDest === "/registration-desk"
-        ? defaultDest
-        : requestedFrom ?? defaultDest;
+    const dest = resolvePostLoginRoute({
+      portal: "admin",
+      role,
+      permissions,
+      requestedFrom,
+    });
     return <Navigate to={dest} replace />;
   }
 
@@ -375,10 +377,15 @@ export default function AdminLogin() {
         // Fallback if RPC not yet deployed
       }
 
-      await refreshRole();
+      const refreshed = await refreshRole();
       setIsInviteFlow(false);
       setLoading(false);
-      navigate("/admin", { replace: true });
+      const dest = resolvePostLoginRoute({
+        portal: "admin",
+        role: refreshed?.role ?? role,
+        permissions: refreshed?.permissions ?? permissions,
+      });
+      navigate(dest, { replace: true });
     } catch (err: any) {
       setLoading(false);
       const diag = classifyAuthError(err);
@@ -409,7 +416,13 @@ export default function AdminLogin() {
       setDiagnostic(diag);
       logAuthDiagnosticToConsole(diag);
     } else {
-      const dest = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "/admin";
+      const requestedFrom = (location.state as { from?: { pathname: string } })?.from?.pathname;
+      const dest = resolvePostLoginRoute({
+        portal: "admin",
+        role: result.role ?? role,
+        permissions: result.permissions ?? permissions,
+        requestedFrom,
+      });
       navigate(dest, { replace: true });
     }
   };
@@ -534,42 +547,38 @@ export default function AdminLogin() {
         aria-hidden="true"
       />
 
-      <header className="relative z-10 w-full max-w-5xl mx-auto flex items-center justify-between py-2">
+      <header className="relative z-10 w-full max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-2 py-2">
         <Link
           to="/"
-          className="inline-flex items-center gap-2 text-xs sm:text-sm font-heading font-extrabold uppercase tracking-wider text-[#191936] hover:text-[#4549D8] transition-colors"
+          className="min-h-[44px] inline-flex items-center gap-2 text-xs sm:text-sm font-heading font-bold text-[#191936] hover:text-[#4549D8] transition-colors"
         >
           <ArrowLeft size={16} />
-          <span>Return to Festival Homepage</span>
+          <span>Back to Homepage</span>
         </Link>
 
-        <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#D5F542] border border-[#191936]" />
-          <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#191936]/70">
-            INVITATION-ONLY CRM PORTAL
-          </span>
-        </div>
+        <span className="text-xs font-semibold text-[#191936]/70">
+          Supernova 3.0 Staff Portal
+        </span>
       </header>
 
-      <main className="relative z-10 w-full max-w-[480px] mx-auto my-auto py-8">
-        <div className="bg-[#FFFFFF] border-3 sm:border-4 border-[#191936] rounded-[24px] sm:rounded-[32px] p-6 sm:p-8 md:p-10 shadow-[6px_6px_0px_#191936] sm:shadow-[8px_8px_0px_#191936] flex flex-col">
+      <main className="relative z-10 w-full max-w-[460px] mx-auto my-auto py-6">
+        <div className="bg-[#FFFFFF] border-3 sm:border-4 border-[#191936] rounded-[24px] sm:rounded-[30px] p-5 sm:p-8 shadow-[6px_6px_0px_#191936] sm:shadow-[8px_8px_0px_#191936] flex flex-col">
           <div className="flex flex-col items-center text-center mb-6">
-            <div className="w-14 h-14 rounded-2xl bg-[#191936] text-[#D5F542] border-2 border-[#191936] flex items-center justify-center shadow-[3px_3px_0px_#4549D8] mb-4">
-              {isInviteFlow ? <UserCheck size={26} /> : <Lock size={26} />}
+            <div className="w-12 h-12 rounded-2xl bg-[#191936] text-[#D5F542] border-2 border-[#191936] flex items-center justify-center shadow-[3px_3px_0px_#4549D8] mb-3.5">
+              {isInviteFlow ? <UserCheck size={22} /> : <Lock size={22} />}
             </div>
 
-            <span className="font-heading text-xs font-bold text-[#4549D8] tracking-[0.16em] uppercase mb-1">
-              THE NATIONAL COLLEGE · BASAVANAGUDI
-            </span>
-            <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-[#191936] leading-tight">
-              {isInviteFlow ? "Complete CRM Invitation" : "Admin & Staff Login"}
+            <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-[#191936] leading-tight m-0">
+              {isInviteFlow ? "Activate Staff Account" : "Staff Login"}
             </h1>
-            <p className="font-body text-xs sm:text-sm text-[#191936]/75 mt-1.5 leading-relaxed max-w-[350px]">
+            <p className="font-body text-sm text-[#191936]/75 mt-1.5 leading-relaxed max-w-[340px]">
               {isInviteFlow
-                ? "Set a secure password for your invited Supernova 3.0 CRM account to activate your assigned role."
-                : "Sign in with your authorized Supernova 3.0 CRM credentials. Access is restricted to invited personnel."}
+                ? "Create a password to activate your Supernova 3.0 staff account."
+                : "Sign in with your staff email and password to open your assigned portal."}
             </p>
           </div>
+
+          <StaffPortalSwitcher activePortal="admin" variant="neobrutal" />
 
           {diagnostic && categoryStyle && (
             <div
@@ -789,41 +798,42 @@ export default function AdminLogin() {
               <div className="flex flex-col gap-1.5">
                 <label
                   htmlFor="admin-email"
-                  className="font-heading text-xs sm:text-[13px] font-bold text-[#191936] tracking-wide uppercase flex items-center justify-between"
+                  className="font-heading text-sm font-bold text-[#191936]"
                 >
-                  <span>Email Address</span>
-                  <span className="text-[#191936]/40 font-normal lowercase">invited staff only</span>
+                  Email Address *
                 </label>
                 <div className="relative flex items-center">
                   <input
                     id="admin-email"
                     type="email"
+                    inputMode="email"
+                    autoCapitalize="none"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="staff@nationalcollege.edu"
                     required
                     autoComplete="email"
-                    className="w-full h-[50px] sm:h-[52px] pl-11 pr-4 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
+                    className="w-full h-12 pl-11 pr-4 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
                   />
                   <Mail size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
                 </div>
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <label
                     htmlFor="admin-password"
-                    className="font-heading text-xs sm:text-[13px] font-bold text-[#191936] tracking-wide uppercase"
+                    className="font-heading text-sm font-bold text-[#191936]"
                   >
-                    Password
+                    Password *
                   </label>
                   <button
                     type="button"
                     onClick={handleResetPassword}
                     disabled={resetLoading}
-                    className="text-[11px] sm:text-xs font-heading font-bold text-[#4549D8] hover:underline cursor-pointer disabled:opacity-50"
+                    className="min-h-[36px] text-xs font-heading font-bold text-[#4549D8] hover:underline cursor-pointer disabled:opacity-50"
                   >
-                    {resetLoading ? "Dispatching link..." : "Forgot password?"}
+                    {resetLoading ? "Sending link..." : "Forgot password?"}
                   </button>
                 </div>
 
@@ -833,16 +843,16 @@ export default function AdminLogin() {
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••••••"
+                    placeholder="Enter your password"
                     required
                     autoComplete="current-password"
-                    className="w-full h-[50px] sm:h-[52px] pl-11 pr-11 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-sm sm:text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
+                    className="w-full h-12 pl-11 pr-12 bg-[#FAF9F4] text-[#191936] placeholder-[#191936]/40 text-base font-body border-2 border-[#191936] rounded-xl outline-none transition-all focus:bg-white focus:border-[#4549D8] focus:shadow-[2px_2px_0px_#4549D8]"
                   />
                   <Lock size={18} className="absolute left-3.5 text-[#191936]/50 pointer-events-none" />
                   <button
                     type="button"
                     onClick={() => setShowPassword((prev) => !prev)}
-                    className="absolute right-3 p-1.5 text-[#191936]/60 hover:text-[#191936] transition-colors cursor-pointer"
+                    className="absolute right-1.5 min-w-[40px] min-h-[40px] flex items-center justify-center text-[#191936]/60 hover:text-[#191936] transition-colors cursor-pointer"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
                     {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -853,42 +863,23 @@ export default function AdminLogin() {
               <button
                 type="submit"
                 disabled={loading}
-                className="mt-3 w-full h-[52px] rounded-full bg-[#D5F542] text-[#191936] font-heading font-bold text-sm sm:text-base uppercase tracking-wider border-2 border-[#191936] shadow-[3px_3px_0px_#191936] hover:bg-[#E2FF4A] hover:shadow-[4px_4px_0px_#191936] hover:-translate-y-0.5 active:translate-y-0 active:shadow-[1px_1px_0px_#191936] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60 disabled:pointer-events-none"
+                className="mt-2 w-full h-12 rounded-xl bg-[#D5F542] text-[#191936] font-heading font-bold text-base border-2 border-[#191936] shadow-[3px_3px_0px_#191936] hover:bg-[#E2FF4A] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60 disabled:pointer-events-none"
               >
                 {loading ? (
                   <>
                     <Loader2 size={18} className="animate-spin text-[#191936]" />
-                    <span>Authenticating...</span>
+                    <span>Signing In...</span>
                   </>
                 ) : (
-                  <span>Sign In to Operations</span>
+                  <span>Sign In</span>
                 )}
               </button>
             </form>
           )}
 
-          <div className="mt-6 pt-5 border-t-2 border-[#191936]/10 flex flex-col gap-2">
-            <span className="font-heading text-[11px] font-bold text-[#191936]/70 uppercase tracking-wider">
-              Invitation-Only Role-Based Access Control
-            </span>
-            <p className="font-body text-xs text-[#191936]/60 leading-relaxed m-0">
-              Public self-signup is disabled. CRM access is provisioned strictly via Super Admin invitations with assigned operational permissions.
-            </p>
-            <div className="pt-1 flex flex-col gap-1">
-              <Link
-                to="/registration-desk/login"
-                className="text-xs font-heading font-bold text-[#4549D8] hover:underline no-underline"
-              >
-                Registration Desk Volunteer? Sign in at Registration Desk →
-              </Link>
-              <Link
-                to="/gate/login"
-                className="text-xs font-heading font-bold text-[#4549D8] hover:underline no-underline"
-              >
-                Gate Entry &amp; Ticket Verification Staff? Sign in at Gate Portal →
-              </Link>
-            </div>
-          </div>
+          <p className="mt-5 pt-4 border-t border-[#191936]/15 font-body text-xs text-[#191936]/65 leading-relaxed text-center m-0">
+            Access is restricted to invited Supernova 3.0 personnel. Staff are routed automatically based on their assigned role.
+          </p>
         </div>
       </main>
 

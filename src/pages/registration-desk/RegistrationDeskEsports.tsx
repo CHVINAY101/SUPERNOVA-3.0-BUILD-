@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 import {
   getEducationSuggestionsForType,
   getGameClosedDisplayMessage,
@@ -34,6 +35,8 @@ const EMPTY_PLAYER = (): Required<PlayerInput> => ({
 });
 
 export default function RegistrationDeskEsports() {
+  const { hasPermission } = useAuth();
+  const canCreateEsports = hasPermission("esports:create");
   const submitLockRef = useRef(false);
   const cachedPlayersRef = useRef<Required<PlayerInput>[]>([]);
 
@@ -220,7 +223,7 @@ export default function RegistrationDeskEsports() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitLockRef.current || isSubmitting) return;
+    if (!canCreateEsports || submitLockRef.current || isSubmitting) return;
 
     const errors: Record<string, string> = {};
     if (!selectedGame) {
@@ -319,43 +322,54 @@ export default function RegistrationDeskEsports() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-2xl mx-auto space-y-5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 pb-4">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
         <div>
-          <p className="text-xs font-mono uppercase tracking-wider text-slate-500 m-0">
-            Esports Desk · Strictly Respects Capacity & Approval Rules
-          </p>
-          <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 tracking-tight mt-1 mb-0">
-            Esports Squad Registration
+          <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight m-0">
+            Esports Registration
           </h1>
+          <p className="text-sm text-slate-600 mt-1 mb-0">
+            Fields marked * are required. Passes unlock after coordinator approval.
+          </p>
         </div>
 
         <button
           type="button"
           onClick={loadAvailability}
           disabled={loadingGames}
-          className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60 self-start sm:self-auto"
+          className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60 shrink-0"
         >
-          <RefreshCw size={13} className={loadingGames ? "animate-spin" : ""} />
-          <span>Refresh Availability</span>
+          <RefreshCw size={14} className={loadingGames ? "animate-spin" : ""} />
+          <span>Refresh</span>
         </button>
       </div>
 
-      {/* Post-Submit Pending Coordinator Approval View */}
-      {submittedApplication ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 space-y-5">
+      {!canCreateEsports ? (
+        <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-3">
+          <Lock size={18} className="text-amber-700 shrink-0 mt-0.5" />
+          <div className="text-xs sm:text-sm space-y-1">
+            <p className="font-bold m-0">Esports Registration Permission Restricted</p>
+            <p className="m-0 text-amber-900">
+              Your account does not currently hold the <code className="font-mono text-xs">esports:create</code> permission. Contact a Super Admin if you need esports registration access restored.
+            </p>
+          </div>
+        </div>
+      ) : submittedApplication ? (
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5">
           <div className="flex items-start gap-3 pb-4 border-b border-slate-200">
             <CheckCircle2 size={24} className="text-emerald-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-xs font-mono uppercase tracking-wider text-emerald-700 font-semibold m-0">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-emerald-700 m-0">
                 Application Recorded
               </p>
-              <h2 className="text-xl font-display font-bold text-slate-900 m-0 mt-0.5">
-                {submittedApplication.teamName} ({submittedApplication.gameTitle})
+              <h2 className="text-xl font-display font-bold text-slate-900 m-0 mt-0.5 break-words">
+                {submittedApplication.teamName} · {submittedApplication.gameTitle}
               </h2>
-              <p className="text-xs text-slate-500 mt-1 m-0">
-                Reference: <strong className="font-mono text-slate-900">{submittedApplication.applicationRef}</strong> ·
+              <p className="text-sm text-slate-600 mt-1 m-0">
+                Reference: <strong className="font-mono text-slate-900">{submittedApplication.applicationRef}</strong>
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5 m-0">
                 Captain: {submittedApplication.captainName} · {submittedApplication.playerCount} Players
               </p>
             </div>
@@ -363,44 +377,39 @@ export default function RegistrationDeskEsports() {
 
           <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-3 text-amber-950">
             <Clock size={18} className="text-amber-600 shrink-0 mt-0.5" />
-            <div className="text-xs sm:text-sm space-y-1">
-              <p className="font-bold m-0">Pending Coordinator Approval — Pass Not Issued Yet</p>
+            <div className="text-sm space-y-1">
+              <p className="font-bold m-0">Pending Approval</p>
               <p className="m-0 text-amber-900 leading-relaxed">
-                This application has been queued for Esports Coordinator review. In accordance with tournament policy, confirmed QR entry passes are NOT generated until coordinator approval succeeds.
+                This application awaits Esports Coordinator approval. The QR team pass will unlock once approved.
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="grid grid-cols-1 gap-3">
             <button
               type="button"
               onClick={resetForNextSquad}
-              className="min-h-[44px] inline-flex items-center gap-2 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold cursor-pointer"
+              className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-base font-semibold cursor-pointer"
             >
-              <Gamepad2 size={16} />
-              <span>Register Next Squad</span>
+              <Gamepad2 size={18} />
+              <span>Register Next Team</span>
             </button>
 
             <Link
               to="/registration-desk/search"
-              className="min-h-[44px] inline-flex items-center gap-2 px-5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-xs sm:text-sm font-semibold text-slate-800 no-underline"
+              className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-sm font-semibold text-slate-800 no-underline"
             >
               <span>Check Application Status</span>
             </Link>
           </div>
         </div>
       ) : (
-        <form onSubmit={handleSubmit} noValidate className="space-y-6">
+        <form onSubmit={handleSubmit} noValidate className="space-y-5">
           {/* 1. Game Selector */}
           <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-bold text-slate-900 m-0">
-                1. Select Game Title *
-              </h2>
-              <span className="text-xs font-mono text-slate-500">
-                VALORANT (5p) · BGMI (4p) · FREE FIRE (4p)
-              </span>
-            </div>
+            <h2 className="text-base font-bold text-slate-900 m-0">
+              1. Select Game *
+            </h2>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {availabilityList.map((game) => {
@@ -411,7 +420,7 @@ export default function RegistrationDeskEsports() {
                     key={game.id}
                     type="button"
                     onClick={() => handleSelectGame(game)}
-                    className={`text-left p-4 rounded-xl border transition-colors min-h-[104px] flex flex-col justify-between cursor-pointer ${
+                    className={`text-left p-4 rounded-xl border transition-colors min-h-[88px] flex flex-col justify-between cursor-pointer ${
                       isSelected
                         ? "border-indigo-600 bg-indigo-50/70"
                         : "border-slate-200 bg-white hover:bg-slate-50"
@@ -419,29 +428,26 @@ export default function RegistrationDeskEsports() {
                   >
                     <div className="flex items-center justify-between gap-2 w-full">
                       <span className="text-sm font-bold text-slate-900">{game.title}</span>
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            game.is_effectively_open ? "bg-emerald-500" : "bg-rose-500"
-                          }`}
-                        />
-                        <span className={game.is_effectively_open ? "text-emerald-700" : "text-rose-700"}>
-                          {game.is_effectively_open
-                            ? "Open"
-                            : game.status_reason === "capacity_reached"
-                            ? "Full"
-                            : "Closed"}
-                        </span>
+                      <span
+                        className={`text-xs font-semibold ${
+                          game.is_effectively_open ? "text-emerald-700" : "text-rose-700"
+                        }`}
+                      >
+                        {game.is_effectively_open
+                          ? "Open"
+                          : game.status_reason === "capacity_reached"
+                          ? "Full"
+                          : "Closed"}
                       </span>
                     </div>
 
-                    <div className="mt-2 text-xs text-slate-600 space-y-0.5 font-mono tabular-nums">
-                      <div>Roster: {teamSize} players · No subs</div>
+                    <div className="mt-2 text-xs text-slate-600 space-y-0.5 tabular-nums">
+                      <div>{teamSize} players required</div>
                       <div>
                         Teams: {game.total_registered_teams}
                         {game.max_teams !== null
                           ? ` / ${game.max_teams} (${game.slots_remaining ?? 0} left)`
-                          : " · Unlimited slots"}
+                          : " · Open slots"}
                       </div>
                     </div>
                   </button>
@@ -450,110 +456,121 @@ export default function RegistrationDeskEsports() {
             </div>
 
             {selectedGameClosed && (
-              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 flex items-start gap-2.5 text-xs sm:text-sm">
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 flex items-start gap-2.5 text-sm">
                 <Lock size={16} className="text-rose-600 shrink-0 mt-0.5" />
                 <div>
-                  <strong>{selectedGame?.title || "Esports"} Registration Closed: </strong>
+                  <strong>{selectedGame?.title || "Esports"} Closed: </strong>
                   <span>{selectedGameClosedMsg}</span>
                 </div>
               </div>
             )}
           </section>
 
-          {/* 2. Team & Captain Details */}
+          {/* 2. Team & Captain Details (Single Column Mobile-First) */}
           <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-            <h2 className="text-sm font-bold text-slate-900 m-0">
-              2. Squad & Captain Details
+            <h2 className="text-base font-bold text-slate-900 m-0">
+              2. Team & Captain Details
             </h2>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4">
               <div>
-                <label htmlFor="desk-esp-team" className="text-xs font-semibold text-slate-700 block mb-1.5">
+                <label htmlFor="desk-esp-team" className="text-sm font-semibold text-slate-800 block mb-1.5">
                   Team / Squad Name *
                 </label>
                 <input
                   id="desk-esp-team"
                   type="text"
+                  required
                   disabled={selectedGameClosed || isSubmitting}
                   value={teamName}
                   onChange={(e) => setTeamName(e.target.value)}
-                  placeholder="Official squad name"
-                  className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  placeholder="Official team name"
+                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                 />
                 {fieldErrors.teamName && (
-                  <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.teamName}</p>
+                  <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.teamName}</p>
                 )}
               </div>
 
               <div>
-                <label htmlFor="desk-esp-inst" className="text-xs font-semibold text-slate-700 block mb-1.5">
+                <label htmlFor="desk-esp-inst" className="text-sm font-semibold text-slate-800 block mb-1.5">
                   Primary College / Institution *
                 </label>
                 <input
                   id="desk-esp-inst"
                   type="text"
+                  required
                   disabled={selectedGameClosed || isSubmitting}
                   value={institution}
                   onChange={(e) => setInstitution(e.target.value)}
                   placeholder="Represented college / school name"
-                  className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                 />
                 {fieldErrors.institution && (
-                  <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.institution}</p>
+                  <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.institution}</p>
                 )}
               </div>
 
               <div>
-                <label htmlFor="desk-esp-rep" className="text-xs font-semibold text-slate-700 block mb-1.5">
+                <label htmlFor="desk-esp-rep" className="text-sm font-semibold text-slate-800 block mb-1.5">
                   Captain / Representative Name *
                 </label>
                 <input
                   id="desk-esp-rep"
                   type="text"
+                  autoComplete="name"
+                  required
                   disabled={selectedGameClosed || isSubmitting}
                   value={captainName}
                   onChange={(e) => setCaptainName(e.target.value)}
-                  placeholder="Team leader full name"
-                  className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  placeholder="Captain full name"
+                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                 />
                 {fieldErrors.captainName && (
-                  <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.captainName}</p>
+                  <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.captainName}</p>
                 )}
               </div>
 
               <div>
-                <label htmlFor="desk-esp-email" className="text-xs font-semibold text-slate-700 block mb-1.5">
+                <label htmlFor="desk-esp-email" className="text-sm font-semibold text-slate-800 block mb-1.5">
                   Captain Email Address *
                 </label>
                 <input
                   id="desk-esp-email"
                   type="email"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoComplete="email"
+                  required
                   disabled={selectedGameClosed || isSubmitting}
                   value={captainEmail}
                   onChange={(e) => setCaptainEmail(e.target.value)}
                   placeholder="captain@example.com"
-                  className="w-full h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                 />
                 {fieldErrors.captainEmail && (
-                  <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.captainEmail}</p>
+                  <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.captainEmail}</p>
                 )}
               </div>
 
-              <div className="sm:col-span-2">
-                <label htmlFor="desk-esp-phone" className="text-xs font-semibold text-slate-700 block mb-1.5">
+              <div>
+                <label htmlFor="desk-esp-phone" className="text-sm font-semibold text-slate-800 block mb-1.5">
                   Captain 10-Digit Mobile Number *
                 </label>
                 <input
                   id="desk-esp-phone"
                   type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  required
                   disabled={selectedGameClosed || isSubmitting}
                   value={captainPhone}
                   onChange={(e) => setCaptainPhone(e.target.value)}
-                  placeholder="e.g. 9876543210"
-                  className="w-full sm:max-w-sm h-11 px-3.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                  placeholder="9876543210"
+                  className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                 />
                 {fieldErrors.captainPhone && (
-                  <p className="text-xs text-rose-600 mt-1 m-0">{fieldErrors.captainPhone}</p>
+                  <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.captainPhone}</p>
                 )}
               </div>
             </div>
@@ -561,24 +578,22 @@ export default function RegistrationDeskEsports() {
 
           {/* 3. Mandatory Player Roster + 4 Educational Fields */}
           <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-bold text-slate-900 m-0">
-                  3. Playing Roster ({requiredPlayerCount} Mandatory Players)
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5 m-0">
-                  All {requiredPlayerCount} players require Full Name, In-Game ID, and all 4 educational fields.
-                </p>
-              </div>
+            <div className="space-y-2">
+              <h2 className="text-base font-bold text-slate-900 m-0">
+                3. Players ({requiredPlayerCount} Required)
+              </h2>
+              <p className="text-sm text-slate-600 m-0">
+                Every player must complete Name, In-Game ID, and all 4 education fields.
+              </p>
 
               {institution.trim().length >= 2 && (
                 <button
                   type="button"
                   disabled={selectedGameClosed || isSubmitting}
                   onClick={applyTeamInstitutionToPlayers}
-                  className="min-h-[38px] px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700 cursor-pointer self-start sm:self-auto"
+                  className="min-h-[44px] px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-800 cursor-pointer"
                 >
-                  Fill Blank Institutions from Team
+                  Copy Team Institution to Blank Players
                 </button>
               )}
             </div>
@@ -593,60 +608,63 @@ export default function RegistrationDeskEsports() {
                 return (
                   <div
                     key={idx}
-                    className="p-4 rounded-xl bg-slate-50/70 border border-slate-200 space-y-3"
+                    className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-4"
                   >
-                    <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                      <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-700">
-                        Player {idx + 1} {idx === 0 ? "· Captain Slot" : ""}
+                    <div className="border-b border-slate-200 pb-2">
+                      <span className="text-sm font-bold text-slate-900">
+                        Player {idx + 1} {idx === 0 ? "· Captain" : ""}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 gap-3.5">
                       <div>
-                        <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        <label className="text-sm font-semibold text-slate-800 block mb-1">
                           Full Name *
                         </label>
                         <input
                           type="text"
+                          required
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.name}
                           onChange={(e) => handlePlayerFieldChange(idx, "name", e.target.value)}
                           placeholder={`Player ${idx + 1} name`}
-                          className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                         />
                         {rowErr.name && (
-                          <p className="text-[11px] text-rose-600 mt-1 m-0">{rowErr.name}</p>
+                          <p role="alert" className="text-xs text-rose-600 mt-1 m-0">{rowErr.name}</p>
                         )}
                       </div>
 
                       <div>
-                        <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        <label className="text-sm font-semibold text-slate-800 block mb-1">
                           In-Game ID / UID *
                         </label>
                         <input
                           type="text"
+                          required
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.inGameId}
                           onChange={(e) => handlePlayerFieldChange(idx, "inGameId", e.target.value)}
                           placeholder={selectedGame?.title.includes("VALORANT") ? "Name#TAG" : "UID / Character ID"}
-                          className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600 font-mono"
+                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600 font-mono"
                         />
                         {rowErr.inGameId && (
-                          <p className="text-[11px] text-rose-600 mt-1 m-0">{rowErr.inGameId}</p>
+                          <p role="alert" className="text-xs text-rose-600 mt-1 m-0">{rowErr.inGameId}</p>
                         )}
                       </div>
 
                       <div>
-                        <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        <label className="text-sm font-semibold text-slate-800 block mb-1">
                           Institution Type *
                         </label>
                         <select
+                          required
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.institutionType}
                           onChange={(e) =>
                             handlePlayerFieldChange(idx, "institutionType", e.target.value)
                           }
-                          className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                         >
                           <option value="">Select type...</option>
                           {PLAYER_INSTITUTION_TYPES.map((t) => (
@@ -656,35 +674,37 @@ export default function RegistrationDeskEsports() {
                           ))}
                         </select>
                         {rowErr.institutionType && (
-                          <p className="text-[11px] text-rose-600 mt-1 m-0">{rowErr.institutionType}</p>
+                          <p role="alert" className="text-xs text-rose-600 mt-1 m-0">{rowErr.institutionType}</p>
                         )}
                       </div>
 
                       <div>
-                        <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        <label className="text-sm font-semibold text-slate-800 block mb-1">
                           School / College / Institution Name *
                         </label>
                         <input
                           type="text"
+                          required
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.institutionName}
                           onChange={(e) =>
                             handlePlayerFieldChange(idx, "institutionName", e.target.value)
                           }
                           placeholder="Full institution name"
-                          className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                         />
                         {rowErr.institutionName && (
-                          <p className="text-[11px] text-rose-600 mt-1 m-0">{rowErr.institutionName}</p>
+                          <p role="alert" className="text-xs text-rose-600 mt-1 m-0">{rowErr.institutionName}</p>
                         )}
                       </div>
 
                       <div>
-                        <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        <label className="text-sm font-semibold text-slate-800 block mb-1">
                           {suggestions.courseLabel}
                         </label>
                         <input
                           type="text"
+                          required
                           list={courseDatalistId}
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.courseOrClass}
@@ -692,7 +712,7 @@ export default function RegistrationDeskEsports() {
                             handlePlayerFieldChange(idx, "courseOrClass", e.target.value)
                           }
                           placeholder={suggestions.coursePlaceholder}
-                          className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                         />
                         <datalist id={courseDatalistId}>
                           {suggestions.courseSuggestions.map((opt) => (
@@ -700,16 +720,17 @@ export default function RegistrationDeskEsports() {
                           ))}
                         </datalist>
                         {rowErr.courseOrClass && (
-                          <p className="text-[11px] text-rose-600 mt-1 m-0">{rowErr.courseOrClass}</p>
+                          <p role="alert" className="text-xs text-rose-600 mt-1 m-0">{rowErr.courseOrClass}</p>
                         )}
                       </div>
 
                       <div>
-                        <label className="text-xs font-semibold text-slate-700 block mb-1">
+                        <label className="text-sm font-semibold text-slate-800 block mb-1">
                           {suggestions.yearLabel}
                         </label>
                         <input
                           type="text"
+                          required
                           list={yearDatalistId}
                           disabled={selectedGameClosed || isSubmitting}
                           value={player.currentYearOrClass}
@@ -717,7 +738,7 @@ export default function RegistrationDeskEsports() {
                             handlePlayerFieldChange(idx, "currentYearOrClass", e.target.value)
                           }
                           placeholder={suggestions.yearPlaceholder}
-                          className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-indigo-600"
+                          className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base text-slate-900 focus:outline-hidden focus:border-indigo-600"
                         />
                         <datalist id={yearDatalistId}>
                           {suggestions.yearSuggestions.map((opt) => (
@@ -725,7 +746,7 @@ export default function RegistrationDeskEsports() {
                           ))}
                         </datalist>
                         {rowErr.currentYearOrClass && (
-                          <p className="text-[11px] text-rose-600 mt-1 m-0">
+                          <p role="alert" className="text-xs text-rose-600 mt-1 m-0">
                             {rowErr.currentYearOrClass}
                           </p>
                         )}
@@ -739,59 +760,59 @@ export default function RegistrationDeskEsports() {
 
           {/* 4. Agreements & Submit */}
           <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-            <label className="flex items-start gap-3 cursor-pointer text-xs sm:text-sm text-slate-700">
+            <label className="flex items-start gap-3 cursor-pointer text-sm text-slate-700 min-h-[44px]">
               <input
                 type="checkbox"
                 checked={rulesAgreed}
                 disabled={selectedGameClosed || isSubmitting}
                 onChange={(e) => setRulesAgreed(e.target.checked)}
-                className="mt-1 w-4 h-4 accent-indigo-600 rounded"
+                className="mt-0.5 w-5 h-5 accent-indigo-600 rounded shrink-0"
               />
               <span>
-                Squad agrees to official Supernova 3.0 tournament rules, roster lock ({requiredPlayerCount} players, no substitutes), and college ID verification at the esports arena.
+                Squad agrees to official Supernova 3.0 tournament rules ({requiredPlayerCount} players, no substitutes).
               </span>
             </label>
             {fieldErrors.rulesAgreed && (
-              <p className="text-xs text-rose-600 m-0">{fieldErrors.rulesAgreed}</p>
+              <p role="alert" className="text-sm text-rose-600 m-0">{fieldErrors.rulesAgreed}</p>
             )}
 
-            <label className="flex items-start gap-3 cursor-pointer text-xs sm:text-sm text-slate-700">
+            <label className="flex items-start gap-3 cursor-pointer text-sm text-slate-700 min-h-[44px]">
               <input
                 type="checkbox"
                 checked={consentAgreed}
                 disabled={selectedGameClosed || isSubmitting}
                 onChange={(e) => setConsentAgreed(e.target.checked)}
-                className="mt-1 w-4 h-4 accent-indigo-600 rounded"
+                className="mt-0.5 w-5 h-5 accent-indigo-600 rounded shrink-0"
               />
               <span>
-                Captain confirms participant details are accurate and acknowledges that passes issue only upon Coordinator approval.
+                Details are accurate; entry passes issue upon Coordinator approval.
               </span>
             </label>
             {fieldErrors.consentAgreed && (
-              <p className="text-xs text-rose-600 m-0">{fieldErrors.consentAgreed}</p>
+              <p role="alert" className="text-sm text-rose-600 m-0">{fieldErrors.consentAgreed}</p>
             )}
 
             {submitError && (
-              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs sm:text-sm text-rose-800 font-medium flex items-start gap-2">
-                <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-600" />
+              <div role="alert" className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-800 font-medium flex items-start gap-2.5">
+                <AlertCircle size={18} className="shrink-0 mt-0.5 text-rose-600" />
                 <span>{submitError}</span>
               </div>
             )}
 
-            <div className="flex justify-end pt-1">
+            <div className="pt-1">
               <button
                 type="submit"
                 disabled={selectedGameClosed || isSubmitting || !selectedGame}
-                className="min-h-[48px] w-full sm:w-auto px-6 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                className="min-h-[48px] w-full px-6 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-base font-semibold inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
               >
                 {isSubmitting ? (
                   <>
-                    <RefreshCw size={16} className="animate-spin" />
+                    <RefreshCw size={18} className="animate-spin" />
                     <span>Submitting Application...</span>
                   </>
                 ) : (
                   <>
-                    <Gamepad2 size={16} />
+                    <Gamepad2 size={18} />
                     <span>Submit Esports Application</span>
                   </>
                 )}

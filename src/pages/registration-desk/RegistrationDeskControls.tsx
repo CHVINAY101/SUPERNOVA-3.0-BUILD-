@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import {
@@ -13,7 +14,6 @@ import {
   CheckCircle2,
   Lock,
   RefreshCw,
-  Unlock,
   X,
 } from "lucide-react";
 
@@ -139,49 +139,52 @@ export default function RegistrationDeskControls() {
 
   const visitorOpen = visitorControl ? visitorControl.is_open : true;
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-slate-200 pb-4">
-        <div>
-          <p className="text-xs font-mono uppercase tracking-wider text-slate-500 m-0">
-            Live Slot Capacities & Stream Status
+  if (!canToggle) {
+    return (
+      <div className="max-w-xl mx-auto bg-white border border-slate-200 rounded-2xl p-6 text-center space-y-4">
+        <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center mx-auto">
+          <Lock size={22} />
+        </div>
+        <div className="space-y-1">
+          <h1 className="text-xl font-display font-bold text-slate-900 m-0">
+            Authorized Access Only
+          </h1>
+          <p className="text-sm text-slate-600 m-0">
+            Opening or closing registrations is restricted to authorized administrators.
           </p>
-          <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 tracking-tight mt-1 mb-0">
+        </div>
+        <Link
+          to="/registration-desk"
+          className="min-h-[44px] inline-flex items-center justify-center px-5 rounded-xl bg-slate-900 text-white text-sm font-semibold no-underline"
+        >
+          Back to Registration Desk
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-4">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-slate-900 tracking-tight m-0">
             Registration Controls
           </h1>
+          <p className="text-sm text-slate-600 mt-1 mb-0">
+            Open or close registration streams.
+          </p>
         </div>
 
         <button
           type="button"
           onClick={loadData}
           disabled={loading}
-          className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60 self-start sm:self-auto"
+          className="min-h-[44px] inline-flex items-center gap-1.5 px-3.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-60 shrink-0"
         >
-          <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
           <span>Refresh</span>
         </button>
       </div>
-
-      {/* Super Admin Authorization Banner */}
-      {!canToggle ? (
-        <div className="p-4 rounded-2xl bg-slate-100 border border-slate-200 flex items-start gap-3 text-slate-700 text-xs sm:text-sm">
-          <Lock size={18} className="text-slate-500 shrink-0 mt-0.5" />
-          <div>
-            <strong className="text-slate-900">Read-Only Capacity View: </strong>
-            Opening or closing General Visitor and Esports game registrations requires explicit Super Admin authorization ({" "}
-            <code className="font-mono text-xs">system_settings:manage</code> ). Live counts and remaining capacities update below.
-          </div>
-        </div>
-      ) : (
-        <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-start gap-3 text-emerald-900 text-xs sm:text-sm">
-          <Unlock size={18} className="text-emerald-600 shrink-0 mt-0.5" />
-          <div>
-            <strong>Super Admin Control Authorized: </strong>
-            Changes made here update live production controls immediately across the public site and registration desk.
-          </div>
-        </div>
-      )}
 
       {statusMsg && (
         <div
@@ -295,25 +298,18 @@ export default function RegistrationDeskControls() {
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex items-center gap-2.5 flex-wrap">
                         <h3 className="text-base font-bold text-slate-900 m-0">{game.title}</h3>
                         <span
-                          className={`inline-flex items-center gap-1.5 text-xs font-semibold ${
+                          className={`text-xs font-semibold ${
                             game.is_effectively_open ? "text-emerald-700" : "text-rose-700"
                           }`}
                         >
-                          <span
-                            className={`w-2 h-2 rounded-full ${
-                              game.is_effectively_open ? "bg-emerald-500" : "bg-rose-500"
-                            }`}
-                          />
-                          <span>
-                            {game.is_effectively_open
-                              ? "Open"
-                              : game.status_reason === "capacity_reached"
-                              ? "Closed (Capacity Reached)"
-                              : "Closed"}
-                          </span>
+                          · {game.is_effectively_open
+                            ? "Open"
+                            : game.status_reason === "capacity_reached"
+                            ? "Full"
+                            : "Closed"}
                         </span>
                       </div>
                       <p className="text-xs text-slate-500 mt-1 m-0">

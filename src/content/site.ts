@@ -652,8 +652,8 @@ export const SITE_CONTENT: SiteContent = {
         line: "Register your team.",
       },
     ],
-    rulesCheckboxLabel: "Tournament rules [to be approved]",
-    privacyCheckboxLabel: "I agree to the privacy policy [text to be approved]",
+    rulesCheckboxLabel: "I agree to the Supernova 3.0 esports tournament rules and eligibility requirements.",
+    privacyCheckboxLabel: "I confirm my details are accurate and agree to the Supernova 3.0 Privacy Policy.",
     notConnectedBannerTitle: "Form not connected yet",
     notConnectedBannerText:
       "Form endpoint not configured yet. Please submit your registration details via the email fallback below:",

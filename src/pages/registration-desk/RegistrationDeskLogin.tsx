@@ -7,7 +7,7 @@ import {
   getSupabaseConnectionInfo,
   pingSupabaseAuth,
 } from "@/lib/supabase";
-import { canAccessRegistrationDesk } from "@/lib/registrationDesk";
+import { canAccessRegistrationDesk, resolvePostLoginRoute } from "@/lib/registrationDesk";
 import { isGateOnlyRole } from "@/lib/gatePortal";
 import { getRoleLabel } from "@/lib/rbac";
 import {
@@ -125,10 +125,10 @@ function classifyDeskAuthError(
   ) {
     return {
       category: "unauthorized_role",
-      title: "Registration Staff Role Required",
+      title: "Registration Desk Clerk Role Required",
       message:
-        "Your credentials were recognized, but your account is not assigned an active Registration Desk role.",
-      actionHint: "Ask a Super Admin to assign Registration Staff access in User Management.",
+        "Your credentials were recognized, but your account is not assigned an active Registration Desk Clerk role.",
+      actionHint: "Ask a Super Admin to assign Registration Desk Clerk access in User Management.",
     };
   }
 
@@ -162,6 +162,7 @@ export default function RegistrationDeskLogin() {
   const {
     session,
     role,
+    permissions,
     accountStatus,
     loading: authLoading,
     signIn,
@@ -252,10 +253,15 @@ export default function RegistrationDeskLogin() {
         // Fallback if RPC not yet applied
       }
 
-      await refreshRole();
+      const refreshed = await refreshRole();
       setIsInviteFlow(false);
       setLoading(false);
-      navigate("/registration-desk", { replace: true });
+      const dest = resolvePostLoginRoute({
+        portal: "registration_desk",
+        role: refreshed?.role ?? role,
+        permissions: refreshed?.permissions ?? permissions,
+      });
+      navigate(dest, { replace: true });
     } catch (err: any) {
       setLoading(false);
       setAuthError(classifyDeskAuthError(err));
@@ -280,7 +286,12 @@ export default function RegistrationDeskLogin() {
     if (result.error) {
       setAuthError(classifyDeskAuthError(result.rawError || result.error, result.errorCategory));
     } else {
-      navigate("/registration-desk", { replace: true });
+      const dest = resolvePostLoginRoute({
+        portal: "registration_desk",
+        role: result.role ?? role,
+        permissions: result.permissions ?? permissions,
+      });
+      navigate(dest, { replace: true });
     }
   };
 
@@ -334,16 +345,13 @@ export default function RegistrationDeskLogin() {
               {isInviteFlow ? <UserCheck size={22} /> : <ClipboardList size={22} />}
             </div>
 
-            <p className="font-mono text-xs font-semibold text-blue-600 mb-1">
-              Supernova 3.0 · On-Site Volunteer Desk
-            </p>
             <h1 className="font-display text-2xl font-bold text-slate-900 leading-tight m-0">
-              {isInviteFlow ? "Activate Registration Staff Account" : "Registration Desk Sign In"}
+              {isInviteFlow ? "Activate Staff Account" : "Registration Desk Login"}
             </h1>
-            <p className="font-body text-xs sm:text-sm text-slate-600 mt-1.5 leading-relaxed max-w-[340px]">
+            <p className="font-body text-sm text-slate-600 mt-1.5 leading-relaxed max-w-[340px]">
               {isInviteFlow
-                ? "Create your staff password to activate your Registration Desk credentials."
-                : "Sign in with your Supabase staff credentials for walk-in visitor passes, esports registration, and lookup."}
+                ? "Create your password to activate your Registration Desk account."
+                : "Sign in with your staff email and password to open the Registration Desk."}
             </p>
           </div>
 
@@ -545,34 +553,36 @@ export default function RegistrationDeskLogin() {
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="desk-email" className="text-xs font-semibold text-slate-700">
-                  Registration Staff Email
+                <label htmlFor="desk-email" className="text-sm font-semibold text-slate-700">
+                  Email Address *
                 </label>
                 <div className="relative flex items-center">
                   <input
                     id="desk-email"
                     type="email"
+                    inputMode="email"
+                    autoCapitalize="none"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="desk.volunteer@nationalcollege.edu"
+                    placeholder="staff@nationalcollege.edu"
                     required
                     autoComplete="email"
-                    className="w-full h-11 pl-10 pr-4 bg-slate-50 text-slate-900 placeholder-slate-400 text-sm border border-slate-300 rounded-xl outline-none focus:bg-white focus:border-blue-600"
+                    className="w-full h-12 pl-10 pr-4 bg-slate-50 text-slate-900 placeholder-slate-400 text-base border border-slate-300 rounded-xl outline-none focus:bg-white focus:border-blue-600"
                   />
-                  <Mail size={16} className="absolute left-3.5 text-slate-400 pointer-events-none" />
+                  <Mail size={17} className="absolute left-3.5 text-slate-400 pointer-events-none" />
                 </div>
               </div>
 
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center justify-between">
-                  <label htmlFor="desk-password" className="text-xs font-semibold text-slate-700">
-                    Password
+                  <label htmlFor="desk-password" className="text-sm font-semibold text-slate-700">
+                    Password *
                   </label>
                   <button
                     type="button"
                     onClick={handleResetPassword}
                     disabled={resetLoading}
-                    className="text-xs font-medium text-blue-600 hover:underline cursor-pointer disabled:opacity-50"
+                    className="min-h-[36px] text-xs font-medium text-blue-600 hover:underline cursor-pointer disabled:opacity-50"
                   >
                     {resetLoading ? "Sending reset link..." : "Forgot password?"}
                   </button>
@@ -584,19 +594,19 @@ export default function RegistrationDeskLogin() {
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••••••"
+                    placeholder="Enter your password"
                     required
                     autoComplete="current-password"
-                    className="w-full h-11 pl-10 pr-10 bg-slate-50 text-slate-900 placeholder-slate-400 text-sm border border-slate-300 rounded-xl outline-none focus:bg-white focus:border-blue-600"
+                    className="w-full h-12 pl-10 pr-12 bg-slate-50 text-slate-900 placeholder-slate-400 text-base border border-slate-300 rounded-xl outline-none focus:bg-white focus:border-blue-600"
                   />
-                  <Lock size={16} className="absolute left-3.5 text-slate-400 pointer-events-none" />
+                  <Lock size={17} className="absolute left-3.5 text-slate-400 pointer-events-none" />
                   <button
                     type="button"
                     onClick={() => setShowPassword((prev) => !prev)}
-                    className="absolute right-2.5 p-1.5 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                    className="absolute right-1.5 min-w-[40px] min-h-[40px] flex items-center justify-center text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
-                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                   </button>
                 </div>
               </div>
@@ -604,41 +614,25 @@ export default function RegistrationDeskLogin() {
               <button
                 type="submit"
                 disabled={loading}
-                className="mt-1 w-full min-h-[44px] rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+                className="mt-1 w-full h-12 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-base transition-colors cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
               >
                 {loading ? (
                   <>
-                    <Loader2 size={16} className="animate-spin" />
+                    <Loader2 size={17} className="animate-spin" />
                     <span>Signing In...</span>
                   </>
                 ) : (
-                  <span>Sign In to Registration Desk</span>
+                  <span>Sign In</span>
                 )}
               </button>
             </form>
           )}
 
-          <div className="mt-6 pt-4 border-t border-slate-200 flex flex-col gap-1.5">
-            <span className="text-xs font-semibold text-slate-700">
-              Dedicated On-Site Registration Desk
-            </span>
-            <p className="text-xs text-slate-500 leading-relaxed m-0">
-              Authorized for Registration Staff, CRM Admin, and Super Admin on 20–21 November 2026.
-            </p>
-            <div className="pt-1 flex flex-wrap gap-4">
-              <Link
-                to="/gate/login"
-                className="text-xs font-semibold text-blue-600 hover:underline no-underline"
-              >
-                Gate Entry Portal →
-              </Link>
-              <Link
-                to="/admin/login"
-                className="text-xs font-semibold text-slate-600 hover:underline no-underline"
-              >
-                Admin CRM Login →
-              </Link>
-            </div>
+          <div className="mt-5 pt-4 border-t border-slate-200 flex items-center justify-between gap-2 text-xs text-slate-500">
+            <span>Direct Registration Desk Sign-In</span>
+            <Link to="/admin/login" className="font-semibold text-blue-600 hover:underline no-underline">
+              Main Staff Login →
+            </Link>
           </div>
         </div>
       </main>

@@ -260,7 +260,7 @@ AS $$
     WHEN 'crm_admin' THEN 'crm_admin'
     WHEN 'event_admin' THEN 'crm_admin'
     WHEN 'registration_staff' THEN 'registration_staff'
-    WHEN 'checkin_staff' THEN 'registration_staff'
+    WHEN 'checkin_staff' THEN 'checkin_staff'
     WHEN 'esports_entry_staff' THEN 'esports_entry_staff'
     WHEN 'participation_manager' THEN 'viewer'
     WHEN 'esports_manager' THEN 'esports_manager'
@@ -314,6 +314,11 @@ AS $$
     ]
     WHEN 'registration_staff' THEN ARRAY[
       'visitor:view','visitor:create','visitor:edit',
+      'esports:view','esports:create',
+      'tickets:view','tickets:manage'
+    ]
+    WHEN 'checkin_staff' THEN ARRAY[
+      'visitor:view',
       'entry:view','entry:scan_visitor','entry:checkin_visitor','entry:issue_wristband',
       'tickets:view','tickets:manage'
     ]
@@ -734,9 +739,7 @@ AS $$
     OR public.has_crm_permission('entry:scan_visitor')
     OR public.has_crm_permission('entry:scan_esports')
     OR public.has_crm_permission('entry:checkin_visitor')
-    OR public.has_crm_permission('entry:checkin_esports')
-    OR public.has_crm_permission('tickets:view')
-    OR public.has_crm_permission('tickets:manage');
+    OR public.has_crm_permission('entry:checkin_esports');
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_content_admin()
@@ -760,9 +763,7 @@ STABLE
 SET search_path = public
 AS $$
   SELECT public.has_crm_permission('entry:checkin_visitor')
-    OR public.has_crm_permission('entry:checkin_esports')
-    OR public.has_crm_permission('visitor:edit')
-    OR public.has_crm_permission('esports:edit');
+    OR public.has_crm_permission('entry:checkin_esports');
 $$;
 
 CREATE OR REPLACE FUNCTION public.is_score_operator()
@@ -849,14 +850,12 @@ BEGIN
   END IF;
 
   IF p_subject_type = 'visitor' THEN
-    RETURN public.has_crm_permission('entry:checkin_visitor')
-        OR public.has_crm_permission('visitor:edit');
+    RETURN public.has_crm_permission('entry:checkin_visitor');
   ELSIF p_subject_type = 'esports_player' THEN
-    RETURN public.has_crm_permission('entry:checkin_esports')
-        OR public.has_crm_permission('esports:edit');
+    RETURN public.has_crm_permission('entry:checkin_esports');
   ELSE
     RETURN public.has_crm_permission('entry:checkin_visitor')
-        OR public.has_crm_permission('esports:edit');
+        OR public.has_crm_permission('entry:checkin_esports');
   END IF;
 END;
 $$;
@@ -2116,24 +2115,14 @@ BEGIN
       public.has_crm_permission('entry:checkin_visitor')
       OR public.has_crm_permission('entry:checkin_esports')
       OR public.has_crm_permission('entry:override_checkin')
-      OR public.has_crm_permission('visitor:edit')
-      OR public.has_crm_permission('esports:edit')
     );
 
     DROP POLICY IF EXISTS "admin_update_checkin" ON public.check_ins;
     CREATE POLICY "admin_update_checkin"
     ON public.check_ins FOR UPDATE
     TO authenticated
-    USING (
-      public.has_crm_permission('entry:override_checkin')
-      OR public.has_crm_permission('visitor:edit')
-      OR public.has_crm_permission('esports:edit')
-    )
-    WITH CHECK (
-      public.has_crm_permission('entry:override_checkin')
-      OR public.has_crm_permission('visitor:edit')
-      OR public.has_crm_permission('esports:edit')
-    );
+    USING (public.has_crm_permission('entry:override_checkin'))
+    WITH CHECK (public.has_crm_permission('entry:override_checkin'));
 
     DROP POLICY IF EXISTS "admin_delete_checkin" ON public.check_ins;
     CREATE POLICY "admin_delete_checkin"

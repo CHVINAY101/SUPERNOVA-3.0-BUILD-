@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import {
   canAccessRegistrationDesk,
   canToggleRegistrationControls,
+  canViewRegistrationControlsSettingsMenu,
   computeDeskTodayMetrics,
   getIstDateKey,
   isRegistrationDeskOnlyRole,
+  resolvePostLoginRoute,
 } from "./registrationDesk.ts";
 import { resolveEffectivePermissions } from "./rbac.ts";
 
@@ -50,6 +52,13 @@ describe("Registration Desk Portal Access Isolation, Super Admin Control Lock & 
     assert.equal(canToggleRegistrationControls("super_admin", "active", superAdminPerms), true);
     assert.equal(canToggleRegistrationControls("registration_staff", "active", authorizedDeskPerms), true);
     assert.equal(canToggleRegistrationControls("super_admin", "deactivated", superAdminPerms), false);
+
+    // Settings menu mirrors exact authorization state so unauthorized staff never see Registration Controls
+    assert.equal(canViewRegistrationControlsSettingsMenu("registration_staff", "active", defaultDeskPerms), false);
+    assert.equal(canViewRegistrationControlsSettingsMenu("crm_admin", "active", defaultCrmAdminPerms), false);
+    assert.equal(canViewRegistrationControlsSettingsMenu("super_admin", "active", superAdminPerms), true);
+    assert.equal(canViewRegistrationControlsSettingsMenu("registration_staff", "active", authorizedDeskPerms), true);
+    assert.equal(canViewRegistrationControlsSettingsMenu("super_admin", "deactivated", superAdminPerms), false);
   });
 
   it("Computes IST today counts accurately and excludes archived esports rows", () => {
@@ -74,5 +83,81 @@ describe("Registration Desk Portal Access Isolation, Super Admin Control Lock & 
     assert.equal(metrics.visitorsTotal, 2);
     assert.equal(metrics.esportsToday, 1);
     assert.equal(metrics.esportsTotal, 2);
+  });
+
+  it("Routes registration_staff to /registration-desk across all portals and preserves portal targeting for admins", () => {
+    const deskPerms = resolveEffectivePermissions("registration_staff", "active");
+    const adminPerms = resolveEffectivePermissions("crm_admin", "active");
+    const superPerms = resolveEffectivePermissions("super_admin", "active");
+
+    for (const portal of ["admin", "gate", "registration_desk"] as const) {
+      assert.equal(
+        resolvePostLoginRoute({
+          portal,
+          role: "registration_staff",
+          permissions: deskPerms,
+          requestedFrom: "/admin/users",
+        }),
+        "/registration-desk"
+      );
+      assert.equal(
+        resolvePostLoginRoute({
+          portal,
+          role: "checkin_staff",
+          requestedFrom: "/admin/users",
+        }),
+        "/gate"
+      );
+      assert.equal(
+        resolvePostLoginRoute({
+          portal,
+          role: "esports_entry_staff",
+          requestedFrom: "/admin/users",
+        }),
+        "/gate"
+      );
+      assert.equal(
+        resolvePostLoginRoute({
+          portal,
+          role: "match_conductor",
+          requestedFrom: "/admin/users",
+        }),
+        "/admin/conductor-matches"
+      );
+    }
+
+    assert.equal(
+      resolvePostLoginRoute({
+        portal: "registration_desk",
+        role: "super_admin",
+        permissions: superPerms,
+      }),
+      "/registration-desk"
+    );
+    assert.equal(
+      resolvePostLoginRoute({
+        portal: "gate",
+        role: "crm_admin",
+        permissions: adminPerms,
+      }),
+      "/gate"
+    );
+    assert.equal(
+      resolvePostLoginRoute({
+        portal: "admin",
+        role: "crm_admin",
+        permissions: adminPerms,
+        requestedFrom: "/admin/visitor-registrations",
+      }),
+      "/admin/visitor-registrations"
+    );
+    assert.equal(
+      resolvePostLoginRoute({
+        portal: "admin",
+        role: "super_admin",
+        permissions: superPerms,
+      }),
+      "/admin"
+    );
   });
 });

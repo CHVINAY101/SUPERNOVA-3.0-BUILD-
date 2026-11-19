@@ -259,8 +259,8 @@ export const ROLE_METADATA: Record<
     badgeTone: "bg-blue-50 text-blue-700 border-blue-200",
   },
   registration_staff: {
-    label: "Registration Staff",
-    description: "Dedicated Registration Desk Portal for walk-in visitor passes, esports squad intake, search, and read-only capacity monitoring.",
+    label: "Registration Desk Clerk",
+    description: "Registration Desk Portal for walk-in visitor registration, esports registration, search, ticket generation, and authorized controls.",
     badgeTone: "bg-sky-50 text-sky-800 border-sky-200",
   },
   checkin_staff: {

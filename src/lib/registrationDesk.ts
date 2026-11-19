@@ -1,5 +1,10 @@
 import type { AdminRole } from "../types/database.ts";
-import { normalizeRole, type CanonicalCrmRole, type PermissionKey } from "./rbac.ts";
+import {
+  getDefaultAdminRoute,
+  normalizeRole,
+  type CanonicalCrmRole,
+  type PermissionKey,
+} from "./rbac.ts";
 
 export const REGISTRATION_DESK_PORTAL_ROLES: readonly CanonicalCrmRole[] = [
   "registration_staff",
@@ -10,6 +15,36 @@ export const REGISTRATION_DESK_PORTAL_ROLES: readonly CanonicalCrmRole[] = [
 export const REGISTRATION_DESK_ONLY_ROLES: readonly CanonicalCrmRole[] = [
   "registration_staff",
 ] as const;
+
+export type StaffLoginPortal = "admin" | "gate" | "registration_desk";
+
+export function resolvePostLoginRoute(params: {
+  portal: StaffLoginPortal;
+  role: AdminRole | string | null | undefined;
+  permissions?: Set<PermissionKey> | null;
+  requestedFrom?: string | null;
+}): string {
+  const canonical = normalizeRole(params.role);
+  if (canonical === "registration_staff") {
+    return "/registration-desk";
+  }
+  if (canonical === "checkin_staff" || canonical === "esports_entry_staff") {
+    return "/gate";
+  }
+  if (canonical === "match_conductor") {
+    return "/admin/conductor-matches";
+  }
+  if (params.portal === "registration_desk") {
+    return "/registration-desk";
+  }
+  if (params.portal === "gate") {
+    return "/gate";
+  }
+  if (params.requestedFrom && params.requestedFrom.startsWith("/admin")) {
+    return params.requestedFrom;
+  }
+  return getDefaultAdminRoute(canonical, params.permissions ?? new Set<PermissionKey>());
+}
 
 export function isRegistrationDeskOnlyRole(role: string | null | undefined): boolean {
   const canonical = normalizeRole(role);
@@ -39,6 +74,14 @@ export function canToggleRegistrationControls(
   if (canonical === "super_admin") return true;
   if (!canAccessRegistrationDesk(role, accountStatus)) return false;
   return Boolean(permissions?.has("system_settings:manage"));
+}
+
+export function canViewRegistrationControlsSettingsMenu(
+  role: AdminRole | string | null | undefined,
+  accountStatus: string | null | undefined,
+  permissions?: Set<PermissionKey> | null
+): boolean {
+  return canToggleRegistrationControls(role, accountStatus, permissions);
 }
 
 const IST_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {

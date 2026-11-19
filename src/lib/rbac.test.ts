@@ -8,11 +8,13 @@ import {
   getCrmDeleteEligibility,
   getCrmReactivateEligibility,
   getDefaultAdminRoute,
+  getRoleLabel,
   hasCrmPermission,
   isDedicatedOperationsRole,
   isLastActiveSuperAdmin,
   normalizeRole,
   resolveEffectivePermissions,
+  ROLE_METADATA,
   ROUTE_PERMISSIONS,
   validateCrmUserMutation,
   validateNewCrmUserInput,
@@ -31,21 +33,41 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
     assert.equal(canAccessAdminRoute("/admin/conductor-matches", perms, "active"), true);
   });
 
-  it("Scenario 21: Registration Staff has Registration Desk permissions only; Entry Staff (checkin_staff) retains Gate Entry permissions", () => {
+  it("Scenario 21: Registration Desk Clerk (registration_staff) has Registration Desk permissions only; Entry Staff (checkin_staff) retains Gate Entry permissions", () => {
+    assert.equal(Object.keys(ROLE_METADATA).includes("registration_staff"), true);
+    assert.equal(ROLE_METADATA.registration_staff.label, "Registration Desk Clerk");
+    assert.equal(getRoleLabel("registration_staff"), "Registration Desk Clerk");
+
     const deskPerms = resolveEffectivePermissions("registration_staff", "active");
     assert.equal(isDedicatedOperationsRole("registration_staff"), true);
     assert.equal(getDefaultAdminRoute("registration_staff", deskPerms), "/registration-desk");
     assert.equal(hasCrmPermission(deskPerms, "visitor:view", "active"), true);
     assert.equal(hasCrmPermission(deskPerms, "visitor:create", "active"), true);
+    assert.equal(hasCrmPermission(deskPerms, "visitor:edit", "active"), true);
     assert.equal(hasCrmPermission(deskPerms, "esports:view", "active"), true);
     assert.equal(hasCrmPermission(deskPerms, "esports:create", "active"), true);
+    assert.equal(hasCrmPermission(deskPerms, "tickets:view", "active"), true);
     assert.equal(hasCrmPermission(deskPerms, "tickets:manage", "active"), true);
 
-    assert.equal(hasCrmPermission(deskPerms, "entry:view", "active"), false);
-    assert.equal(hasCrmPermission(deskPerms, "entry:scan_visitor", "active"), false);
-    assert.equal(hasCrmPermission(deskPerms, "entry:checkin_visitor", "active"), false);
-    assert.equal(hasCrmPermission(deskPerms, "dashboard:view", "active"), false);
-    assert.equal(hasCrmPermission(deskPerms, "system_settings:manage", "active"), false);
+    const allowedDeskDefaults = new Set([
+      "visitor:view",
+      "visitor:create",
+      "visitor:edit",
+      "esports:view",
+      "esports:create",
+      "tickets:view",
+      "tickets:manage",
+    ]);
+    for (const perm of ALL_PERMISSIONS) {
+      if (!allowedDeskDefaults.has(perm)) {
+        assert.equal(
+          hasCrmPermission(deskPerms, perm, "active"),
+          false,
+          `Registration Desk Clerk must not have default permission ${perm}`
+        );
+      }
+    }
+
     assert.equal(canAccessAdminRoute("/admin/conductor-matches", deskPerms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/esports-control", deskPerms, "active"), false);
     assert.equal(canAccessAdminRoute("/admin/registration-controls", deskPerms, "active"), false);
