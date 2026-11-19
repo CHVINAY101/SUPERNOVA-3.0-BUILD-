@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { CONFIG, getInstagramDisplay } from "@/config";
 import { WaveRibbonDivider } from "@/components/stage1/WaveRibbonDivider";
+import { isValidPhone } from "@/lib/validation";
 import { Check, Plus, Trash2, Mail, AlertCircle, RefreshCw } from "lucide-react";
 
 type RegistrationType = "visitor" | "esports";
@@ -42,9 +43,10 @@ export default function Register() {
   const [submitState, setSubmitState] = useState<"idle" | "submitting" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
 
-  // Visitor form state (4 mandatory fields)
+  // Visitor form state (mandatory fields)
   const [visFullName, setVisFullName] = useState("");
   const [visEmail, setVisEmail] = useState("");
+  const [visPhone, setVisPhone] = useState("");
   const [visStudentClass, setVisStudentClass] = useState("");
   const [visInstitution, setVisInstitution] = useState("");
   const [visPrivacyAgreed, setVisPrivacyAgreed] = useState(false);
@@ -109,7 +111,7 @@ export default function Register() {
 
     if (selectedType === "visitor") {
       subject = `[Registration] Visitor Form - ${visFullName}`;
-      body += `Full Name: ${visFullName}\nEmail: ${visEmail}\nClass / Course: ${visStudentClass}\nCollege / Institution Name: ${visInstitution}\n`;
+      body += `Full Name: ${visFullName}\nEmail: ${visEmail}\nContact Mobile Number: ${visPhone}\nClass / Course: ${visStudentClass}\nCollege / Institution Name: ${visInstitution}\n`;
     } else if (selectedType === "esports") {
       subject = `[Registration] Esports Team Form - ${espTeamName}`;
       body += `Team Name: ${espTeamName}\nGame: ${espGame || "Games to be announced"}\nTeam Representative: ${espTeamRep}\nEmail: ${espEmail}\nPhone: ${espPhone}\nInstitution: ${espInstitution}\n\nPlayers:\n`;
@@ -129,11 +131,12 @@ export default function Register() {
       if (
         visFullName.trim().length < 2 ||
         !visEmail.includes("@") ||
+        !isValidPhone(visPhone) ||
         !visStudentClass.trim() ||
         visInstitution.trim().length < 2
       ) {
         setSubmitState("error");
-        setErrorMessage("Please complete Full Name, Email Address, Class / Course, and College / Institution Name.");
+        setErrorMessage("Please complete Full Name, Email Address, a valid 10–15 digit Contact Mobile Number, Class / Course, and College / Institution Name.");
         return;
       }
       if (!visPrivacyAgreed) {
@@ -159,6 +162,7 @@ export default function Register() {
           ...payload,
           full_name: visFullName.trim(),
           email: visEmail.trim().toLowerCase(),
+          phone: visPhone.trim(),
           student_class: visStudentClass.trim(),
           institution: visInstitution.trim(),
         };
@@ -445,6 +449,23 @@ export default function Register() {
                             onChange={(e) => setVisEmail(e.target.value)}
                             className="form-input text-base"
                             placeholder="Email address"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="form-label" htmlFor="visPhone">
+                            Contact Mobile Number *
+                          </label>
+                          <input
+                            id="visPhone"
+                            type="tel"
+                            inputMode="tel"
+                            required
+                            maxLength={20}
+                            value={visPhone}
+                            onChange={(e) => setVisPhone(e.target.value)}
+                            className="form-input text-base"
+                            placeholder="e.g. 9876543210 or +91 98765 43210"
                           />
                         </div>
 

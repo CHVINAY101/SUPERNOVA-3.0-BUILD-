@@ -12,11 +12,13 @@ import {
   type VisitorCategoryId,
 } from "@/lib/visitorCategories";
 import {
+  extractVisitorRegistrationError,
   fetchTicketByRegistration,
   issueTicketForRegistration,
   submitVisitorAndIssueTicket,
 } from "@/lib/ticketClient";
 import { buildTicketQrContent, downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import { TicketPassModal } from "@/components/TicketPassModal";
 import { formatIstTimestamp } from "@/lib/registrationDesk";
 import type { RegistrationControl, TicketRecord } from "@/types/database";
 import {
@@ -24,6 +26,7 @@ import {
   CheckCircle2,
   Copy,
   Download,
+  Eye,
   Lock,
   Printer,
   RefreshCw,
@@ -87,6 +90,7 @@ export default function RegistrationDeskVisitor() {
   const [duplicateMatch, setDuplicateMatch] = useState<ExistingVisitorMatch | null>(null);
   const [issuedPass, setIssuedPass] = useState<IssuedPassView | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
+  const [passModalOpen, setPassModalOpen] = useState(false);
   const [copiedRef, setCopiedRef] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
@@ -311,7 +315,7 @@ export default function RegistrationDeskVisitor() {
         daysAttending,
       });
     } catch (err: any) {
-      setSubmitError(err?.message || "Failed to register visitor and issue pass.");
+      setSubmitError(extractVisitorRegistrationError(err));
     } finally {
       setIsSubmitting(false);
       submitLockRef.current = false;
@@ -328,6 +332,7 @@ export default function RegistrationDeskVisitor() {
         recipientName: issuedPass.fullName,
         category: issuedPass.subtitle,
         email: issuedPass.email,
+        phone: issuedPass.phone,
         institution: issuedPass.institution,
         registrationType: "visitor",
         daysAttending: issuedPass.daysAttending,
@@ -492,21 +497,30 @@ export default function RegistrationDeskVisitor() {
               )}
             </dl>
 
-            <div className="grid grid-cols-1 gap-3 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => setPassModalOpen(true)}
+                className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-base font-semibold cursor-pointer"
+              >
+                <Eye size={18} />
+                <span>View Pass</span>
+              </button>
+
               <button
                 type="button"
                 disabled={downloadingPdf}
                 onClick={handleDownloadPdf}
-                className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-base font-semibold cursor-pointer disabled:opacity-60"
+                className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-[#D5F542] hover:bg-[#c6e830] text-[#0B1120] text-base font-bold cursor-pointer disabled:opacity-60"
               >
                 <Download size={18} />
-                <span>{downloadingPdf ? "Preparing Pass..." : "Download Pass"}</span>
+                <span>{downloadingPdf ? "Preparing PDF..." : "Download PDF"}</span>
               </button>
 
               <button
                 type="button"
                 onClick={resetForNextVisitor}
-                className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-base font-semibold cursor-pointer"
+                className="min-h-[48px] w-full sm:col-span-2 inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-base font-semibold cursor-pointer"
               >
                 <UserPlus size={18} />
                 <span>Register Next Visitor</span>
@@ -515,13 +529,27 @@ export default function RegistrationDeskVisitor() {
               <button
                 type="button"
                 onClick={() => window.print()}
-                className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-sm font-semibold cursor-pointer"
+                className="min-h-[44px] w-full sm:col-span-2 inline-flex items-center justify-center gap-2 px-5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-sm font-semibold cursor-pointer"
               >
                 <Printer size={16} />
                 <span>Print Pass</span>
               </button>
             </div>
           </div>
+
+          <TicketPassModal
+            isOpen={passModalOpen}
+            onClose={() => setPassModalOpen(false)}
+            ticketRef={issuedPass.ticketRef}
+            qrToken={issuedPass.qrToken}
+            registrationCategory="visitor"
+            displayName={issuedPass.fullName}
+            subtitle={issuedPass.subtitle}
+            institution={issuedPass.institution}
+            email={issuedPass.email}
+            phone={issuedPass.phone}
+            daysAttending={issuedPass.daysAttending}
+          />
 
           {/* Dedicated Print-Only Visitor Pass Sheet */}
           <section
@@ -689,13 +717,13 @@ export default function RegistrationDeskVisitor() {
                   setPhone(e.target.value);
                   clearError("phone");
                 }}
-                placeholder="10-digit mobile number"
+                placeholder="e.g. 9876543210 or +91 98765 43210"
                 className={`w-full h-12 px-4 rounded-xl border bg-white text-base text-slate-900 focus:outline-hidden focus:border-blue-600 ${
                   fieldErrors.phone ? "border-rose-500" : "border-slate-300"
                 }`}
               />
               <p className="text-xs text-slate-500 mt-1 mb-0">
-                For event coordination; younger students may use a parent or guardian mobile number.
+                10–15 digits required (country codes and parent or guardian mobile numbers accepted).
               </p>
               {fieldErrors.phone && (
                 <p role="alert" className="text-sm text-rose-600 mt-1 m-0">{fieldErrors.phone}</p>

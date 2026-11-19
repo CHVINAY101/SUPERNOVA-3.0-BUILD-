@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 import { formatCheckInDatabaseError } from "./entryOperations";
 import { parseSecureQrPayload } from "./ticketing";
+import { isValidPhone, normalizeContactPhone } from "./validation";
 import type {
   GateVerificationResult,
   PublicTicketLookupResult,
@@ -47,15 +48,37 @@ function isMissingRpcError(err: unknown): boolean {
 }
 
 /**
+ * Normalizes Supabase / Postgres errors from visitor registration RPCs into clear user-facing copy
+ * without mislabeling validation errors as gate-ticket errors.
+ */
+export function extractVisitorRegistrationError(err: unknown): string {
+  if (!err) return "Registration could not be completed. Please try again.";
+  if (typeof err === "string") return err.trim() || "Registration could not be completed. Please try again.";
+  const raw = String((err as any)?.message || "").trim();
+  if (!raw) return "Registration could not be completed. Please try again.";
+  if (/row-level security|permission denied/i.test(raw)) {
+    return "Registration is currently unavailable due to permission restrictions. Please contact the helpdesk.";
+  }
+  return raw;
+}
+
+/**
  * Submits a visitor registration, confirms it immediately, and issues its unique
- * cryptographic ticket when the ticketing RPC is deployed.
- * Falls back cleanly to submit_visitor_registration_v2 / submit_visitor_registration
- * if the 20261115 migration has not yet been applied in Supabase.
+ * cryptographic ticket via submit_visitor_and_issue_ticket.
+ * Calls the 18-argument signature matching live production Supabase first so zero 404s occur,
+ * and falls back cleanly if an older signature is active.
  */
 export async function submitVisitorAndIssueTicket(
   payload: VisitorTicketSubmitPayload
 ): Promise<VisitorTicketSubmitResult> {
-  const cleanPhone = payload.phone?.trim() || null;
+  const rawPhone = String(payload.phone || "").trim();
+  if (!rawPhone || !isValidPhone(rawPhone)) {
+    throw new Error(
+      "Please enter a valid 10–15 digit Contact Mobile Number (country codes and parent or guardian numbers accepted)."
+    );
+  }
+
+  const cleanPhone = normalizeContactPhone(rawPhone);
   const cleanInstitution = payload.institution?.trim() || null;
   const cleanStudentClass = payload.studentClass?.trim() || null;
   const cleanDesignation = payload.designation?.trim() || null;
@@ -88,20 +111,20 @@ export async function submitVisitorAndIssueTicket(
     p_promo_consent: Boolean(payload.promoConsent),
   };
 
-  // 1. Primary unified RPC returning registration_ref + authoritative ticket + qr_token
+  // 1. Primary unified RPC matching production signature (18 args — also compatible with DEFAULT promo_consent)
   let { data: ticketRpcData, error: ticketRpcErr } = await supabase.rpc(
     "submit_visitor_and_issue_ticket",
-    rpcArgsWithPromo
+    rpcArgsWithSource
   );
 
-  // Fallback to 18-param signature if 20261129 migration has not been applied yet
+  // Fallback to 19-arg explicit signature only if required by schema
   if (ticketRpcErr && isMissingRpcError(ticketRpcErr)) {
-    const sourceTry = await supabase.rpc("submit_visitor_and_issue_ticket", rpcArgsWithSource);
-    ticketRpcData = sourceTry.data;
-    ticketRpcErr = sourceTry.error;
+    const promoTry = await supabase.rpc("submit_visitor_and_issue_ticket", rpcArgsWithPromo);
+    ticketRpcData = promoTry.data;
+    ticketRpcErr = promoTry.error;
   }
 
-  // Fallback to 17-param signature if 20261118 migration has not been applied yet
+  // Fallback to 17-param signature if 20261118 migration has not been applied
   if (ticketRpcErr && isMissingRpcError(ticketRpcErr)) {
     const legacyTry = await supabase.rpc("submit_visitor_and_issue_ticket", baseRpcArgs);
     ticketRpcData = legacyTry.data;
@@ -125,12 +148,12 @@ export async function submitVisitorAndIssueTicket(
   // 2. Fallback to submit_visitor_registration_v2
   let { data: v2Data, error: v2Error } = await supabase.rpc(
     "submit_visitor_registration_v2",
-    rpcArgsWithPromo
+    rpcArgsWithSource
   );
   if (v2Error && isMissingRpcError(v2Error)) {
-    const sourceV2 = await supabase.rpc("submit_visitor_registration_v2", rpcArgsWithSource);
-    v2Data = sourceV2.data;
-    v2Error = sourceV2.error;
+    const promoV2 = await supabase.rpc("submit_visitor_registration_v2", rpcArgsWithPromo);
+    v2Data = promoV2.data;
+    v2Error = promoV2.error;
   }
   if (v2Error && isMissingRpcError(v2Error)) {
     const legacyV2 = await supabase.rpc("submit_visitor_registration_v2", baseRpcArgs);

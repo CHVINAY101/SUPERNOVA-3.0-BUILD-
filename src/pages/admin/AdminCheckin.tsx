@@ -26,11 +26,13 @@ import type {
 import { parseSecureQrPayload } from "@/lib/ticketing";
 import {
   checkinGateTicket,
+  extractVisitorRegistrationError,
   issueTicketForRegistration,
   submitVisitorAndIssueTicket,
   verifyGateTicket,
 } from "@/lib/ticketClient";
 import { buildTicketQrContent, downloadTicketPdfFile } from "@/lib/ticketPdfService";
+import { TicketPassModal } from "@/components/TicketPassModal";
 import { getGateVerdictPresentation } from "@/lib/gatePortal";
 import {
   FACULTY_DESIGNATION_OPTIONS,
@@ -64,6 +66,7 @@ import {
   ShieldCheck,
   Camera,
   Download,
+  Eye,
   Mail,
   GraduationCap,
   UserCheck,
@@ -118,6 +121,7 @@ interface WalkInIssuedPass {
   qrDataUrl: string;
   fullName: string;
   email: string;
+  phone?: string;
   visitorCategory: CanonicalVisitorCategory;
   displaySubtitle: string;
   studentClass: string | null;
@@ -224,6 +228,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
   const [walkInSubmitError, setWalkInSubmitError] = useState<string | null>(null);
   const [walkInSubmitting, setWalkInSubmitting] = useState(false);
   const [walkInIssued, setWalkInIssued] = useState<WalkInIssuedPass | null>(null);
+  const [walkInPassModalOpen, setWalkInPassModalOpen] = useState(false);
   const [walkInBandCategory, setWalkInBandCategory] = useState<string>("");
   const [walkInBandCode, setWalkInBandCode] = useState("");
   const [walkInCheckingIn, setWalkInCheckingIn] = useState(false);
@@ -244,6 +249,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
     setWalkInErrors({});
     setWalkInSubmitError(null);
     setWalkInIssued(null);
+    setWalkInPassModalOpen(false);
     setWalkInBandCode("");
     setWalkInBandCategory(
       wristbandCategories.find((c) => c.slug === "general-visitor" && c.is_active)?.name ||
@@ -925,6 +931,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
         qrDataUrl,
         fullName: cleanName,
         email: cleanEmail,
+        phone: cleanPhone,
         visitorCategory: canonicalCategory,
         displaySubtitle,
         studentClass: cleanClass,
@@ -940,7 +947,7 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
       });
       await fetchEntryData();
     } catch (err: any) {
-      setWalkInSubmitError(formatCheckInDatabaseError(err) || err?.message || "Walk-in registration failed.");
+      setWalkInSubmitError(extractVisitorRegistrationError(err));
     } finally {
       setWalkInSubmitting(false);
     }
@@ -2095,13 +2102,13 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                         setWalkInPhone(e.target.value);
                         clearWalkInFieldError("phone");
                       }}
-                      placeholder="10-digit mobile number"
+                      placeholder="e.g. 9876543210 or +91 98765 43210"
                       className={`w-full px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm ${
                         walkInErrors.phone ? "border-rose-500 bg-rose-50/40" : "border-slate-300"
                       }`}
                     />
                     <p className="text-[11px] text-slate-500 mt-1 mb-0">
-                      For event-day coordination only. Younger students may provide a parent or guardian mobile number.
+                      10–15 digits required (country codes and parent or guardian mobile numbers accepted).
                     </p>
                     {walkInErrors.phone && (
                       <p role="alert" className="text-[11px] font-medium text-rose-600 mt-1 m-0">
@@ -2370,26 +2377,37 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
                   </div>
                 </div>
 
-                {/* PDF Download Action */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    downloadTicketPdfFile({
-                      ticketRef: walkInIssued.ticketRef,
-                      qrToken: walkInIssued.qrToken,
-                      recipientName: walkInIssued.fullName,
-                      category: walkInIssued.displaySubtitle,
-                      email: walkInIssued.email,
-                      institution: walkInIssued.institution || undefined,
-                      registrationType: "visitor",
-                      daysAttending: "Both",
-                    })
-                  }
-                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-mono font-bold uppercase tracking-wide cursor-pointer"
-                >
-                  <Download size={15} />
-                  <span>Download Official Ticket (PDF)</span>
-                </button>
+                {/* View Pass & PDF Download Actions */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setWalkInPassModalOpen(true)}
+                    className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-900 text-xs font-mono font-bold uppercase tracking-wide cursor-pointer"
+                  >
+                    <Eye size={15} />
+                    <span>View Pass</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadTicketPdfFile({
+                        ticketRef: walkInIssued.ticketRef,
+                        qrToken: walkInIssued.qrToken,
+                        recipientName: walkInIssued.fullName,
+                        category: walkInIssued.displaySubtitle,
+                        email: walkInIssued.email,
+                        phone: walkInIssued.phone,
+                        institution: walkInIssued.institution || undefined,
+                        registrationType: "visitor",
+                        daysAttending: "Both",
+                      })
+                    }
+                    className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-mono font-bold uppercase tracking-wide cursor-pointer"
+                  >
+                    <Download size={15} />
+                    <span>Download PDF</span>
+                  </button>
+                </div>
 
                 {/* Immediate Gate Verification & Check-In */}
                 {canCheckInVisitor && (
@@ -2494,6 +2512,22 @@ export default function AdminCheckin({ portalMode = "admin" }: { portalMode?: "a
             )}
           </div>
         </div>
+      )}
+
+      {walkInIssued && (
+        <TicketPassModal
+          isOpen={walkInPassModalOpen}
+          onClose={() => setWalkInPassModalOpen(false)}
+          ticketRef={walkInIssued.ticketRef}
+          qrToken={walkInIssued.qrToken}
+          registrationCategory="visitor"
+          displayName={walkInIssued.fullName}
+          subtitle={walkInIssued.displaySubtitle}
+          institution={walkInIssued.institution || undefined}
+          email={walkInIssued.email}
+          phone={walkInIssued.phone}
+          daysAttending="Both"
+        />
       )}
     </div>
   );

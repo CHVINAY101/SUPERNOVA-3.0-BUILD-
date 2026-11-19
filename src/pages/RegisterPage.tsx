@@ -37,7 +37,7 @@ import {
   downloadTicketPdfFile,
 } from "@/lib/ticketPdfService";
 import { archiveTicketToNas } from "@/lib/nasArchivalService";
-import { lookupPublicTicket, submitVisitorAndIssueTicket } from "@/lib/ticketClient";
+import { lookupPublicTicket, submitVisitorAndIssueTicket, extractVisitorRegistrationError } from "@/lib/ticketClient";
 import { TicketPassModal } from "@/components/TicketPassModal";
 import type {
   EsportsGameAvailability,
@@ -258,6 +258,7 @@ export const RegisterPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLockRef = useRef(false);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const formPanelRef = useRef<HTMLDivElement | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [registeredRef, setRegisteredRef] = useState<string | null>(null);
   const [issuedVisitorTicket, setIssuedVisitorTicket] = useState<TicketRecord | null>(null);
@@ -341,6 +342,13 @@ export const RegisterPage: React.FC = () => {
       active = false;
     };
   }, [submitSuccess, selectedType, registeredRef, issuedVisitorTicket]);
+
+  useEffect(() => {
+    if (!submitSuccess || !formPanelRef.current) return;
+    window.requestAnimationFrame(() => {
+      formPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [submitSuccess]);
 
   const handleLookupPass = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -594,37 +602,54 @@ export const RegisterPage: React.FC = () => {
         setRegisteredRef(ticketRef);
         setIssuedVisitorTicket(submissionRes.ticket || null);
 
-        // Generate PDF ticket (with secure token when available) and archive best-effort
         try {
-          const ticketRes = await generateTicketPdf({
-            ticketRef,
-            qrToken,
-            recipientName: cleanName,
-            category: displaySubtitle,
-            email: cleanEmail,
-            institution: cleanInstitution || undefined,
-            registrationType: "visitor",
-            daysAttending: "Both",
+          const qrContent = buildTicketQrContent(ticketRef, qrToken);
+          const qrUrl = await QRCode.toDataURL(qrContent, {
+            errorCorrectionLevel: "H",
+            margin: 1,
+            width: 240,
+            color: { dark: "#0B1120", light: "#FFFFFF" },
           });
-
-          await archiveTicketToNas(ticketRes, {
-            ticketRef,
-            qrToken,
-            recipientName: cleanName,
-            category: displaySubtitle,
-            email: cleanEmail,
-            institution: cleanInstitution || undefined,
-            registrationType: "visitor",
-            daysAttending: "Both",
-          });
-        } catch (nasErr) {
-          console.warn("NAS archival / PDF creation notice:", nasErr);
+          setVisitorQrPreviewUrl(qrUrl);
+        } catch {
+          // Non-blocking: useEffect also attempts QR preview generation
         }
 
         setEmailNotice(
           "Your official visitor pass, QR code, and downloadable PDF ticket are ready above. Save or download your pass now to present at the venue gate on 20–21 November 2026."
         );
         setSubmitSuccess(true);
+
+        // Best-effort non-blocking local PDF generation & optional archive (never requires Gmail, WhatsApp, or NAS)
+        void (async () => {
+          try {
+            const ticketRes = await generateTicketPdf({
+              ticketRef,
+              qrToken,
+              recipientName: cleanName,
+              category: displaySubtitle,
+              email: cleanEmail,
+              phone: cleanPhone,
+              institution: cleanInstitution || undefined,
+              registrationType: "visitor",
+              daysAttending: "Both",
+            });
+
+            await archiveTicketToNas(ticketRes, {
+              ticketRef,
+              qrToken,
+              recipientName: cleanName,
+              category: displaySubtitle,
+              email: cleanEmail,
+              phone: cleanPhone,
+              institution: cleanInstitution || undefined,
+              registrationType: "visitor",
+              daysAttending: "Both",
+            });
+          } catch (nasErr) {
+            console.warn("Background PDF/NAS archival skipped:", nasErr);
+          }
+        })();
       } else if (selectedType === "esports") {
         if (!selectedGameId) {
           throw new Error("Please select a game for esports registration.");
@@ -685,7 +710,7 @@ export const RegisterPage: React.FC = () => {
         setSubmitSuccess(true);
       }
     } catch (err: any) {
-      setSubmitError(err.message || "An error occurred during submission.");
+      setSubmitError(extractVisitorRegistrationError(err));
     } finally {
       setIsSubmitting(false);
       submitLockRef.current = false;
@@ -787,12 +812,13 @@ export const RegisterPage: React.FC = () => {
         <AnimatePresence mode="wait">
           {selectedType && (
             <motion.div
+              ref={formPanelRef}
               key={selectedType}
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -12 }}
               transition={{ duration: 0.18 }}
-              className="max-w-xl mx-auto bg-white rounded-2xl border-2 border-[#191936] shadow-[5px_5px_0px_#191936] p-5 sm:p-8"
+              className="max-w-xl mx-auto scroll-mt-28 bg-white rounded-2xl border-2 border-[#191936] shadow-[5px_5px_0px_#191936] p-5 sm:p-8"
             >
               {/* Form Title */}
               <div className="mb-6 pb-4 border-b border-[#EAEAF2]">
@@ -902,7 +928,16 @@ export const RegisterPage: React.FC = () => {
                             )}
                           </div>
 
-                          <div className="grid grid-cols-1 gap-2.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() => setPassModalOpen(true)}
+                              className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-sm font-mono font-bold text-white cursor-pointer"
+                            >
+                              <Eye className="w-4 h-4 text-cyan-300" />
+                              <span>View Pass</span>
+                            </button>
+
                             <button
                               type="button"
                               onClick={() =>
@@ -925,6 +960,7 @@ export const RegisterPage: React.FC = () => {
                                         : null,
                                   }),
                                   email: visEmail.trim(),
+                                  phone: visPhone.trim() || undefined,
                                   institution: visInstitution.trim() || undefined,
                                   registrationType: "visitor",
                                   daysAttending: "Both",
@@ -933,16 +969,7 @@ export const RegisterPage: React.FC = () => {
                               className="min-h-[48px] w-full inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-[#D5F542] hover:bg-[#c6e830] text-sm font-mono font-black text-[#0B1120] cursor-pointer"
                             >
                               <Download className="w-4 h-4" />
-                              <span>Download Pass</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setPassModalOpen(true)}
-                              className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-mono font-bold text-white cursor-pointer"
-                            >
-                              <Eye className="w-4 h-4 text-cyan-300" />
-                              <span>View Full Ticket</span>
+                              <span>Download PDF</span>
                             </button>
                           </div>
                         </div>
@@ -1182,11 +1209,11 @@ export const RegisterPage: React.FC = () => {
                               setVisPhone(e.target.value);
                               clearFieldError("phone");
                             }}
-                            placeholder="10-digit mobile number"
+                            placeholder="e.g. 9876543210 or +91 98765 43210"
                             className={`form-input ${fieldErrors.phone ? "!border-red-500" : ""}`}
                           />
                           <p className="text-xs text-[#191936]/70 mt-1 mb-0">
-                            Used only for event check-in coordination or important event-day updates. Younger students may provide a parent or guardian mobile number.
+                            10–15 digits required (country codes and parent or guardian mobile numbers accepted). Used only for event check-in or updates.
                           </p>
                           {fieldErrors.phone && (
                             <p role="alert" className="text-sm font-medium text-red-600 mt-1">
@@ -1903,6 +1930,7 @@ export const RegisterPage: React.FC = () => {
           })}
           institution={visInstitution.trim() || undefined}
           email={visEmail.trim()}
+          phone={visPhone.trim() || undefined}
           daysAttending="Both"
           issuedAt={issuedVisitorTicket?.issued_at}
           checkedInAt={issuedVisitorTicket?.checked_in_at}

@@ -5,8 +5,12 @@ export function isValidEmail(value: string) {
   return trimmed.length <= 254 && EMAIL_PATTERN.test(trimmed);
 }
 
+export function normalizeContactPhone(value: string): string {
+  return String(value || "").replace(/[\s\u00A0\-–—+().]/g, "");
+}
+
 export function isValidPhone(value: string) {
-  return /^[0-9]{10,15}$/.test(value.replace(/[\s\-+()]/g, ""));
+  return /^[0-9]{10,15}$/.test(normalizeContactPhone(value));
 }
 
 export function isValidName(value: string, max = 80) {

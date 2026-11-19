@@ -3,11 +3,12 @@ import { Link } from "react-router-dom";
 import { PageHero } from "@/components/PageLayout";
 import { ConfirmationCard, Field, ReviewRow, StepIndicator, SubmitError } from "@/components/registration/RegistrationUI";
 import { submitVisitorAndIssueTicket } from "@/lib/ticketClient";
-import { isValidClassCourse, isValidEmail, isValidInstitution, isValidName } from "@/lib/validation";
+import { isValidClassCourse, isValidEmail, isValidInstitution, isValidName, isValidPhone } from "@/lib/validation";
 
 interface Draft {
   fullName: string;
   email: string;
+  phone: string;
   studentClass: string;
   institution: string;
   website: string;
@@ -19,6 +20,7 @@ const STEPS = ["Your details", "Review"];
 const initialDraft: Draft = {
   fullName: "",
   email: "",
+  phone: "",
   studentClass: "",
   institution: "",
   website: "",
@@ -32,6 +34,7 @@ function validateStep(step: number, draft: Draft): Errors {
   if (step === 0) {
     if (!isValidName(draft.fullName, 120)) errors.fullName = "Enter your full name (2 to 120 characters).";
     if (!isValidEmail(draft.email)) errors.email = "Enter a valid email address.";
+    if (!isValidPhone(draft.phone)) errors.phone = "Enter a valid 10–15 digit contact mobile number (country codes and parent or guardian numbers accepted).";
     if (!isValidClassCourse(draft.studentClass, 120)) errors.studentClass = "Enter your Class / Course.";
     if (!isValidInstitution(draft.institution, 150)) errors.institution = "Enter your College / Institution Name.";
   }
@@ -82,7 +85,7 @@ export default function RegisterVisitor() {
       const res = await submitVisitorAndIssueTicket({
         fullName: draft.fullName.trim(),
         email: draft.email.trim().toLowerCase(),
-        phone: null,
+        phone: draft.phone.trim(),
         institution: draft.institution.trim(),
         visitorCategory: "Student",
         studentClass: draft.studentClass.trim(),
@@ -126,6 +129,9 @@ export default function RegisterVisitor() {
                 <Field label="Email Address *" error={errors.email}>
                   <input className="input" type="email" value={draft.email} autoComplete="email" onChange={(e) => update("email", e.target.value)} />
                 </Field>
+                <Field label="Contact Mobile Number *" error={errors.phone}>
+                  <input className="input" type="tel" inputMode="tel" autoComplete="tel" maxLength={20} placeholder="e.g. 9876543210 or +91 98765 43210" value={draft.phone} onChange={(e) => update("phone", e.target.value)} />
+                </Field>
                 <Field label="Class / Course *" error={errors.studentClass}>
                   <input className="input" value={draft.studentClass} maxLength={120} placeholder="e.g. II PUC Science / B.Sc. / 10th Standard" onChange={(e) => update("studentClass", e.target.value)} />
                 </Field>
@@ -140,6 +146,7 @@ export default function RegisterVisitor() {
                 <div className="card" style={{ padding: 24 }}>
                   <ReviewRow label="Full Name" value={draft.fullName} />
                   <ReviewRow label="Email Address" value={draft.email} />
+                  <ReviewRow label="Contact Mobile Number" value={draft.phone} />
                   <ReviewRow label="Class / Course" value={draft.studentClass} />
                   <ReviewRow label="College / Institution" value={draft.institution} />
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
