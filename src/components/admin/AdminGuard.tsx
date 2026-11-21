@@ -1,15 +1,49 @@
+import { useEffect } from "react";
 import { Navigate, useLocation, Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { isMisconfigured } from "@/lib/supabase";
-import { getDefaultAdminRoute, getRoleLabel, isDedicatedOperationsRole } from "@/lib/rbac";
+import { getDefaultAdminRoute, getRoleLabel, isDedicatedOperationsRole, normalizeRole } from "@/lib/rbac";
 import { isGateOnlyRole } from "@/lib/gatePortal";
 import { isRegistrationDeskOnlyRole } from "@/lib/registrationDesk";
-import { ShieldAlert, ServerOff, LogOut, Lock, ArrowRight } from "lucide-react";
+import { ServerOff, LogOut, Lock, ArrowRight } from "lucide-react";
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
-  const { session, loading, isAdmin, role, accountStatus, permissions, canAccessRoute, signOut, refreshRole } = useAuth();
+  const {
+    session,
+    loading,
+    isAdmin,
+    isStaff,
+    isActive,
+    role,
+    accountStatus,
+    permissions,
+    canAccessRoute,
+    signOut,
+  } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+
+  const canonicalRole = normalizeRole(role);
+  const isValidStaffSession = Boolean(
+    session &&
+      isAdmin &&
+      isStaff &&
+      isActive &&
+      accountStatus === "active" &&
+      canonicalRole !== null
+  );
+  const isValidInvitedStaff = Boolean(
+    session &&
+      isStaff &&
+      accountStatus === "invited" &&
+      canonicalRole !== null
+  );
+
+  useEffect(() => {
+    if (!loading && session && !isValidStaffSession && !isValidInvitedStaff) {
+      void signOut();
+    }
+  }, [loading, session, isValidStaffSession, isValidInvitedStaff, signOut]);
 
   if (isMisconfigured) {
     return (
@@ -52,55 +86,14 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     return <Navigate to="/admin/login" state={{ from: location }} replace />;
   }
 
-  // If account is invited, send back to /admin/login to complete invitation password setup
-  if (accountStatus === "invited") {
+  // If account is a genuinely invited staff role, send back to /admin/login to complete invitation setup
+  if (isValidInvitedStaff) {
     return <Navigate to="/admin/login?type=invite" state={{ from: location }} replace />;
   }
 
-  // Block inactive, deactivated, revoked, or role-less accounts cleanly without exposing SQL
-  if (!isAdmin || accountStatus !== "active") {
-    const isBlockedStatus = accountStatus === "deactivated" || accountStatus === "revoked";
-    return (
-      <div className="flex justify-center items-center min-h-screen bg-[#F8FAFC] p-6">
-        <div className="max-w-md w-full text-center p-8 bg-white rounded-3xl border border-slate-200 shadow-lg">
-          <div className="inline-flex p-3.5 rounded-2xl bg-rose-50 text-rose-600 mb-4 border border-rose-200">
-            <ShieldAlert size={34} />
-          </div>
-          <h2 className="text-xl font-display font-black text-slate-900 mb-2">
-            {isBlockedStatus ? "Account Access Suspended" : "CRM Access Required"}
-          </h2>
-          <p className="text-sm text-slate-600 leading-relaxed mb-4">
-            Signed in as <strong className="text-slate-900">{session.user.email}</strong>.
-          </p>
-          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3.5 mb-6 text-rose-800 text-xs font-medium leading-relaxed">
-            {isBlockedStatus
-              ? `Your CRM access status is currently "${accountStatus}". Please contact a Super Admin if you believe this is an error.`
-              : "Your account does not currently have an active CRM role or invitation assigned. Access to operational dashboards is restricted to invited Supernova 3.0 staff."}
-          </div>
-          <div className="flex flex-col gap-2.5">
-            <button
-              type="button"
-              onClick={() => refreshRole()}
-              className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors cursor-pointer"
-            >
-              Recheck Access Status
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                await signOut();
-              }}
-              className="w-full py-2.5 px-4 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs transition-colors cursor-pointer inline-flex items-center justify-center gap-2"
-            >
-              <LogOut size={14} /> Sign Out
-            </button>
-            <Link to="/" className="text-xs text-slate-500 hover:text-slate-800 mt-1 no-underline">
-              Return to Festival Website
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
+  // Fail closed: deny any session lacking is_staff=true, is_active=true, and a valid staff role
+  if (!isValidStaffSession) {
+    return <Navigate to="/" replace />;
   }
 
   // Block gate-only roles from accessing ANY CRM Admin route (/admin or /admin/*)

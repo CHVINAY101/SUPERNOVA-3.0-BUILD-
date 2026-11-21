@@ -6,20 +6,28 @@ import {
   canRegenerateBracket,
   canTeamEnterTournament,
   generateTournamentMatches,
+  isCancelledBracketMatch,
   isTournamentStructureLocked,
   orderTeamsForBracket,
   reassignTeamsInMatch,
+  resolveMatchSlotDisplay,
 } from "@/lib/tournamentEngine";
 import { formatMatchDatabaseError } from "@/lib/matchOperations";
+import { findTeamAffectedMatches } from "@/lib/esportsFixtureCorrections";
+import { callRenameEsportsTeamRpc } from "@/lib/esportsFixtureRpc";
+import { SearchableTeamSelect } from "./SearchableTeamSelect";
+import { DisqualificationImpactBanner } from "./DisqualificationImpactBanner";
 import { FORMAT_LABELS, parseTournamentScoringRules, type EsportsSectionId, type EsportsWorkspaceSharedData } from "./types";
 import type { Match, Registration, TournamentFormat, TournamentSelectionStatus } from "@/types/database";
 import {
   AlertTriangle,
   ArrowLeftRight,
   CheckCircle2,
+  Edit3,
   GitBranch,
   Lock,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   Shuffle,
   Users,
@@ -30,25 +38,53 @@ interface TeamProps {
   data: EsportsWorkspaceSharedData;
   canEditEsports: boolean;
   canSelectTeams: boolean;
+  canApproveEsports?: boolean;
   canRejectEsports: boolean;
+  canModifyTeams?: boolean;
+  reinstatingTeamId?: string | null;
   onRefresh: (msg?: string) => Promise<void>;
+  onPartialRefresh?: (opts: {
+    matchIds?: string[];
+    registrationIds?: string[];
+    message?: string;
+  }) => Promise<void>;
   onError: (msg: string) => void;
   onDisqualify: (team: Registration) => void;
+  onReinstate?: (team: Registration) => void;
+  onOpenMatchEditor?: (match: Match) => void;
 }
 
 export function TeamManagementSection({
   data,
   canEditEsports,
   canSelectTeams,
+  canApproveEsports = false,
   canRejectEsports,
+  canModifyTeams = false,
+  reinstatingTeamId = null,
   onRefresh,
+  onPartialRefresh,
   onError,
   onDisqualify,
+  onReinstate,
+  onOpenMatchEditor,
 }: TeamProps) {
-  const { selectedGame, approvedTeams, selectedTeams, allGameTeams, players, tournament } = data;
+  const { selectedGame, approvedTeams, selectedTeams, allGameTeams, players, tournament, matches, teamMap } = data;
   const [filterMode, setFilterMode] = useState<"approved" | "selected" | "all">("approved");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [seedEdits, setSeedEdits] = useState<Record<string, string>>({});
+  const [renameTarget, setRenameTarget] = useState<Registration | null>(null);
+  const [renameNewName, setRenameNewName] = useState("");
+  const [renameReason, setRenameReason] = useState("");
+  const [renaming, setRenaming] = useState(false);
+
+  const canModifyNameOrStatus = canModifyTeams || canEditEsports || canSelectTeams || canRejectEsports;
+
+  const disqualifiedWithActiveFixtures = allGameTeams.filter(
+    (t) =>
+      t.selection_status === "disqualified" &&
+      findTeamAffectedMatches(matches, t.id).upcomingMatches.length > 0
+  );
 
   const displayTeams =
     filterMode === "selected"
@@ -59,6 +95,14 @@ export function TeamManagementSection({
 
   const updateSelection = async (team: Registration, nextSel: TournamentSelectionStatus) => {
     if (!canSelectTeams && !canEditEsports) return;
+    if (nextSel === "disqualified") {
+      onDisqualify(team);
+      return;
+    }
+    if (team.selection_status === "disqualified" && onReinstate) {
+      onReinstate(team);
+      return;
+    }
     setBusyId(team.id);
     try {
       const { error } = await supabase
@@ -74,8 +118,40 @@ export function TeamManagementSection({
     }
   };
 
+  const handleRenameSubmit = async () => {
+    if (!renameTarget || !canModifyNameOrStatus || renaming) return;
+    setRenaming(true);
+    try {
+      const res = await callRenameEsportsTeamRpc({
+        registrationId: renameTarget.id,
+        expectedName: renameTarget.team_name,
+        newName: renameNewName,
+        reason: renameReason,
+      });
+      if (!res.ok) {
+        onError(res.error || "Team rename failed.");
+        return;
+      }
+      const oldName = renameTarget.team_name;
+      const savedName = renameNewName.trim();
+      const targetId = renameTarget.id;
+      setRenameTarget(null);
+      setRenameReason("");
+      if (onPartialRefresh) {
+        await onPartialRefresh({
+          registrationIds: [targetId],
+          message: `Renamed team "${oldName}" to "${savedName}".`,
+        });
+      } else {
+        await onRefresh(`Renamed team "${oldName}" to "${savedName}".`);
+      }
+    } finally {
+      setRenaming(false);
+    }
+  };
+
   const approveTeam = async (team: Registration) => {
-    if (!canEditEsports) return;
+    if (!canApproveEsports && !canEditEsports) return;
     setBusyId(team.id);
     try {
       const { error } = await supabase
@@ -111,7 +187,7 @@ export function TeamManagementSection({
   };
 
   const toggleTeamCheckIn = async (team: Registration) => {
-    if (!canEditEsports) return;
+    if (!canEditEsports && !canSelectTeams && !canApproveEsports) return;
     setBusyId(team.id);
     const nextStatus = team.check_in_status === "checked_in" ? "not_checked_in" : "checked_in";
     try {
@@ -247,6 +323,30 @@ export function TeamManagementSection({
         </div>
       </div>
 
+      {selectedGame && disqualifiedWithActiveFixtures.length > 0 && (
+        <div className="space-y-3">
+          {disqualifiedWithActiveFixtures.map((dqTeam) => (
+            <DisqualificationImpactBanner
+              key={dqTeam.id}
+              team={dqTeam}
+              gameId={selectedGame.id}
+              matches={matches}
+              allGameTeams={allGameTeams}
+              teamMap={teamMap}
+              canEdit={canEditEsports || canSelectTeams || canRejectEsports || canModifyTeams}
+              reinstating={reinstatingTeamId === dqTeam.id}
+              onReinstate={(t) => onReinstate && onReinstate(t)}
+              onOpenResolveForfeit={(m) => onOpenMatchEditor && onOpenMatchEditor(m)}
+              onPartialRefresh={
+                onPartialRefresh || (async (opts) => onRefresh(opts.message))
+              }
+              onError={onError}
+              onDismiss={() => {}}
+            />
+          ))}
+        </div>
+      )}
+
       {displayTeams.length === 0 ? (
         <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-300 text-xs text-slate-600">
           No teams match this filter for {selectedGame?.title}.
@@ -329,9 +429,9 @@ export function TeamManagementSection({
                       ) : (
                         <button
                           type="button"
-                          disabled={busyId === team.id || !canEditEsports}
+                          disabled={busyId === team.id || (!canApproveEsports && !canEditEsports)}
                           onClick={() => approveTeam(team)}
-                          className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold hover:bg-emerald-100 cursor-pointer"
+                          className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold hover:bg-emerald-100 cursor-pointer disabled:opacity-50"
                         >
                           Approve & Select
                         </button>
@@ -363,9 +463,9 @@ export function TeamManagementSection({
                     <td className="py-3 pr-3">
                       <button
                         type="button"
-                        disabled={busyId === team.id || !canEditEsports}
+                        disabled={busyId === team.id || (!canEditEsports && !canSelectTeams && !canApproveEsports)}
                         onClick={() => toggleTeamCheckIn(team)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border ${
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer border disabled:opacity-50 ${
                           team.check_in_status === "checked_in"
                             ? "bg-emerald-50 border-emerald-200 text-emerald-800"
                             : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -374,22 +474,142 @@ export function TeamManagementSection({
                         {team.check_in_status === "checked_in" ? "Checked In" : "Check In"}
                       </button>
                     </td>
-                    <td className="py-3 text-right">
-                      {canRejectEsports && team.status !== "declined" && (
-                        <button
-                          type="button"
-                          onClick={() => onDisqualify(team)}
-                          className="px-2.5 py-1 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-medium cursor-pointer"
-                        >
-                          Disqualify
-                        </button>
-                      )}
+                    <td className="py-3 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        {canModifyNameOrStatus && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRenameTarget(team);
+                              setRenameNewName(team.team_name);
+                              setRenameReason("");
+                            }}
+                            className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Edit3 size={11} />
+                            <span>Rename</span>
+                          </button>
+                        )}
+                        {team.selection_status === "disqualified" ? (
+                          (canRejectEsports || canModifyNameOrStatus) && onReinstate && (
+                            <button
+                              type="button"
+                              disabled={reinstatingTeamId === team.id}
+                              onClick={() => onReinstate(team)}
+                              className="px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                            >
+                              {reinstatingTeamId === team.id ? (
+                                <RefreshCw size={11} className="animate-spin" />
+                              ) : (
+                                <RotateCcw size={11} />
+                              )}
+                              <span>{reinstatingTeamId === team.id ? "Reinstating..." : "Reinstate"}</span>
+                            </button>
+                          )
+                        ) : (
+                          canRejectEsports &&
+                          team.status !== "declined" && (
+                            <button
+                              type="button"
+                              onClick={() => onDisqualify(team)}
+                              className="px-2.5 py-1 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-medium cursor-pointer"
+                            >
+                              Disqualify
+                            </button>
+                          )
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Rename Team RPC Modal */}
+      {renameTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
+          onClick={() => !renaming && setRenameTarget(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 space-y-4 text-xs"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-display font-bold text-slate-900 m-0">
+                Rename Team — {renameTarget.team_name}
+              </h3>
+              <button
+                type="button"
+                disabled={renaming}
+                onClick={() => setRenameTarget(null)}
+                className="p-1 cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-slate-600 m-0">
+              Updates team name via <code className="font-mono">rename_esports_team</code> and propagates live across brackets, match drawers, Battle Royale lobbies, conductor desks, and public standings.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="teams-tab-rename-name" className="block font-semibold text-slate-700 mb-1">
+                  New Official Team Name
+                </label>
+                <input
+                  id="teams-tab-rename-name"
+                  type="text"
+                  disabled={renaming}
+                  value={renameNewName}
+                  onChange={(e) => setRenameNewName(e.target.value)}
+                  className="w-full h-10 px-3 rounded-lg border border-slate-300 bg-white text-slate-900"
+                />
+              </div>
+              <div>
+                <label htmlFor="teams-tab-rename-reason" className="block font-semibold text-slate-700 mb-1">
+                  Mandatory Audit Reason *
+                </label>
+                <input
+                  id="teams-tab-rename-reason"
+                  type="text"
+                  disabled={renaming}
+                  value={renameReason}
+                  onChange={(e) => setRenameReason(e.target.value)}
+                  placeholder="e.g. Corrected org spelling before round 2"
+                  className="w-full h-10 px-3 rounded-lg border border-slate-300 bg-white text-slate-900"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={renaming}
+                onClick={() => setRenameTarget(null)}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={
+                  renaming ||
+                  renameNewName.trim().length < 2 ||
+                  renameNewName.trim() === renameTarget.team_name.trim() ||
+                  renameReason.trim().length < 3
+                }
+                onClick={() => void handleRenameSubmit()}
+                className="px-4 py-2 rounded-lg bg-[#0B1120] hover:bg-slate-800 disabled:opacity-45 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                {renaming && <RefreshCw size={12} className="animate-spin" />}
+                <span>{renaming ? "Renaming..." : "Apply Rename"}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -422,6 +642,8 @@ export function BracketBuilderSection({
     teamMap,
   } = data;
 
+  const teamNameById = new Map(Array.from(teamMap.entries()).map(([id, team]) => [id, team.team_name]));
+  const activeMatches = matches.filter((m) => !isCancelledBracketMatch(m));
   const parsedRules = parseTournamentScoringRules(tournament, selectedGame);
 
   const [format, setFormat] = useState<TournamentFormat>(tournament.format);
@@ -628,7 +850,7 @@ export function BracketBuilderSection({
     }
   };
 
-  const roundsGrouped = matches.reduce<Record<string, Match[]>>((acc, m) => {
+  const roundsGrouped = activeMatches.reduce<Record<string, Match[]>>((acc, m) => {
     const key = m.round || `Round ${m.round_number || 1}`;
     if (!acc[key]) acc[key] = [];
     acc[key].push(m);
@@ -837,13 +1059,13 @@ export function BracketBuilderSection({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
           <div>
             <h2 className="text-base font-display font-bold text-slate-900 m-0">
-              Generated Bracket & Pairing Overview ({matches.length} Matches)
+              Generated Bracket &amp; Pairing Overview ({activeMatches.length} Matches)
             </h2>
             <p className="text-xs text-slate-500 m-0 mt-0.5">
               Review automatic pairings and adjust unstarted team slots before scheduling or play begins.
             </p>
           </div>
-          {matches.length > 0 && (
+          {activeMatches.length > 0 && (
             <button
               type="button"
               onClick={() => onNavigate("tournament_matches")}
@@ -854,7 +1076,7 @@ export function BracketBuilderSection({
           )}
         </div>
 
-        {matches.length === 0 ? (
+        {activeMatches.length === 0 ? (
           <div className="p-10 text-center bg-slate-50 rounded-xl border border-dashed border-slate-300 space-y-2">
             <ShieldCheck size={28} className="mx-auto text-slate-400" />
             <p className="text-xs font-semibold text-slate-800 m-0">No Fixtures Built Yet</p>
@@ -919,10 +1141,20 @@ export function BracketBuilderSection({
                                 className={`font-semibold truncate ${
                                   m.winner_id && m.winner_id === m.team_a_id
                                     ? "text-emerald-700"
-                                    : "text-slate-900"
+                                    : teamA
+                                    ? "text-slate-900"
+                                    : "italic text-slate-600"
                                 }`}
                               >
-                                {teamA?.team_name || (m.winner_id ? "—" : "TBD")}
+                                {teamA?.team_name ||
+                                  (m.winner_id
+                                    ? "—"
+                                    : resolveMatchSlotDisplay({
+                                        match: m,
+                                        slot: "a",
+                                        allMatches: matches,
+                                        teamNameById,
+                                      }).label)}
                               </span>
                               <span className="font-mono font-bold tabular-nums text-slate-700">
                                 {m.score_a}
@@ -933,10 +1165,18 @@ export function BracketBuilderSection({
                                 className={`font-semibold truncate ${
                                   m.winner_id && m.winner_id === m.team_b_id
                                     ? "text-emerald-700"
-                                    : "text-slate-900"
+                                    : teamB
+                                    ? "text-slate-900"
+                                    : "italic text-slate-600"
                                 }`}
                               >
-                                {teamB?.team_name || (m.match_format === "BYE" ? "BYE" : "TBD")}
+                                {teamB?.team_name ||
+                                  resolveMatchSlotDisplay({
+                                    match: m,
+                                    slot: "b",
+                                    allMatches: matches,
+                                    teamNameById,
+                                  }).label}
                               </span>
                               <span className="font-mono font-bold tabular-nums text-slate-700">
                                 {m.score_b}
@@ -1058,38 +1298,30 @@ export function BracketBuilderSection({
                 <X size={16} />
               </button>
             </div>
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Slot A</label>
-                <select
-                  value={swapTeamA}
-                  onChange={(e) => setSwapTeamA(e.target.value)}
-                  className="w-full h-10 px-3 rounded-lg border border-slate-300"
-                >
-                  <option value="">TBD / Empty</option>
-                  {selectedTeams.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.team_name} ({t.registration_ref})
-                    </option>
-                  ))}
-                </select>
+            {selectedGame && (
+              <div className="space-y-3 text-xs">
+                <SearchableTeamSelect
+                  id="bracket-swap-slot-a"
+                  label="Slot A"
+                  teams={selectedTeams}
+                  gameId={selectedGame.id}
+                  value={swapTeamA || null}
+                  onChange={(id) => setSwapTeamA(id || "")}
+                  allowTbd
+                  tbdLabel="TBD / Empty"
+                />
+                <SearchableTeamSelect
+                  id="bracket-swap-slot-b"
+                  label="Slot B"
+                  teams={selectedTeams}
+                  gameId={selectedGame.id}
+                  value={swapTeamB || null}
+                  onChange={(id) => setSwapTeamB(id || "")}
+                  allowTbd
+                  tbdLabel="TBD / BYE"
+                />
               </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Slot B</label>
-                <select
-                  value={swapTeamB}
-                  onChange={(e) => setSwapTeamB(e.target.value)}
-                  className="w-full h-10 px-3 rounded-lg border border-slate-300"
-                >
-                  <option value="">TBD / BYE</option>
-                  {selectedTeams.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.team_name} ({t.registration_ref})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"

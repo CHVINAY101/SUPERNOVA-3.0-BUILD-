@@ -402,13 +402,19 @@ export function MatchesControlSection({
           if (updErr) throw updErr;
 
           if (!isBr && targetMatch.next_match_id && winnerId) {
-            const slotCol = targetMatch.next_match_slot === "b" ? "team_b_id" : "team_a_id";
+            const slotCol =
+              String(targetMatch.next_match_slot || "a").trim().toLowerCase() === "b"
+                ? "team_b_id"
+                : "team_a_id";
             await supabase.from("matches").update({ [slotCol]: winnerId }).eq("id", targetMatch.next_match_id);
           }
           if (!isBr && targetMatch.loser_next_match_id && winnerId) {
             const loserId = winnerId === targetMatch.team_a_id ? targetMatch.team_b_id : targetMatch.team_a_id;
             if (loserId) {
-              const lSlotCol = targetMatch.loser_next_match_slot === "b" ? "team_b_id" : "team_a_id";
+              const lSlotCol =
+                String(targetMatch.loser_next_match_slot || "a").trim().toLowerCase() === "b"
+                  ? "team_b_id"
+                  : "team_a_id";
               await supabase.from("matches").update({ [lSlotCol]: loserId }).eq("id", targetMatch.loser_next_match_id);
             }
           }
@@ -1768,7 +1774,8 @@ export function LiveConsoleAndResultsSection(props: SharedControlProps) {
             })
             .eq("id", m.id);
           if (!isBr && m.next_match_id && winnerId) {
-            const slotCol = m.next_match_slot === "b" ? "team_b_id" : "team_a_id";
+            const slotCol =
+              String(m.next_match_slot || "a").trim().toLowerCase() === "b" ? "team_b_id" : "team_a_id";
             await supabase.from("matches").update({ [slotCol]: winnerId }).eq("id", m.next_match_id);
           }
           if (isBr && hasPersistedTournament) {

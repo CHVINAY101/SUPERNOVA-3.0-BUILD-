@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { supabase } from "@/lib/supabase";
+import { isCancelledBracketMatch, resolveMatchSlotDisplay } from "@/lib/tournamentEngine";
 import { formatIstDateTime, isMatchScheduled } from "@/lib/scheduling";
 import {
   COMPETITION_MODE_LABELS,
@@ -40,8 +41,13 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
   } = data;
 
   const isBr = isBattleRoyaleTournament(tournament, selectedGame);
-  const realMatches = matches.filter((m) => m.match_format !== "BYE");
-  const byeCount = matches.length - realMatches.length;
+  const teamNameById = useMemo(
+    () => new Map(Array.from(teamMap.entries()).map(([id, team]) => [id, team.team_name])),
+    [teamMap]
+  );
+  const activeMatches = matches.filter((m) => !isCancelledBracketMatch(m));
+  const realMatches = activeMatches.filter((m) => m.match_format !== "BYE");
+  const byeCount = activeMatches.length - realMatches.length;
   const scheduledMatches = realMatches.filter((m) => isMatchScheduled(m));
   const unscheduledMatches = realMatches.filter(
     (m) => !isMatchScheduled(m) && m.status !== "completed" && m.status !== "cancelled"
@@ -260,11 +266,11 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
             </button>
             <button
               type="button"
-              onClick={() => onNavigate(matches.length === 0 ? "tournament_matches" : "live_results")}
+              onClick={() => onNavigate(realMatches.length === 0 ? "tournament_matches" : "live_results")}
               className="min-h-[38px] px-3.5 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
             >
-              {matches.length === 0 ? <GitBranch size={14} /> : <Play size={14} />}
-              <span>{matches.length === 0 ? "Build Fixtures" : "Open Live Results"}</span>
+              {realMatches.length === 0 ? <GitBranch size={14} /> : <Play size={14} />}
+              <span>{realMatches.length === 0 ? "Build Fixtures" : "Open Live Results"}</span>
             </button>
           </div>
         </div>
@@ -338,9 +344,17 @@ export function TournamentOverviewSection({ data, onNavigate }: OverviewProps) {
                     <td className="py-2.5 pr-3 font-semibold text-slate-900">
                       {m.bracket_side === "battle_royale"
                         ? `BR Lobby (${m.br_results?.length || selectedTeams.length} squads)`
-                        : `${teamMap.get(m.team_a_id || "")?.team_name || "TBD"} vs ${
-                            teamMap.get(m.team_b_id || "")?.team_name || "TBD"
-                          }`}
+                        : `${resolveMatchSlotDisplay({
+                            match: m,
+                            slot: "a",
+                            allMatches: matches,
+                            teamNameById,
+                          }).label} vs ${resolveMatchSlotDisplay({
+                            match: m,
+                            slot: "b",
+                            allMatches: matches,
+                            teamNameById,
+                          }).label}`}
                     </td>
                     <td className="py-2.5 pr-3 font-mono tabular-nums text-slate-700 whitespace-nowrap">
                       {formatIstDateTime(m.scheduled_start)}

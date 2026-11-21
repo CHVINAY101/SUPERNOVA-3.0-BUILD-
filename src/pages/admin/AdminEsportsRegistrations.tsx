@@ -25,6 +25,11 @@ import {
   PLAYER_INSTITUTION_TYPES,
 } from "@/lib/esportsRegistrationControls";
 import { EsportsRegistrationControlPanel } from "@/components/admin/esports/EsportsRegistrationControlPanel";
+import {
+  callRenameEsportsTeamRpc,
+  callSetEsportsTeamDisqualificationRpc,
+} from "@/lib/esportsFixtureRpc";
+import { canPerformTeamRenameOrDisqualify } from "@/lib/esportsFixtureCorrections";
 import type { Registration, RegistrationStatus, TeamStatusHistoryEntry, TicketRecord, TournamentSelectionStatus } from "@/types/database";
 import {
   Search,
@@ -50,6 +55,8 @@ import {
   GraduationCap,
   SlidersHorizontal,
   Users,
+  Edit3,
+  Loader2,
 } from "lucide-react";
 
 export interface EsportsRegistrationItem {
@@ -111,12 +118,13 @@ const SELECTION_BADGE_MAP: Record<TournamentSelectionStatus, { label: string; to
 };
 
 export default function AdminEsportsRegistrations() {
-  const { user, hasPermission } = useAuth();
+  const { user, permissions, accountStatus, hasPermission } = useAuth();
   const canEdit = hasPermission("esports:edit");
   const canApprove = hasPermission("esports:approve");
   const canReject = hasPermission("esports:reject");
   const canSelectTeams = hasPermission("tournament:select_teams");
   const canExport = hasPermission("esports:export");
+  const canRenameOrDisqualify = canPerformTeamRenameOrDisqualify(permissions, accountStatus);
 
   const canManageGameControls = hasPermission([
     "tournament:manage_games",
@@ -162,6 +170,11 @@ export default function AdminEsportsRegistrations() {
 
   // Operation state
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [reinstatingId, setReinstatingId] = useState<string | null>(null);
+  const [isRenamingTeam, setIsRenamingTeam] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameReason, setRenameReason] = useState("");
+  const [renamingBusy, setRenamingBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const fetchRegistrations = useCallback(async () => {
@@ -221,10 +234,14 @@ export default function AdminEsportsRegistrations() {
   }, [fetchRegistrations]);
 
   useEffect(() => {
+    setIsRenamingTeam(false);
+    setRenameReason("");
     if (!selectedReg) {
       setSelectedTicket(null);
+      setRenameDraft("");
       return;
     }
+    setRenameDraft(selectedReg.team_name);
     let active = true;
     fetchTicketByRegistration("esports", selectedReg.id).then((tkt) => {
       if (active) setSelectedTicket(tkt);
@@ -437,7 +454,65 @@ export default function AdminEsportsRegistrations() {
     nextSelection: TournamentSelectionStatus,
     reason?: string
   ) => {
-    if (!canSelectTeams) return;
+    if (!canSelectTeams && !(nextSelection === "disqualified" && canRenameOrDisqualify)) return;
+
+    // Route disqualification exclusively through live RPC set_esports_team_disqualification
+    if (nextSelection === "disqualified") {
+      const dqReason = (reason || "").trim();
+      if (dqReason.length < 3) {
+        setStatusMessage({ type: "error", text: "Enter a disqualification reason (min 3 characters)." });
+        return;
+      }
+      setUpdatingId(item.id);
+      setStatusMessage(null);
+      try {
+        const rpcRes = await callSetEsportsTeamDisqualificationRpc({
+          registrationId: item.id,
+          currentSelectionStatus: item.effectiveSelectionStatus,
+          disqualified: true,
+          reason: dqReason,
+        });
+        if (!rpcRes.ok) {
+          setStatusMessage({ type: "error", text: rpcRes.error || "Failed to disqualify team." });
+          return;
+        }
+
+        await recordStatusHistory(
+          item.id,
+          "selection_status",
+          item.effectiveSelectionStatus,
+          "disqualified",
+          dqReason
+        );
+
+        setRegistrations((prev) =>
+          prev.map((r) =>
+            r.id === item.id ? { ...r, selection_status: "disqualified", selection_reason: dqReason } : r
+          )
+        );
+        if (selectedReg && selectedReg.id === item.id) {
+          setSelectedReg({
+            ...selectedReg,
+            selection_status: "disqualified",
+            effectiveSelectionStatus: "disqualified",
+            selection_reason: dqReason,
+          });
+        }
+        setStatusMessage({
+          type: "success",
+          text: `Team "${item.team_name}" marked DISQUALIFIED via production RPC.`,
+        });
+      } catch (err: any) {
+        setStatusMessage({
+          type: "error",
+          text: `Disqualification failed: ${err?.message || "Database error"}`,
+        });
+      } finally {
+        setUpdatingId(null);
+      }
+      return;
+    }
+
     const validation = validateSelectionUpdate({
       team: item as unknown as Registration,
       nextSelection,
@@ -497,6 +572,95 @@ export default function AdminEsportsRegistrations() {
       });
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const handleReinstateTeam = async (item: ProcessedEsportsRegistration, reason = "Reinstated by coordinator") => {
+    if (!canSelectTeams && !canRenameOrDisqualify) return;
+    setReinstatingId(item.id);
+    setStatusMessage(null);
+    try {
+      const rpcRes = await callSetEsportsTeamDisqualificationRpc({
+        registrationId: item.id,
+        currentSelectionStatus: item.effectiveSelectionStatus,
+        disqualified: false,
+        reason,
+        restoreStatus: "selected",
+      });
+      if (!rpcRes.ok) {
+        setStatusMessage({ type: "error", text: rpcRes.error || "Reinstatement failed." });
+        return;
+      }
+
+      await recordStatusHistory(
+        item.id,
+        "selection_status",
+        item.effectiveSelectionStatus,
+        "selected",
+        reason
+      );
+
+      setRegistrations((prev) =>
+        prev.map((r) =>
+          r.id === item.id ? { ...r, selection_status: "selected", selection_reason: reason } : r
+        )
+      );
+      if (selectedReg && selectedReg.id === item.id) {
+        setSelectedReg({
+          ...selectedReg,
+          selection_status: "selected",
+          effectiveSelectionStatus: "selected",
+          selection_reason: reason,
+        });
+      }
+      setStatusMessage({
+        type: "success",
+        text: `Team "${item.team_name}" reinstated to Selected for Bracket.`,
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: `Reinstatement failed: ${err?.message || "Database error"}`,
+      });
+    } finally {
+      setReinstatingId(null);
+    }
+  };
+
+  const handleRenameTeamSubmit = async () => {
+    if (!selectedReg || !canRenameOrDisqualify) return;
+    setRenamingBusy(true);
+    setStatusMessage(null);
+    try {
+      const rpcRes = await callRenameEsportsTeamRpc({
+        registrationId: selectedReg.id,
+        expectedName: selectedReg.team_name,
+        newName: renameDraft,
+        reason: renameReason,
+      });
+      if (!rpcRes.ok) {
+        setStatusMessage({ type: "error", text: rpcRes.error || "Team rename rejected." });
+        return;
+      }
+
+      const trimmedNewName = renameDraft.trim();
+      setRegistrations((prev) =>
+        prev.map((r) => (r.id === selectedReg.id ? { ...r, team_name: trimmedNewName } : r))
+      );
+      setSelectedReg({ ...selectedReg, team_name: trimmedNewName });
+      setIsRenamingTeam(false);
+      setRenameReason("");
+      setStatusMessage({
+        type: "success",
+        text: `Team renamed to "${trimmedNewName}". All linked fixtures & live boards updated.`,
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        type: "error",
+        text: `Rename failed: ${err?.message || "Database error"}`,
+      });
+    } finally {
+      setRenamingBusy(false);
     }
   };
 
@@ -615,8 +779,15 @@ export default function AdminEsportsRegistrations() {
       const isRosterValid = registeredCount === expectedCount;
       const isFlagged = !isRosterValid;
       const isArchived = isRegistrationArchived(r);
+      const rawSel = r.selection_status;
+      const mappedSel: TournamentSelectionStatus | null =
+        rawSel && rawSel in SELECTION_BADGE_MAP
+          ? (rawSel as TournamentSelectionStatus)
+          : (rawSel as string) === "awaiting"
+          ? "awaiting_selection"
+          : null;
       const effectiveSelectionStatus: TournamentSelectionStatus =
-        r.selection_status || (r.status === "declined" || r.status === "withdrawn" ? "not_selected" : "awaiting_selection");
+        mappedSel || (r.status === "declined" || r.status === "withdrawn" ? "not_selected" : "awaiting_selection");
 
       return {
         ...r,
@@ -1394,10 +1565,10 @@ export default function AdminEsportsRegistrations() {
                           <AdminStatusBadge status={item.status} isArchived={item.isArchived} />
                           <span
                             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border font-mono text-[10px] font-bold uppercase ${
-                              SELECTION_BADGE_MAP[item.effectiveSelectionStatus].tone
+                              (SELECTION_BADGE_MAP[item.effectiveSelectionStatus] || SELECTION_BADGE_MAP.awaiting_selection).tone
                             }`}
                           >
-                            {SELECTION_BADGE_MAP[item.effectiveSelectionStatus].label}
+                            {(SELECTION_BADGE_MAP[item.effectiveSelectionStatus] || SELECTION_BADGE_MAP.awaiting_selection).label}
                           </span>
                         </div>
                       </div>
@@ -1467,26 +1638,86 @@ export default function AdminEsportsRegistrations() {
           >
             <div className="space-y-6">
               {/* Drawer Header */}
-              <div className="flex items-start justify-between pb-4 border-b border-slate-200">
-                <div>
-                  <div className="flex items-center gap-2 mb-1.5">
+              <div className="flex items-start justify-between pb-4 border-b border-slate-200 gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                     <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded">
                       {selectedReg.registration_ref}
                     </span>
                     <AdminStatusBadge status={selectedReg.status} isArchived={selectedReg.isArchived} />
                   </div>
-                  <h2 className="text-xl sm:text-2xl font-display font-black text-slate-900 tracking-tight m-0">
-                    {selectedReg.team_name}
-                  </h2>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-xl sm:text-2xl font-display font-black text-slate-900 tracking-tight m-0">
+                      {selectedReg.team_name}
+                    </h2>
+                    {canRenameOrDisqualify && !selectedReg.isArchived && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRenameDraft(selectedReg.team_name);
+                          setRenameReason("");
+                          setIsRenamingTeam((v) => !v);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer"
+                      >
+                        <Edit3 size={12} />
+                        <span>{isRenamingTeam ? "Cancel Rename" : "Rename Team"}</span>
+                      </button>
+                    )}
+                  </div>
                   <p className="text-xs text-slate-500 font-mono mt-0.5">
                     Submitted {new Date(selectedReg.submitted_at).toLocaleString("en-IN")}
                   </p>
+
+                  {isRenamingTeam && canRenameOrDisqualify && (
+                    <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+                      <div className="text-[11px] font-mono font-bold uppercase text-slate-600">
+                        Live Rename via rename_esports_team RPC
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={renameDraft}
+                          onChange={(e) => setRenameDraft(e.target.value)}
+                          placeholder="New team name"
+                          aria-label="New team name"
+                          className="h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900"
+                        />
+                        <input
+                          type="text"
+                          value={renameReason}
+                          onChange={(e) => setRenameReason(e.target.value)}
+                          placeholder="Audit reason (min 3 chars)"
+                          aria-label="Rename audit reason"
+                          className="h-9 px-3 rounded-lg border border-slate-300 bg-white text-xs text-slate-900"
+                        />
+                      </div>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsRenamingTeam(false)}
+                          className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={renamingBusy || !renameDraft.trim() || renameReason.trim().length < 3}
+                          onClick={handleRenameTeamSubmit}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#0B1120] hover:bg-slate-800 disabled:opacity-45 text-white text-xs font-semibold cursor-pointer"
+                        >
+                          {renamingBusy && <Loader2 size={12} className="animate-spin" />}
+                          <span>Save Team Name</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setSelectedReg(null)}
-                  className="p-1.5 rounded-xl border border-slate-200 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="p-1.5 rounded-xl border border-slate-200 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
                   aria-label="Close detail drawer"
                 >
                   <X size={18} />
@@ -1875,10 +2106,10 @@ export default function AdminEsportsRegistrations() {
                     </h3>
                     <span
                       className={`px-2 py-0.5 rounded-full border font-mono text-[10px] font-bold uppercase ${
-                        SELECTION_BADGE_MAP[selectedReg.effectiveSelectionStatus].tone
+                        (SELECTION_BADGE_MAP[selectedReg.effectiveSelectionStatus] || SELECTION_BADGE_MAP.awaiting_selection).tone
                       }`}
                     >
-                      {SELECTION_BADGE_MAP[selectedReg.effectiveSelectionStatus].label}
+                      {(SELECTION_BADGE_MAP[selectedReg.effectiveSelectionStatus] || SELECTION_BADGE_MAP.awaiting_selection).label}
                     </span>
                   </div>
                   <p className="text-[11px] text-indigo-900/80 m-0">
@@ -1888,7 +2119,7 @@ export default function AdminEsportsRegistrations() {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <button
                       type="button"
-                      disabled={selectedReg.status !== "confirmed" || updatingId === selectedReg.id}
+                      disabled={selectedReg.status !== "confirmed" || updatingId === selectedReg.id || reinstatingId === selectedReg.id}
                       onClick={() => changeSelectionStatus(selectedReg, "selected")}
                       className="py-2 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
                     >
@@ -1896,7 +2127,7 @@ export default function AdminEsportsRegistrations() {
                     </button>
                     <button
                       type="button"
-                      disabled={selectedReg.status !== "confirmed" || updatingId === selectedReg.id}
+                      disabled={selectedReg.status !== "confirmed" || updatingId === selectedReg.id || reinstatingId === selectedReg.id}
                       onClick={() => changeSelectionStatus(selectedReg, "waitlisted")}
                       className="py-2 px-2.5 rounded-lg bg-cyan-700 hover:bg-cyan-800 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
                     >
@@ -1904,28 +2135,45 @@ export default function AdminEsportsRegistrations() {
                     </button>
                     <button
                       type="button"
-                      disabled={updatingId === selectedReg.id}
+                      disabled={updatingId === selectedReg.id || reinstatingId === selectedReg.id}
                       onClick={() => changeSelectionStatus(selectedReg, "not_selected", "Not shortlisted for tournament slots")}
                       className="py-2 px-2.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-semibold cursor-pointer"
                     >
                       Not Selected
                     </button>
-                    <button
-                      type="button"
-                      disabled={updatingId === selectedReg.id}
-                      onClick={() => {
-                        setReasonText("");
-                        setReasonModal({
-                          item: selectedReg,
-                          kind: "selection",
-                          nextValue: "disqualified",
-                          label: "Disqualify Team from Tournament",
-                        });
-                      }}
-                      className="py-2 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer"
-                    >
-                      Disqualify
-                    </button>
+                    {selectedReg.effectiveSelectionStatus === "disqualified" ? (
+                      <button
+                        type="button"
+                        disabled={reinstatingId === selectedReg.id || updatingId === selectedReg.id}
+                        onClick={() => handleReinstateTeam(selectedReg)}
+                        className="inline-flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-45 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        {reinstatingId === selectedReg.id ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <RotateCcw size={12} />
+                        )}
+                        <span>{reinstatingId === selectedReg.id ? "Reinstating..." : "Reinstate"}</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={updatingId === selectedReg.id || reinstatingId === selectedReg.id}
+                        onClick={() => {
+                          setReasonText("");
+                          setReasonModal({
+                            item: selectedReg,
+                            kind: "selection",
+                            nextValue: "disqualified",
+                            label: "Disqualify Team from Tournament",
+                          });
+                        }}
+                        className="inline-flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-45 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        {updatingId === selectedReg.id && <Loader2 size={12} className="animate-spin" />}
+                        <span>Disqualify</span>
+                      </button>
+                    )}
                   </div>
 
                   {selectedReg.effectiveSelectionStatus === "selected" && (

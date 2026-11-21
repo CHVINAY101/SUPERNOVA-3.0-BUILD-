@@ -117,6 +117,10 @@ const createUnconfiguredClient = (): SupabaseClient => {
             data: { session: null },
             error: new Error(missingMsg),
           }),
+          getUser: async () => ({
+            data: { user: null },
+            error: new Error(missingMsg),
+          }),
           refreshSession: async () => ({
             data: { session: null, user: null },
             error: new Error(missingMsg),

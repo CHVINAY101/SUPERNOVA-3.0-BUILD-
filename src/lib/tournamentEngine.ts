@@ -1415,7 +1415,7 @@ export function confirmAndAdvanceMatchResult(params: {
   if (current.next_match_id) {
     const nextIdx = updated.findIndex((m) => m.id === current.next_match_id);
     if (nextIdx !== -1) {
-      if (current.next_match_slot === "b") {
+      if (normalizeBracketSlot(current.next_match_slot) === "b") {
         updated[nextIdx].team_b_id = winnerId;
       } else {
         updated[nextIdx].team_a_id = winnerId;
@@ -1427,7 +1427,7 @@ export function confirmAndAdvanceMatchResult(params: {
   if (current.loser_next_match_id && loserId) {
     const loserIdx = updated.findIndex((m) => m.id === current.loser_next_match_id);
     if (loserIdx !== -1) {
-      if (current.loser_next_match_slot === "b") {
+      if (normalizeBracketSlot(current.loser_next_match_slot) === "b") {
         updated[loserIdx].team_b_id = loserId;
       } else {
         updated[loserIdx].team_a_id = loserId;
@@ -1555,20 +1555,22 @@ export function undoMatchResultAndRewind(params: {
     let touched = false;
 
     if (target.next_match_id === m.id && prevWinner) {
-      if (target.next_match_slot === "b" && copy.team_b_id === prevWinner) {
+      const nextSlot = normalizeBracketSlot(target.next_match_slot);
+      if (nextSlot === "b" && copy.team_b_id === prevWinner) {
         copy.team_b_id = null;
         touched = true;
-      } else if (target.next_match_slot !== "b" && copy.team_a_id === prevWinner) {
+      } else if (nextSlot === "a" && copy.team_a_id === prevWinner) {
         copy.team_a_id = null;
         touched = true;
       }
     }
 
     if (target.loser_next_match_id === m.id && prevLoser) {
-      if (target.loser_next_match_slot === "b" && copy.team_b_id === prevLoser) {
+      const loserSlot = normalizeBracketSlot(target.loser_next_match_slot);
+      if (loserSlot === "b" && copy.team_b_id === prevLoser) {
         copy.team_b_id = null;
         touched = true;
-      } else if (target.loser_next_match_slot !== "b" && copy.team_a_id === prevLoser) {
+      } else if (loserSlot === "a" && copy.team_a_id === prevLoser) {
         copy.team_a_id = null;
         touched = true;
       }
@@ -1599,8 +1601,9 @@ export function undoMatchResultAndRewind(params: {
       );
       for (const f of feeders) {
         if (f.next_match_id === m.id && f.winner_id) {
-          if (f.next_match_slot === "b" && copy.team_b_id === f.winner_id) copy.team_b_id = null;
-          if (f.next_match_slot !== "b" && copy.team_a_id === f.winner_id) copy.team_a_id = null;
+          const fSlot = normalizeBracketSlot(f.next_match_slot);
+          if (fSlot === "b" && copy.team_b_id === f.winner_id) copy.team_b_id = null;
+          if (fSlot === "a" && copy.team_a_id === f.winner_id) copy.team_a_id = null;
           touched = true;
         }
       }
@@ -1931,6 +1934,78 @@ export interface TournamentWizardState {
   allCompleted: boolean;
 }
 
+export function normalizeBracketSlot(slot?: string | null): "a" | "b" {
+  return String(slot || "a").trim().toLowerCase() === "b" ? "b" : "a";
+}
+
+export function isCancelledBracketMatch(m: Pick<Match, "status">): boolean {
+  return m.status === "cancelled";
+}
+
+export interface ResolvedSlotDisplay {
+  label: string;
+  isPlaceholder: boolean;
+  feederMatch: Match | null;
+  feederType: "winner" | "loser" | null;
+}
+
+export function resolveMatchSlotDisplay(params: {
+  match: Match;
+  slot: "a" | "b";
+  allMatches: Match[];
+  teamNameById: Map<string, string>;
+}): ResolvedSlotDisplay {
+  const { match, slot, allMatches, teamNameById } = params;
+  const teamId = slot === "a" ? match.team_a_id : match.team_b_id;
+  if (teamId) {
+    return {
+      label: teamNameById.get(teamId) || "Squad",
+      isPlaceholder: false,
+      feederMatch: null,
+      feederType: null,
+    };
+  }
+  if (match.match_format === "BYE" && slot === "b") {
+    return { label: "BYE", isPlaceholder: true, feederMatch: null, feederType: null };
+  }
+
+  const activeMatches = allMatches.filter((x) => !isCancelledBracketMatch(x));
+  const formatMatchRef = (feeder: Match): string => {
+    const aName = feeder.team_a_id ? teamNameById.get(feeder.team_a_id) : null;
+    const bName = feeder.team_b_id ? teamNameById.get(feeder.team_b_id) : null;
+    if (aName && bName) {
+      return `${aName} vs ${bName}`;
+    }
+    return feeder.match_code || feeder.round || `M${feeder.match_number ?? 1}`;
+  };
+
+  const winnerFeeder = activeMatches.find(
+    (m) => m.next_match_id === match.id && normalizeBracketSlot(m.next_match_slot) === slot
+  );
+  if (winnerFeeder) {
+    return {
+      label: `Winner of ${formatMatchRef(winnerFeeder)}`,
+      isPlaceholder: true,
+      feederMatch: winnerFeeder,
+      feederType: "winner",
+    };
+  }
+
+  const loserFeeder = activeMatches.find(
+    (m) => m.loser_next_match_id === match.id && normalizeBracketSlot(m.loser_next_match_slot) === slot
+  );
+  if (loserFeeder) {
+    return {
+      label: `Loser of ${formatMatchRef(loserFeeder)}`,
+      isPlaceholder: true,
+      feederMatch: loserFeeder,
+      feederType: "loser",
+    };
+  }
+
+  return { label: "TBD", isPlaceholder: true, feederMatch: null, feederType: null };
+}
+
 export function deriveTournamentWizardState(params: {
   tournament: Pick<Tournament, "format" | "status" | "has_started" | "champion_team_id">;
   hasPersistedTournament: boolean;
@@ -1938,16 +2013,12 @@ export function deriveTournamentWizardState(params: {
   approvedTeamCount: number;
   matches: Array<Pick<Match, "status" | "match_format" | "is_published">>;
 }): TournamentWizardState {
-  const realMatches = params.matches.filter((m) => m.match_format !== "BYE");
-  const hasAnyMatches = params.matches.length > 0;
-  const hasPublishedMatches = realMatches.some((m) => m.is_published);
-  const isPublished =
-    hasAnyMatches &&
-    (params.tournament.status === "published" ||
-      params.tournament.status === "in_progress" ||
-      params.tournament.status === "completed" ||
-      params.tournament.has_started ||
-      hasPublishedMatches);
+  const activeMatches = params.matches.filter((m) => !isCancelledBracketMatch(m));
+  const realMatches = activeMatches.filter((m) => m.match_format !== "BYE");
+  const hasAnyMatches = activeMatches.length > 0;
+  const publishedActiveCount = activeMatches.filter((m) => m.is_published).length;
+  const hasPublishedMatches = publishedActiveCount > 0;
+  const isPublished = hasAnyMatches && hasPublishedMatches;
   const hasStarted =
     params.tournament.has_started === true ||
     params.tournament.status === "in_progress" ||
@@ -2002,7 +2073,11 @@ export function deriveTournamentWizardState(params: {
       id: "publish_tournament",
       title: "Publish Tournament",
       done: step5Done,
-      summary: step5Done ? "Published to Public Board" : "Make schedule & bracket visible",
+      summary: step5Done
+        ? `${publishedActiveCount}/${activeMatches.length} fixture(s) live`
+        : hasAnyMatches
+        ? "Unpublished (hidden from Live Board)"
+        : "Make schedule & bracket visible",
     },
     {
       stepNumber: 6,
@@ -2042,8 +2117,8 @@ export function deriveTournamentWizardState(params: {
       summary: "Auto-create balanced pairings or BR lobbies before publishing.",
     },
     publish_tournament: {
-      label: "Publish Tournament",
-      summary: "Make bracket fixtures and IST timings visible to players & spectators.",
+      label: "Publish Fixtures",
+      summary: "Make bracket fixtures and IST timings visible on the Public Live Board.",
     },
     start_tournament: {
       label: allCompleted ? "Operate Live Matches" : "Start Tournament",
@@ -2092,7 +2167,10 @@ export interface BracketEdge {
   toId: string;
   pathD: string;
   highlighted: boolean;
-  edgeType: "winner" | "champion";
+  edgeType: "winner" | "loser" | "champion";
+  label?: string;
+  labelX?: number;
+  labelY?: number;
 }
 
 export interface BracketTrack {
@@ -2123,59 +2201,23 @@ export function buildConnectedBracketLayout(params: {
   championTeamId?: string | null;
   format?: TournamentFormat | string | null;
 }): ConnectedBracketLayout {
-  const CARD_W = 236;
-  const CARD_H = 88;
-  const COL_GAP = 54;
+  const CARD_W = 264;
+  const CARD_H = 114;
+  const COL_GAP = 92;
   const COL_STEP = CARD_W + COL_GAP;
   const HEADER_H = 42;
-  const BASE_SLOT = 112;
+  const BASE_SLOT = 142;
   const PAD_X = 24;
   const PAD_B = 28;
 
-  const nonGroupBrMatches = params.matches.filter(
+  const activeMatches = params.matches.filter((m) => !isCancelledBracketMatch(m));
+  const nonGroupBrMatches = activeMatches.filter(
     (m) => m.bracket_side !== "battle_royale" && m.bracket_side !== "group"
   );
 
   if (nonGroupBrMatches.length === 0) {
     return { tracks: [], hasConnectedBracket: false };
   }
-
-  // Build feeder lookup so empty slots say "Winner of M1" or "Loser of W1"
-  const feederWinnerBySlot = new Map<string, Match>();
-  const feederLoserBySlot = new Map<string, Match>();
-  for (const m of params.matches) {
-    if (m.next_match_id) {
-      feederWinnerBySlot.set(`${m.next_match_id}:${m.next_match_slot === "b" ? "b" : "a"}`, m);
-    }
-    if (m.loser_next_match_id) {
-      feederLoserBySlot.set(`${m.loser_next_match_id}:${m.loser_next_match_slot === "b" ? "b" : "a"}`, m);
-    }
-  }
-
-  const resolveSlotText = (m: Match, slot: "a" | "b"): { label: string; isPlaceholder: boolean } => {
-    const tid = slot === "a" ? m.team_a_id : m.team_b_id;
-    if (tid) {
-      return { label: params.teamNameById.get(tid) || "Squad", isPlaceholder: false };
-    }
-    if (m.match_format === "BYE" && slot === "b") {
-      return { label: "BYE", isPlaceholder: true };
-    }
-    const winFeeder = feederWinnerBySlot.get(`${m.id}:${slot}`);
-    if (winFeeder) {
-      return {
-        label: `Winner of ${winFeeder.match_code || `M${winFeeder.match_number ?? 1}`}`,
-        isPlaceholder: true,
-      };
-    }
-    const loseFeeder = feederLoserBySlot.get(`${m.id}:${slot}`);
-    if (loseFeeder) {
-      return {
-        label: `Loser of ${loseFeeder.match_code || `M${loseFeeder.match_number ?? 1}`}`,
-        isPlaceholder: true,
-      };
-    }
-    return { label: "TBD", isPlaceholder: true };
-  };
 
   const formatColLabel = (
     roundMatches: Match[],
@@ -2216,8 +2258,8 @@ export function buildConnectedBracketLayout(params: {
     }
     const sortedRounds = Array.from(byRound.entries()).sort((a, b) => a[0] - b[0]);
 
-    const firstRoundCount = sortedRounds[0]?.[1].length || 1;
-    const totalContentHeight = Math.max(firstRoundCount * BASE_SLOT, 160);
+    const firstRoundCount = Math.max(...sortedRounds.map(([, list]) => list.length), 1);
+    const totalContentHeight = Math.max(firstRoundCount * BASE_SLOT, 176);
     const columns: BracketColumn[] = [];
     const nodeByMatchId = new Map<string, BracketCardNode>();
 
@@ -2229,8 +2271,18 @@ export function buildConnectedBracketLayout(params: {
 
       const cards: BracketCardNode[] = sorted.map((m, idx) => {
         const y = HEADER_H + idx * slotSpan + (slotSpan - CARD_H) / 2;
-        const slotA = resolveSlotText(m, "a");
-        const slotB = resolveSlotText(m, "b");
+        const slotA = resolveMatchSlotDisplay({
+          match: m,
+          slot: "a",
+          allMatches: activeMatches,
+          teamNameById: params.teamNameById,
+        });
+        const slotB = resolveMatchSlotDisplay({
+          match: m,
+          slot: "b",
+          allMatches: activeMatches,
+          teamNameById: params.teamNameById,
+        });
         const node: BracketCardNode = {
           match: m,
           x,
@@ -2256,30 +2308,101 @@ export function buildConnectedBracketLayout(params: {
     });
 
     const edges: BracketEdge[] = [];
+    let maxEdgeRight = 0;
+
     for (const srcNode of nodeByMatchId.values()) {
       const nextId = srcNode.match.next_match_id;
-      if (!nextId) continue;
-      const dstNode = nodeByMatchId.get(nextId);
-      if (!dstNode) continue;
+      const hasLoserDownstream = Boolean(
+        srcNode.match.loser_next_match_id && nodeByMatchId.has(srcNode.match.loser_next_match_id)
+      );
 
-      const startX = srcNode.x + srcNode.width;
-      const startY = srcNode.y + srcNode.height / 2;
-      const endX = dstNode.x;
-      const slotOffset =
-        dstNode.match.id === nextId && srcNode.match.next_match_slot === "b"
-          ? dstNode.height * 0.68
-          : dstNode.height * 0.34;
-      const endY = dstNode.y + slotOffset;
-      const midX = startX + (endX - startX) / 2;
+      if (nextId) {
+        const dstNode = nodeByMatchId.get(nextId);
+        if (dstNode) {
+          const targetSlot = normalizeBracketSlot(srcNode.match.next_match_slot);
+          const endY = dstNode.y + (targetSlot === "b" ? dstNode.height * 0.68 : dstNode.height * 0.34);
 
-      edges.push({
-        id: `${srcNode.match.id}->${dstNode.match.id}`,
-        fromMatchId: srcNode.match.id,
-        toId: dstNode.match.id,
-        pathD: `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`,
-        highlighted: srcNode.match.status === "completed",
-        edgeType: "winner",
-      });
+          if (srcNode.x < dstNode.x) {
+            const startX = srcNode.x + srcNode.width;
+            const startY = srcNode.y + srcNode.height * (hasLoserDownstream ? 0.42 : 0.5);
+            const endX = dstNode.x;
+            const midX = startX + (endX - startX) * 0.72;
+            maxEdgeRight = Math.max(maxEdgeRight, endX);
+
+            edges.push({
+              id: `${srcNode.match.id}->${dstNode.match.id}:winner`,
+              fromMatchId: srcNode.match.id,
+              toId: dstNode.match.id,
+              pathD: `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`,
+              highlighted: srcNode.match.status === "completed",
+              edgeType: "winner",
+            });
+          } else {
+            const startX = srcNode.x + srcNode.width;
+            const startY = srcNode.y + srcNode.height * 0.42;
+            const laneX = Math.max(srcNode.x + srcNode.width, dstNode.x + dstNode.width) + 28;
+            const endX = dstNode.x + dstNode.width;
+            maxEdgeRight = Math.max(maxEdgeRight, laneX);
+
+            edges.push({
+              id: `${srcNode.match.id}->${dstNode.match.id}:winner`,
+              fromMatchId: srcNode.match.id,
+              toId: dstNode.match.id,
+              pathD: `M ${startX} ${startY} L ${laneX} ${startY} L ${laneX} ${endY} L ${endX} ${endY}`,
+              highlighted: srcNode.match.status === "completed",
+              edgeType: "winner",
+            });
+          }
+        }
+      }
+
+      const loserNextId = srcNode.match.loser_next_match_id;
+      if (loserNextId) {
+        const dstNode = nodeByMatchId.get(loserNextId);
+        if (dstNode) {
+          const targetSlot = normalizeBracketSlot(srcNode.match.loser_next_match_slot);
+          const endY = dstNode.y + (targetSlot === "b" ? dstNode.height * 0.68 : dstNode.height * 0.34);
+
+          if (srcNode.x < dstNode.x) {
+            const startX = srcNode.x + srcNode.width;
+            const startY = srcNode.y + srcNode.height * 0.74;
+            const endX = dstNode.x;
+            const midX = startX + (endX - startX) * 0.32;
+            maxEdgeRight = Math.max(maxEdgeRight, endX);
+
+            edges.push({
+              id: `${srcNode.match.id}->${dstNode.match.id}:loser`,
+              fromMatchId: srcNode.match.id,
+              toId: dstNode.match.id,
+              pathD: `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`,
+              highlighted: srcNode.match.status === "completed",
+              edgeType: "loser",
+              label: "Loser",
+              labelX: midX + 4,
+              labelY: (startY + endY) / 2,
+            });
+          } else {
+            // Same-column or lower-bracket drop: route cleanly down the dedicated right gutter lane
+            const startX = srcNode.x + srcNode.width;
+            const startY = srcNode.y + srcNode.height * 0.75;
+            const laneX = Math.max(srcNode.x + srcNode.width, dstNode.x + dstNode.width) + 22;
+            const endX = dstNode.x + dstNode.width;
+            maxEdgeRight = Math.max(maxEdgeRight, laneX + 24);
+
+            edges.push({
+              id: `${srcNode.match.id}->${dstNode.match.id}:loser`,
+              fromMatchId: srcNode.match.id,
+              toId: dstNode.match.id,
+              pathD: `M ${startX} ${startY} L ${laneX} ${startY} L ${laneX} ${endY} L ${endX} ${endY}`,
+              highlighted: srcNode.match.status === "completed",
+              edgeType: "loser",
+              label: "Loser",
+              labelX: laneX,
+              labelY: (startY + endY) / 2 + 3,
+            });
+          }
+        }
+      }
     }
 
     let championCard: BracketTrack["championCard"] | undefined;
@@ -2290,7 +2413,7 @@ export function buildConnectedBracketLayout(params: {
       const finalNode = lastCol.cards[0];
       if (finalNode) {
         const champW = 204;
-        const champH = 88;
+        const champH = CARD_H;
         const champX = PAD_X + columns.length * COL_STEP;
         const champY = finalNode.y;
         const championId = params.championTeamId || finalNode.match.winner_id || null;
@@ -2310,6 +2433,7 @@ export function buildConnectedBracketLayout(params: {
         const endX = champX;
         const endY = champY + champH / 2;
         const midX = startX + (endX - startX) / 2;
+        maxEdgeRight = Math.max(maxEdgeRight, endX + champW);
         edges.push({
           id: `${finalNode.match.id}->champion`,
           fromMatchId: finalNode.match.id,
@@ -2323,7 +2447,8 @@ export function buildConnectedBracketLayout(params: {
       }
     }
 
-    const totalWidth = PAD_X * 2 + Math.max(1, totalCols) * COL_STEP - COL_GAP;
+    const baseWidth = PAD_X * 2 + Math.max(1, totalCols) * COL_STEP - COL_GAP;
+    const totalWidth = Math.max(baseWidth, maxEdgeRight + PAD_X);
     const totalHeight = HEADER_H + totalContentHeight + PAD_B;
 
     return {
@@ -2381,48 +2506,11 @@ export function buildBracketRoundListGroups(params: {
   teamNameById: Map<string, string>;
   format?: TournamentFormat | string | null;
 }): BracketRoundListGroup[] {
-  const bracketMatches = params.matches.filter(
+  const activeMatches = params.matches.filter((m) => !isCancelledBracketMatch(m));
+  const bracketMatches = activeMatches.filter(
     (m) => m.bracket_side !== "battle_royale" && !(m.match_format || "").toUpperCase().includes("BR")
   );
   if (bracketMatches.length === 0) return [];
-
-  const matchById = new Map(bracketMatches.map((m) => [m.id, m]));
-  const winnerFeedersByTarget = new Map<string, { a?: Match; b?: Match }>();
-  const loserFeedersByTarget = new Map<string, { a?: Match; b?: Match }>();
-
-  for (const m of bracketMatches) {
-    if (m.next_match_id) {
-      const entry = winnerFeedersByTarget.get(m.next_match_id) || {};
-      if (m.next_match_slot === "b") entry.b = m;
-      else entry.a = m;
-      winnerFeedersByTarget.set(m.next_match_id, entry);
-    }
-    if (m.loser_next_match_id) {
-      const entry = loserFeedersByTarget.get(m.loser_next_match_id) || {};
-      if (m.loser_next_match_slot === "b") entry.b = m;
-      else entry.a = m;
-      loserFeedersByTarget.set(m.loser_next_match_id, entry);
-    }
-  }
-
-  const resolveSlot = (m: Match, slot: "a" | "b"): { label: string; isPlaceholder: boolean } => {
-    const teamId = slot === "a" ? m.team_a_id : m.team_b_id;
-    if (teamId) {
-      return { label: params.teamNameById.get(teamId) || "Squad", isPlaceholder: false };
-    }
-    if (m.match_format === "BYE" && slot === "b") {
-      return { label: "BYE", isPlaceholder: true };
-    }
-    const wf = winnerFeedersByTarget.get(m.id)?.[slot];
-    if (wf && matchById.has(wf.id)) {
-      return { label: `Winner of ${wf.match_code || wf.round}`, isPlaceholder: true };
-    }
-    const lf = loserFeedersByTarget.get(m.id)?.[slot];
-    if (lf && matchById.has(lf.id)) {
-      return { label: `Loser of ${lf.match_code || lf.round}`, isPlaceholder: true };
-    }
-    return { label: "TBD", isPlaceholder: true };
-  };
 
   const hasLosers = bracketMatches.some((m) => m.bracket_side === "losers");
   const sideOrder: Record<string, number> = hasLosers
@@ -2462,8 +2550,18 @@ export function buildBracketRoundListGroups(params: {
       groupMap.set(key, grp);
     }
 
-    const slotA = resolveSlot(m, "a");
-    const slotB = resolveSlot(m, "b");
+    const slotA = resolveMatchSlotDisplay({
+      match: m,
+      slot: "a",
+      allMatches: activeMatches,
+      teamNameById: params.teamNameById,
+    });
+    const slotB = resolveMatchSlotDisplay({
+      match: m,
+      slot: "b",
+      allMatches: activeMatches,
+      teamNameById: params.teamNameById,
+    });
     grp.items.push({
       match: m,
       teamALabel: slotA.label,

@@ -7,7 +7,7 @@ import {
 } from "@/lib/tournamentEngine";
 import { formatIstDateTime, isMatchScheduled } from "@/lib/scheduling";
 import type { Match, TournamentFormat } from "@/types/database";
-import { Crown, GitBranch, List, Maximize2, Minimize2, RotateCcw, Scan, ZoomIn, ZoomOut } from "lucide-react";
+import { Crown, Edit3, GitBranch, List, Maximize2, Minimize2, RotateCcw, Scan, ZoomIn, ZoomOut } from "lucide-react";
 
 interface ConnectedBracketCanvasProps {
   matches: Match[];
@@ -15,10 +15,13 @@ interface ConnectedBracketCanvasProps {
   championTeamId?: string | null;
   format?: TournamentFormat | string | null;
   interactive?: boolean;
+  canEditMatch?: boolean;
   selectedMatchId?: string | null;
   onSelectMatch?: (match: Match) => void;
+  onEditMatch?: (match: Match) => void;
   title?: string;
   subtitle?: string;
+  emptyMessage?: string;
 }
 
 function getStatusText(status: Match["status"], isBye: boolean): { label: string; cls: string } {
@@ -51,10 +54,13 @@ export function ConnectedBracketCanvas({
   championTeamId,
   format,
   interactive = false,
+  canEditMatch = true,
   selectedMatchId = null,
   onSelectMatch,
+  onEditMatch,
   title = "Tournament Bracket",
   subtitle,
+  emptyMessage,
 }: ConnectedBracketCanvasProps) {
   const layout = useMemo(
     () =>
@@ -162,7 +168,7 @@ export function ConnectedBracketCanvas({
   if (!layout.hasConnectedBracket) {
     return (
       <div className="rounded-xl bg-[#0B1120] border border-slate-800 p-8 text-center text-xs text-slate-400">
-        No elimination bracket fixtures available for this format yet.
+        {emptyMessage || "No elimination bracket fixtures available for this format yet."}
       </div>
     );
   }
@@ -178,10 +184,10 @@ export function ConnectedBracketCanvas({
     const isLive = m.status === "live";
 
     const timeLabel = isMatchScheduled(m)
-      ? formatIstDateTime(m.scheduled_start).replace(/, 2026/g, "").replace(/ IST$/i, "")
+      ? formatIstDateTime(m.scheduled_start).replace(/\s+20\d{2},?/g, "").replace(/\s+IST$/i, "")
       : "Unscheduled";
 
-    const baseCardClasses = `absolute text-left rounded-lg border transition-colors flex flex-col justify-between p-2.5 select-none ${
+    const baseCardClasses = `absolute text-left rounded-lg border transition-colors flex flex-col justify-between p-2 select-none ${
       isSelected
         ? "bg-[#152238] border-sky-400 ring-2 ring-sky-400/30"
         : isLive
@@ -190,6 +196,8 @@ export function ConnectedBracketCanvas({
         ? "bg-[#0F172A]/70 border-slate-800/80 opacity-80"
         : "bg-[#0F172A] border-slate-700/80"
     } ${interactive ? "cursor-pointer hover:border-sky-400/70 focus-visible:outline-2 focus-visible:outline-sky-400" : ""}`;
+
+    const showEditButton = Boolean(interactive && canEditMatch && (onEditMatch || onSelectMatch));
 
     const content = (
       <>
@@ -208,13 +216,14 @@ export function ConnectedBracketCanvas({
             }`}
           >
             <span
-              className={`truncate ${
+              title={node.teamALabel}
+              className={
                 node.teamAIsPlaceholder
-                  ? "italic text-slate-400 font-normal"
+                  ? "italic text-amber-200/90 font-normal text-[10px] leading-tight line-clamp-2"
                   : isTeamAWinner
-                  ? "text-emerald-200 font-semibold"
-                  : "text-slate-100 font-medium"
-              }`}
+                  ? "truncate text-emerald-200 font-semibold"
+                  : "truncate text-slate-100 font-medium"
+              }
             >
               {node.teamALabel}
             </span>
@@ -229,13 +238,14 @@ export function ConnectedBracketCanvas({
             }`}
           >
             <span
-              className={`truncate ${
+              title={node.teamBLabel}
+              className={
                 node.teamBIsPlaceholder
-                  ? "italic text-slate-400 font-normal"
+                  ? "italic text-amber-200/90 font-normal text-[10px] leading-tight line-clamp-2"
                   : isTeamBWinner
-                  ? "text-emerald-200 font-semibold"
-                  : "text-slate-100 font-medium"
-              }`}
+                  ? "truncate text-emerald-200 font-semibold"
+                  : "truncate text-slate-100 font-medium"
+              }
             >
               {node.teamBLabel}
             </span>
@@ -249,16 +259,31 @@ export function ConnectedBracketCanvas({
 
     if (interactive && onSelectMatch) {
       return (
-        <button
+        <div
           key={m.id}
-          type="button"
-          onClick={() => onSelectMatch(m)}
           style={{ left: node.x, top: node.y, width: node.width, height: node.height }}
           className={baseCardClasses}
-          aria-label={`Open match ${m.match_code || m.round}: ${node.teamALabel} vs ${node.teamBLabel}`}
         >
-          {content}
-        </button>
+          <button
+            type="button"
+            onClick={() => onSelectMatch(m)}
+            className="w-full flex-1 text-left flex flex-col justify-between bg-transparent border-0 p-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-sky-400"
+            aria-label={`Open match ${m.match_code || m.round}: ${node.teamALabel} vs ${node.teamBLabel}`}
+          >
+            {content}
+          </button>
+          {showEditButton && (
+            <button
+              type="button"
+              onClick={() => (onEditMatch || onSelectMatch)(m)}
+              aria-label={`Edit Match ${m.match_code || m.round}`}
+              className="mt-1 self-end inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-sky-600 text-[10px] font-mono font-semibold text-sky-300 hover:text-white border border-slate-700 cursor-pointer transition-colors"
+            >
+              <Edit3 size={10} />
+              <span>Edit Match</span>
+            </button>
+          )}
+        </div>
       );
     }
 
@@ -276,13 +301,28 @@ export function ConnectedBracketCanvas({
   const renderTrack = (track: BracketTrack) => {
     const scaledWidth = Math.ceil(track.width * zoom);
     const scaledHeight = Math.ceil(track.height * zoom);
+    const hasLoserEdges = track.edges.some((e) => e.edgeType === "loser");
 
     return (
       <div key={track.id} className="space-y-2 pr-4 pb-2 min-w-max">
         <div className="flex items-center justify-between px-1 gap-4">
-          <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-300">
-            {track.title}
-          </span>
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-300">
+              {track.title}
+            </span>
+            {hasLoserEdges && (
+              <div className="flex items-center gap-3 text-[10px] font-mono text-slate-400">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block w-4 h-0.5 bg-slate-500" />
+                  <span>Winner advances</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-orange-300">
+                  <span className="inline-block w-4 border-t-2 border-dashed border-orange-500" />
+                  <span>Loser drops to match</span>
+                </span>
+              </div>
+            )}
+          </div>
           <span className="text-[11px] font-mono text-slate-500 tabular-nums">
             {track.columns.length} stage(s)
           </span>
@@ -305,7 +345,7 @@ export function ConnectedBracketCanvas({
             {track.columns.map((col) => (
               <div
                 key={col.key}
-                style={{ left: col.x, top: 8, width: 236 }}
+                style={{ left: col.x, top: 8, width: 264 }}
                 className="absolute text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 pb-1.5"
               >
                 {col.label}
@@ -321,29 +361,94 @@ export function ConnectedBracketCanvas({
               </div>
             )}
 
-            {/* SVG Orthogonal Bracket Connectors */}
+            {/* SVG Orthogonal Bracket Connectors (Winner & Loser Progression) */}
             <svg
               width={track.width}
               height={track.height}
               className="absolute inset-0 pointer-events-none"
               aria-hidden="true"
             >
-              {track.edges.map((edge) => (
-                <path
-                  key={edge.id}
-                  d={edge.pathD}
-                  fill="none"
-                  stroke={
-                    edge.edgeType === "champion" && edge.highlighted
-                      ? "#F59E0B"
-                      : edge.highlighted
-                      ? "#10B981"
-                      : "#334155"
-                  }
-                  strokeWidth={edge.highlighted ? 2.25 : 1.5}
-                  strokeLinejoin="round"
-                />
-              ))}
+              <defs>
+                <marker
+                  id="bracket-arrow-loser"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#F97316" />
+                </marker>
+                <marker
+                  id="bracket-arrow-winner-active"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="5.5"
+                  markerHeight="5.5"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#10B981" />
+                </marker>
+              </defs>
+              {track.edges.map((edge) => {
+                const isLoser = edge.edgeType === "loser";
+                const strokeColor =
+                  edge.edgeType === "champion" && edge.highlighted
+                    ? "#F59E0B"
+                    : isLoser
+                    ? "#F97316"
+                    : edge.highlighted
+                    ? "#10B981"
+                    : "#475569";
+
+                return (
+                  <g key={edge.id} data-edge-type={edge.edgeType}>
+                    <path
+                      d={edge.pathD}
+                      fill="none"
+                      stroke={strokeColor}
+                      strokeWidth={isLoser ? 2 : edge.highlighted ? 2.25 : 1.5}
+                      strokeDasharray={isLoser ? "5 3" : undefined}
+                      strokeLinejoin="round"
+                      markerEnd={
+                        isLoser
+                          ? "url(#bracket-arrow-loser)"
+                          : edge.edgeType === "winner" && edge.highlighted
+                          ? "url(#bracket-arrow-winner-active)"
+                          : undefined
+                      }
+                    />
+                    {isLoser && edge.label && edge.labelX != null && edge.labelY != null && (
+                      <g>
+                        <rect
+                          x={edge.labelX - 18}
+                          y={edge.labelY - 10}
+                          width={36}
+                          height={14}
+                          rx={3}
+                          fill="#0B1120"
+                          stroke="#F97316"
+                          strokeOpacity={0.55}
+                          strokeWidth={0.8}
+                        />
+                        <text
+                          x={edge.labelX}
+                          y={edge.labelY}
+                          textAnchor="middle"
+                          fill="#FB923C"
+                          fontSize="8.5"
+                          fontFamily="monospace"
+                          fontWeight="700"
+                        >
+                          {edge.label}
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                );
+              })}
             </svg>
 
             {/* Match Nodes */}
@@ -524,7 +629,7 @@ export function ConnectedBracketCanvas({
                     const isTeamBWinner = Boolean(m.winner_id && m.winner_id === m.team_b_id);
                     const isSelected = selectedMatchId === m.id;
                     const timeLabel = isMatchScheduled(m)
-                      ? formatIstDateTime(m.scheduled_start).replace(/, 2026/g, "").replace(/ IST$/i, "")
+                      ? formatIstDateTime(m.scheduled_start).replace(/\s+20\d{2},?/g, "").replace(/\s+IST$/i, "")
                       : "Unscheduled";
 
                     const inner = (
@@ -543,7 +648,14 @@ export function ConnectedBracketCanvas({
                               isTeamAWinner ? "bg-emerald-500/15 text-emerald-200 font-semibold" : "text-slate-100"
                             }`}
                           >
-                            <span className={item.teamAIsPlaceholder ? "italic text-slate-400 truncate" : "truncate"}>
+                            <span
+                              title={item.teamALabel}
+                              className={
+                                item.teamAIsPlaceholder
+                                  ? "italic text-amber-200/90 text-[11px] leading-snug"
+                                  : "truncate"
+                              }
+                            >
                               {item.teamALabel}
                             </span>
                             <span className="font-mono font-bold tabular-nums shrink-0">
@@ -555,7 +667,14 @@ export function ConnectedBracketCanvas({
                               isTeamBWinner ? "bg-emerald-500/15 text-emerald-200 font-semibold" : "text-slate-100"
                             }`}
                           >
-                            <span className={item.teamBIsPlaceholder ? "italic text-slate-400 truncate" : "truncate"}>
+                            <span
+                              title={item.teamBLabel}
+                              className={
+                                item.teamBIsPlaceholder
+                                  ? "italic text-amber-200/90 text-[11px] leading-snug"
+                                  : "truncate"
+                              }
+                            >
                               {item.teamBLabel}
                             </span>
                             <span className="font-mono font-bold tabular-nums shrink-0">
@@ -577,15 +696,29 @@ export function ConnectedBracketCanvas({
                     } ${interactive ? "cursor-pointer hover:border-sky-400/70" : ""}`;
 
                     return interactive && onSelectMatch ? (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => onSelectMatch(m)}
-                        className={cardCls}
-                        aria-label={`Open match ${m.match_code || m.round}: ${item.teamALabel} vs ${item.teamBLabel}`}
-                      >
-                        {inner}
-                      </button>
+                      <div key={m.id} className={cardCls}>
+                        <button
+                          type="button"
+                          onClick={() => onSelectMatch(m)}
+                          className="w-full text-left bg-transparent border-0 p-0 cursor-pointer"
+                          aria-label={`Open match ${m.match_code || m.round}: ${item.teamALabel} vs ${item.teamBLabel}`}
+                        >
+                          {inner}
+                        </button>
+                        {canEditMatch && (
+                          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => (onEditMatch || onSelectMatch)(m)}
+                              aria-label={`Edit Match ${m.match_code || m.round}`}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-sky-600 text-[11px] font-mono font-semibold text-sky-300 hover:text-white border border-slate-700 cursor-pointer transition-colors"
+                            >
+                              <Edit3 size={11} />
+                              <span>Edit Match</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div key={m.id} className={cardCls}>
                         {inner}

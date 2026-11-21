@@ -15,8 +15,10 @@ import {
   escalateMatchDispute,
   findDependentDownstreamMatches,
   generateTournamentMatches,
+  isCancelledBracketMatch,
   reassignTeamsInMatch,
   resolveMatchDispute,
+  resolveMatchSlotDisplay,
   submitMatchResultDraft,
   undoMatchResultAndRewind,
   validateBattleRoyaleRows,
@@ -755,7 +757,8 @@ describe("Esports Tournament Operations Engine (Scenarios 10–20)", () => {
     assert.ok(layout.tracks[0].edges.length >= 6);
     assert.ok(layout.tracks[1].edges.length >= 4);
     const lr1Card = layout.tracks[1].columns[0].cards[0];
-    assert.ok(lr1Card.teamALabel.startsWith("Loser of VAL-WR1-M"));
+    assert.equal(lr1Card.teamALabel, "Loser of Team 1 vs Team 2");
+    assert.equal(lr1Card.teamAIsPlaceholder, true);
   });
 
   it("Scenario 26: 6-step Tournament Setup Wizard derives accurate step progress & next CTA", () => {
@@ -931,5 +934,180 @@ describe("Esports Tournament Operations Engine (Scenarios 10–20)", () => {
     assert.equal(grp[0].played, 0);
     assert.equal(grp[0].wins, 0);
     assert.equal(grp[0].points, 0);
+  });
+
+  it("Scenario 29: Valorant custom loser-drop progression, cancelled Match 4 exclusion, and unpublished-when-started wizard detection", () => {
+    const teamNameById = new Map<string, string>([
+      ["t-req", "REQUIEM"],
+      ["t-frag", "Frag Esports"],
+      ["t-leg", "LEGION"],
+    ]);
+
+    const valMatches: Match[] = [
+      {
+        id: "val-r2-m01",
+        game_id: "g-val",
+        round: "Semi-finals",
+        round_number: 2,
+        match_number: 1,
+        match_code: "VAL-R2-M01",
+        bracket_side: "knockout",
+        team_a_id: "t-req",
+        team_b_id: "t-frag",
+        score_a: 0,
+        score_b: 0,
+        winner_id: null,
+        status: "scheduled",
+        result_status: "pending",
+        next_match_id: "val-r3-m01",
+        next_match_slot: "A",
+        loser_next_match_id: "val-r2-m02",
+        loser_next_match_slot: "B",
+        is_published: false,
+        created_at: "",
+        updated_at: "",
+      },
+      {
+        id: "val-r2-m02",
+        game_id: "g-val",
+        round: "Semi-finals",
+        round_number: 2,
+        match_number: 2,
+        match_code: "VAL-R2-M02",
+        bracket_side: "knockout",
+        team_a_id: "t-leg",
+        team_b_id: null,
+        score_a: 0,
+        score_b: 0,
+        winner_id: null,
+        status: "upcoming",
+        result_status: "pending",
+        next_match_id: "val-r3-m01",
+        next_match_slot: "B",
+        loser_next_match_id: null,
+        loser_next_match_slot: null,
+        is_published: false,
+        created_at: "",
+        updated_at: "",
+      },
+      {
+        id: "val-r3-m01",
+        game_id: "g-val",
+        round: "Grand Final",
+        round_number: 3,
+        match_number: 1,
+        match_code: "VAL-R3-M01",
+        bracket_side: "grand_final",
+        team_a_id: null,
+        team_b_id: null,
+        score_a: 0,
+        score_b: 0,
+        winner_id: null,
+        status: "upcoming",
+        result_status: "pending",
+        next_match_id: null,
+        next_match_slot: null,
+        loser_next_match_id: null,
+        loser_next_match_slot: null,
+        is_published: false,
+        created_at: "",
+        updated_at: "",
+      },
+      {
+        id: "val-cancelled-m4",
+        game_id: "g-val",
+        round: "Semi-finals",
+        round_number: 2,
+        match_number: 4,
+        match_code: "VAL-R2-M04",
+        bracket_side: "knockout",
+        team_a_id: null,
+        team_b_id: null,
+        score_a: 0,
+        score_b: 0,
+        winner_id: null,
+        status: "cancelled",
+        result_status: "pending",
+        next_match_id: null,
+        next_match_slot: null,
+        loser_next_match_id: null,
+        loser_next_match_slot: null,
+        is_published: false,
+        created_at: "",
+        updated_at: "",
+      },
+    ];
+
+    assert.equal(isCancelledBracketMatch(valMatches[3]), true);
+
+    const slotBOfM02 = resolveMatchSlotDisplay({
+      match: valMatches[1],
+      slot: "b",
+      allMatches: valMatches,
+      teamNameById,
+    });
+    assert.equal(slotBOfM02.label, "Loser of REQUIEM vs Frag Esports");
+    assert.equal(slotBOfM02.isPlaceholder, true);
+    assert.equal(slotBOfM02.feederType, "loser");
+
+    const slotAOfFinal = resolveMatchSlotDisplay({
+      match: valMatches[2],
+      slot: "a",
+      allMatches: valMatches,
+      teamNameById,
+    });
+    assert.equal(slotAOfFinal.label, "Winner of REQUIEM vs Frag Esports");
+    assert.equal(slotAOfFinal.feederType, "winner");
+
+    const slotBOfFinal = resolveMatchSlotDisplay({
+      match: valMatches[2],
+      slot: "b",
+      allMatches: valMatches,
+      teamNameById,
+    });
+    assert.equal(slotBOfFinal.label, "Winner of VAL-R2-M02");
+    assert.equal(slotBOfFinal.feederType, "winner");
+
+    // Visual bracket omits cancelled Match 4, shows placeholder & draws loser edge cleanly
+    const layout = buildConnectedBracketLayout({
+      matches: valMatches,
+      teamNameById,
+      format: "single_elimination",
+    });
+    assert.equal(layout.hasConnectedBracket, true);
+    assert.equal(layout.tracks.length, 1);
+    const track = layout.tracks[0];
+    const renderedIds = track.columns.flatMap((c) => c.cards.map((n) => n.match.id));
+    assert.equal(renderedIds.includes("val-cancelled-m4"), false);
+    assert.equal(renderedIds.length, 3);
+
+    const m02Node = track.columns.flatMap((c) => c.cards).find((n) => n.match.id === "val-r2-m02");
+    assert.ok(m02Node);
+    assert.equal(m02Node.teamALabel, "LEGION");
+    assert.equal(m02Node.teamBLabel, "Loser of REQUIEM vs Frag Esports");
+
+    const loserEdge = track.edges.find((e) => e.fromMatchId === "val-r2-m01" && e.edgeType === "loser");
+    assert.ok(loserEdge);
+    assert.equal(loserEdge.toId, "val-r2-m02");
+    assert.equal(loserEdge.label, "Loser");
+
+    // Round list groups also omit cancelled Match 4 and preserve placeholder
+    const groups = buildBracketRoundListGroups({ matches: valMatches, teamNameById });
+    const listIds = groups.flatMap((g) => g.items.map((i) => i.match.id));
+    assert.equal(listIds.includes("val-cancelled-m4"), false);
+    const listM02 = groups.flatMap((g) => g.items).find((i) => i.match.id === "val-r2-m02");
+    assert.equal(listM02?.teamBLabel, "Loser of REQUIEM vs Frag Esports");
+
+    // Wizard detects unpublished fixtures even when tournament.has_started is true
+    const wizUnpublishedStarted = deriveTournamentWizardState({
+      tournament: makeTournament({ status: "in_progress", has_started: true }),
+      hasPersistedTournament: true,
+      selectedTeamCount: 6,
+      approvedTeamCount: 6,
+      matches: valMatches,
+    });
+    assert.equal(wizUnpublishedStarted.allCompleted, false);
+    assert.equal(wizUnpublishedStarted.currentStepId, "publish_tournament");
+    assert.equal(wizUnpublishedStarted.currentStepNumber, 5);
   });
 });

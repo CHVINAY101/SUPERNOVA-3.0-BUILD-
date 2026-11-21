@@ -9,7 +9,7 @@ import {
 } from "@/lib/supabase";
 import { canAccessGatePortal } from "@/lib/gatePortal";
 import { isRegistrationDeskOnlyRole, resolvePostLoginRoute } from "@/lib/registrationDesk";
-import { getRoleLabel } from "@/lib/rbac";
+import { getRoleLabel, normalizeRole } from "@/lib/rbac";
 import { StaffPortalSwitcher } from "@/components/auth/StaffPortalSwitcher";
 import {
   Eye,
@@ -161,6 +161,9 @@ function classifyGateAuthError(
 export default function GateLogin() {
   const {
     session,
+    isAdmin,
+    isStaff,
+    isActive,
     role,
     permissions,
     accountStatus,
@@ -187,6 +190,22 @@ export default function GateLogin() {
   const [testingConnection, setTestingConnection] = useState(false);
   const [pingResult, setPingResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  const canonicalRole = normalizeRole(role);
+  const isValidStaffSession = Boolean(
+    session &&
+      isAdmin &&
+      isStaff &&
+      isActive &&
+      accountStatus === "active" &&
+      canonicalRole !== null
+  );
+  const isValidInvitedStaff = Boolean(
+    session &&
+      isStaff &&
+      accountStatus === "invited" &&
+      canonicalRole !== null
+  );
+
   useEffect(() => {
     const hash = window.location.hash || "";
     const search = window.location.search || "";
@@ -196,25 +215,37 @@ export default function GateLogin() {
       hash.includes("type=recovery") ||
       search.includes("type=recovery");
 
-    if (isInviteParam || (session && accountStatus === "invited")) {
+    if (isValidInvitedStaff || (isInviteParam && (!session || (isStaff && canonicalRole !== null)))) {
       setIsInviteFlow(true);
+    } else if (!session) {
+      setIsInviteFlow(false);
     }
-  }, [session, accountStatus]);
+  }, [session, isValidInvitedStaff, isStaff, canonicalRole]);
+
+  useEffect(() => {
+    if (!authLoading && session && !isValidStaffSession && !isValidInvitedStaff) {
+      void signOut();
+      navigate("/", { replace: true });
+    }
+  }, [authLoading, session, isValidStaffSession, isValidInvitedStaff, signOut, navigate]);
+
+  if (!authLoading && session && !isValidStaffSession && !isValidInvitedStaff) {
+    return <Navigate to="/" replace />;
+  }
 
   // Registration Desk Clerks -> redirect straight to /registration-desk
-  if (!authLoading && session && isRegistrationDeskOnlyRole(role) && accountStatus === "active" && !isInviteFlow) {
+  if (!authLoading && isValidStaffSession && isRegistrationDeskOnlyRole(role) && !isInviteFlow) {
     return <Navigate to="/registration-desk" replace />;
   }
 
   // Authorized gate user already signed in -> proceed directly to /gate
-  if (!authLoading && session && canAccessGatePortal(role, accountStatus) && !isInviteFlow) {
+  if (!authLoading && isValidStaffSession && canAccessGatePortal(role, accountStatus) && !isInviteFlow) {
     return <Navigate to="/gate" replace />;
   }
 
   const hasNonGateSignedInRole =
     !authLoading &&
-    Boolean(session) &&
-    accountStatus === "active" &&
+    isValidStaffSession &&
     !canAccessGatePortal(role, accountStatus) &&
     !isInviteFlow;
 
@@ -259,12 +290,29 @@ export default function GateLogin() {
       }
 
       const refreshed = await refreshRole();
+      if (!refreshed?.isAdmin || !refreshed?.isStaff || !refreshed?.isActive || !refreshed?.canonicalRole) {
+        await signOut();
+        setIsInviteFlow(false);
+        setLoading(false);
+        if (refreshed?.shouldRedirectToPublic) {
+          navigate("/", { replace: true });
+          return;
+        }
+        setAuthError(
+          classifyGateAuthError(
+            "Gate portal access is not active for this account.",
+            refreshed?.errorCategory || "unauthorized_role"
+          )
+        );
+        return;
+      }
+
       setIsInviteFlow(false);
       setLoading(false);
       const dest = resolvePostLoginRoute({
         portal: "gate",
-        role: refreshed?.role ?? role,
-        permissions: refreshed?.permissions ?? permissions,
+        role: refreshed.role ?? role,
+        permissions: refreshed.permissions ?? permissions,
       });
       navigate(dest, { replace: true });
     } catch (err: any) {
@@ -289,6 +337,10 @@ export default function GateLogin() {
     setLoading(false);
 
     if (result.error) {
+      if (result.shouldRedirectToPublic) {
+        navigate("/", { replace: true });
+        return;
+      }
       setAuthError(classifyGateAuthError(result.rawError || result.error, result.errorCategory));
     } else {
       const dest = resolvePostLoginRoute({

@@ -584,7 +584,11 @@ export const ROUTE_PERMISSIONS: { prefix: string; exact?: boolean; anyOf: Permis
     label: "Tournament Games",
   },
   { prefix: "/admin/institutions", anyOf: ["event_info:view"], label: "Schools" },
-  { prefix: "/admin/registration-controls", anyOf: ["system_settings:manage"], label: "Registration Controls" },
+  {
+    prefix: "/admin/registration-controls",
+    anyOf: ["system_settings:manage", "tournament:manage_games", "esports:edit"],
+    label: "Registration Controls",
+  },
   { prefix: "/admin/settings", anyOf: ["system_settings:view", "system_settings:manage"], label: "Event & System Settings" },
   { prefix: "/admin/form-options", anyOf: ["system_settings:manage"], label: "Form Options" },
   { prefix: "/admin/audit-logs", anyOf: ["system_settings:view"], label: "Activity Log" },

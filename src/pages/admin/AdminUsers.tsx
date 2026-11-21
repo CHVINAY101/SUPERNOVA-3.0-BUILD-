@@ -145,25 +145,50 @@ export default function AdminUsers() {
     ): Promise<{ data: any; error: any; statusCode?: number }> => {
       const { url: supabaseUrl, key: apiKey } = getSupabaseClientConfig();
 
-      let accessToken: string | null = null;
-      try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        let activeSession = sessionData?.session ?? null;
-        if (
-          !activeSession?.access_token ||
-          (activeSession.expires_at && activeSession.expires_at * 1000 - Date.now() < 60_000)
-        ) {
-          const refreshed = await supabase.auth.refreshSession();
-          if (refreshed.data?.session) {
-            activeSession = refreshed.data.session;
+      const resolveAccessToken = async (forceRefresh = false): Promise<string | null> => {
+        try {
+          if (forceRefresh) {
+            const refreshed = await supabase.auth.refreshSession();
+            return refreshed.data?.session?.access_token ?? null;
           }
+          const { data: sessionData } = await supabase.auth.getSession();
+          let activeSession = sessionData?.session ?? null;
+          if (
+            !activeSession?.access_token ||
+            (activeSession.expires_at && activeSession.expires_at * 1000 - Date.now() < 60_000)
+          ) {
+            const refreshed = await supabase.auth.refreshSession();
+            if (refreshed.data?.session) {
+              activeSession = refreshed.data.session;
+            }
+          }
+          return activeSession?.access_token ?? null;
+        } catch {
+          return null;
         }
-        accessToken = activeSession?.access_token ?? null;
-      } catch {
-        accessToken = null;
-      }
+      };
 
+      const callFn = async (token: string) => {
+        const headers: Record<string, string> = {
+          Authorization: `Bearer ${token}`,
+        };
+        if (apiKey) {
+          headers.apikey = apiKey;
+        }
+        const { data, error } = await supabase.functions.invoke("manage-crm-users", {
+          headers,
+          body,
+        });
+        const statusCode =
+          typeof (error as any)?.context?.status === "number"
+            ? (error as any).context.status
+            : undefined;
+        return { data, error, statusCode };
+      };
+
+      const accessToken = await resolveAccessToken(false);
       if (!accessToken) {
+        await supabase.auth.signOut().catch(() => {});
         return {
           data: { ok: false, error: "Your CRM session has expired. Please sign in again." },
           error: { message: "Unauthorized: Missing or expired CRM session token", context: { status: 401 } },
@@ -171,30 +196,29 @@ export default function AdminUsers() {
         };
       }
 
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${accessToken}`,
-      };
-      if (apiKey) {
-        headers.apikey = apiKey;
+      let result = await callFn(accessToken);
+
+      if (result.statusCode === 401) {
+        const refreshedToken = await resolveAccessToken(true);
+        if (!refreshedToken) {
+          await supabase.auth.signOut().catch(() => {});
+          return result;
+        }
+        result = await callFn(refreshedToken);
+        if (result.statusCode === 401) {
+          await supabase.auth.signOut().catch(() => {});
+          return result;
+        }
       }
-
-      const { data, error } = await supabase.functions.invoke("manage-crm-users", {
-        headers,
-        body,
-      });
-
-      let statusCode =
-        typeof (error as any)?.context?.status === "number"
-          ? (error as any).context.status
-          : undefined;
 
       // When Edge Function is undeployed, browser CORS preflight fails with FunctionsFetchError
       // ("Failed to send a request to the Edge Function"). Perform a read-only probe so the
       // UI shows the accurate HTTP status (e.g. 404 NOT_FOUND) cleanly.
+      let statusCode = result.statusCode;
       if (
-        error &&
+        result.error &&
         statusCode === undefined &&
-        String(error?.message || "").includes("Failed to send a request to the Edge Function")
+        String(result.error?.message || "").includes("Failed to send a request to the Edge Function")
       ) {
         if (supabaseUrl) {
           try {
@@ -213,7 +237,7 @@ export default function AdminUsers() {
         }
       }
 
-      return { data, error, statusCode };
+      return { data: result.data, error: result.error, statusCode };
     },
     []
   );

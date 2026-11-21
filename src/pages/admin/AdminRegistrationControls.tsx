@@ -192,6 +192,11 @@ export default function AdminRegistrationControls() {
         </div>
       ) : (
         <div className="space-y-5">
+          {!canManage && (
+            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700">
+              Global Visitor &amp; Esports master portal switches require Super Admin settings access; per-game Esports registration controls below are active for authorized coordinators.
+            </div>
+          )}
           {controls.map((ctrl) => {
             const meta = META_MAP[ctrl.form_type] || {
               title: ctrl.form_type.toUpperCase(),

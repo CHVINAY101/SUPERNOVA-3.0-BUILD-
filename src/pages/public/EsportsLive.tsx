@@ -7,6 +7,8 @@ import {
   calculateCumulativeBattleRoyaleStandings,
   calculateGroupStandings,
   computePreEventLiveBoardState,
+  isCancelledBracketMatch,
+  resolveMatchSlotDisplay,
 } from "@/lib/tournamentEngine";
 import { formatIstDateTime, isMatchScheduled } from "@/lib/scheduling";
 import {
@@ -15,6 +17,7 @@ import {
   parseTournamentScoringRules,
 } from "@/components/admin/esports/types";
 import { ConnectedBracketCanvas } from "@/components/esports/ConnectedBracketCanvas";
+import { resolveLiveTeamName } from "@/lib/esportsFixtureCorrections";
 import type { Game, Match, Registration, Tournament } from "@/types/database";
 import {
   ArrowLeft,
@@ -126,6 +129,7 @@ export default function EsportsLive() {
   const { connectionState, lastEventTime } = useRealtimeSubscription(
     [
       { table: "matches", onRefresh: fetchLiveBoard },
+      { table: "registrations", onRefresh: fetchLiveBoard },
       { table: "tournaments", onRefresh: fetchLiveBoard },
       { table: "games", onRefresh: fetchLiveBoard },
     ],
@@ -188,9 +192,14 @@ export default function EsportsLive() {
     [matches, selectedGameId]
   );
 
-  const visibleMatches = useMemo(
-    () => gameMatches.filter((m) => m.match_format !== "BYE"),
+  const activeGameMatches = useMemo(
+    () => gameMatches.filter((m) => !isCancelledBracketMatch(m)),
     [gameMatches]
+  );
+
+  const visibleMatches = useMemo(
+    () => activeGameMatches.filter((m) => m.match_format !== "BYE"),
+    [activeGameMatches]
   );
 
   const liveMatches = useMemo(
@@ -244,11 +253,22 @@ export default function EsportsLive() {
     const isBr = isBattleRoyaleTournament(selectedTournament, selectedGame);
 
     if (isBr) {
+      const hydratedBrMatches = visibleMatches.map((m) =>
+        Array.isArray(m.br_results) && m.br_results.length > 0
+          ? {
+              ...m,
+              br_results: m.br_results.map((entry) => ({
+                ...entry,
+                team_name: resolveLiveTeamName(entry.team_id, entry.team_name, teamNameById),
+              })),
+            }
+          : m
+      );
       return {
         type: "br" as const,
         rows: calculateCumulativeBattleRoyaleStandings({
           teams: gameTeams,
-          matches: visibleMatches,
+          matches: hydratedBrMatches,
           placementPointsTable: rules.placementPoints,
           pointsPerKill: rules.pointsPerKill,
         }),
@@ -276,7 +296,7 @@ export default function EsportsLive() {
     }
 
     return { type: "bracket" as const };
-  }, [selectedGame, selectedTournament, teams, visibleMatches, gameMatches, rules]);
+  }, [selectedGame, selectedTournament, teams, visibleMatches, gameMatches, rules, teamNameById]);
 
   return (
     <div
@@ -416,8 +436,18 @@ export default function EsportsLive() {
                   {liveMatches.map((m) => {
                     const isBr =
                       m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
-                    const teamA = teamMap.get(m.team_a_id || "");
-                    const teamB = teamMap.get(m.team_b_id || "");
+                    const slotA = resolveMatchSlotDisplay({
+                      match: m,
+                      slot: "a",
+                      allMatches: activeGameMatches,
+                      teamNameById,
+                    });
+                    const slotB = resolveMatchSlotDisplay({
+                      match: m,
+                      slot: "b",
+                      allMatches: activeGameMatches,
+                      teamNameById,
+                    });
 
                     return (
                       <div
@@ -445,8 +475,13 @@ export default function EsportsLive() {
                         ) : (
                           <div className="grid grid-cols-3 items-center gap-2 text-center">
                             <div className="text-left min-w-0">
-                              <div className="text-base sm:text-lg font-display font-bold text-white truncate">
-                                {teamA?.team_name || "TBD"}
+                              <div
+                                title={slotA.label}
+                                className={`text-base sm:text-lg font-display font-bold truncate ${
+                                  slotA.isPlaceholder ? "italic text-amber-200/90 text-sm" : "text-white"
+                                }`}
+                              >
+                                {slotA.label}
                               </div>
                             </div>
                             <div>
@@ -455,8 +490,13 @@ export default function EsportsLive() {
                               </span>
                             </div>
                             <div className="text-right min-w-0">
-                              <div className="text-base sm:text-lg font-display font-bold text-white truncate">
-                                {teamB?.team_name || "TBD"}
+                              <div
+                                title={slotB.label}
+                                className={`text-base sm:text-lg font-display font-bold truncate ${
+                                  slotB.isPlaceholder ? "italic text-amber-200/90 text-sm" : "text-white"
+                                }`}
+                              >
+                                {slotB.label}
                               </div>
                             </div>
                           </div>
@@ -505,7 +545,7 @@ export default function EsportsLive() {
                                 <td className="py-3 px-4 font-mono font-bold tabular-nums">#{r.rank}</td>
                                 <td className="py-3 px-4">
                                   <div className="font-bold text-white flex items-center gap-2">
-                                    <span>{r.teamName}</span>
+                                    <span>{resolveLiveTeamName(r.teamId, r.teamName, teamNameById)}</span>
                                     {qualified && (
                                       <span className="text-[10px] font-mono text-emerald-400">QUALIFIED</span>
                                     )}
@@ -576,11 +616,16 @@ export default function EsportsLive() {
 
                     {singleGameBoard.hasKnockoutMatches && (
                       <ConnectedBracketCanvas
-                        matches={gameMatches}
+                        matches={activeGameMatches}
                         teamNameById={teamNameById}
                         championTeamId={selectedTournament?.champion_team_id}
                         format={selectedTournament?.format}
                         title={`${selectedGame.title} Knockout Playoffs`}
+                        emptyMessage={
+                          preEventState.hasStartedTournament
+                            ? "Knockout bracket fixtures are awaiting publication to the Public Live Board."
+                            : undefined
+                        }
                       />
                     )}
                   </div>
@@ -588,13 +633,18 @@ export default function EsportsLive() {
 
                 {singleGameBoard.type === "bracket" && (
                   <ConnectedBracketCanvas
-                    matches={gameMatches}
+                    matches={activeGameMatches}
                     teamNameById={teamNameById}
                     championTeamId={selectedTournament?.champion_team_id}
                     format={selectedTournament?.format}
                     title={`${selectedGame.title} — ${
                       FORMAT_LABELS[selectedTournament?.format || "single_elimination"]
                     }`}
+                    emptyMessage={
+                      preEventState.hasStartedTournament
+                        ? `${selectedGame.title} fixtures are currently unpublished in the tournament board. Check back once an organizer publishes the fixtures.`
+                        : undefined
+                    }
                   />
                 )}
               </section>
@@ -610,8 +660,18 @@ export default function EsportsLive() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
                   {upcomingMatches.map((m) => {
-                    const teamA = teamMap.get(m.team_a_id || "");
-                    const teamB = teamMap.get(m.team_b_id || "");
+                    const slotA = resolveMatchSlotDisplay({
+                      match: m,
+                      slot: "a",
+                      allMatches: activeGameMatches,
+                      teamNameById,
+                    });
+                    const slotB = resolveMatchSlotDisplay({
+                      match: m,
+                      slot: "b",
+                      allMatches: activeGameMatches,
+                      teamNameById,
+                    });
                     const isBr =
                       m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
 
@@ -633,9 +693,23 @@ export default function EsportsLive() {
                           </div>
                         ) : (
                           <div className="flex items-center justify-between gap-2 text-sm font-bold text-white">
-                            <span className="truncate">{teamA?.team_name || "TBD"}</span>
+                            <span
+                              title={slotA.label}
+                              className={slotA.isPlaceholder ? "italic font-normal text-amber-200/90 text-xs" : "truncate"}
+                            >
+                              {slotA.label}
+                            </span>
                             <span className="text-[11px] font-mono text-slate-500 shrink-0">vs</span>
-                            <span className="truncate text-right">{teamB?.team_name || "TBD"}</span>
+                            <span
+                              title={slotB.label}
+                              className={
+                                slotB.isPlaceholder
+                                  ? "italic font-normal text-amber-200/90 text-xs text-right"
+                                  : "truncate text-right"
+                              }
+                            >
+                              {slotB.label}
+                            </span>
                           </div>
                         )}
 
@@ -658,8 +732,18 @@ export default function EsportsLive() {
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
                   {completedMatches.map((m) => {
-                    const teamA = teamMap.get(m.team_a_id || "");
-                    const teamB = teamMap.get(m.team_b_id || "");
+                    const slotA = resolveMatchSlotDisplay({
+                      match: m,
+                      slot: "a",
+                      allMatches: activeGameMatches,
+                      teamNameById,
+                    });
+                    const slotB = resolveMatchSlotDisplay({
+                      match: m,
+                      slot: "b",
+                      allMatches: activeGameMatches,
+                      teamNameById,
+                    });
                     const winner = teamMap.get(m.winner_id || "");
                     const isBr =
                       m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
@@ -675,7 +759,7 @@ export default function EsportsLive() {
                         <div className="text-sm font-bold text-white truncate">
                           {isBr
                             ? `${m.round} · ${m.group_name || "Lobby"}`
-                            : `${teamA?.team_name || "TBD"} vs ${teamB?.team_name || "TBD"}`}
+                            : `${slotA.label} vs ${slotB.label}`}
                         </div>
                         <div className="text-xs text-emerald-300 font-medium">
                           {winner

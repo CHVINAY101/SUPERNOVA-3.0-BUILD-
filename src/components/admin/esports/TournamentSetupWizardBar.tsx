@@ -35,6 +35,7 @@ interface TournamentSetupWizardBarProps {
   canManageSetup: boolean;
   canCreateMatch: boolean;
   canConfirmResults: boolean;
+  canPublishFixtures?: boolean;
   onRefresh: (msg?: string) => Promise<void>;
   onError: (msg: string) => void;
   onNavigate: (sec: EsportsSectionId) => void;
@@ -45,12 +46,19 @@ export function TournamentSetupWizardBar({
   canManageSetup,
   canCreateMatch,
   canConfirmResults,
+  canPublishFixtures,
   onRefresh,
   onError,
   onNavigate,
 }: TournamentSetupWizardBarProps) {
   const { selectedGame, tournament, hasPersistedTournament, approvedTeams, selectedTeams, matches, conductors } =
     data;
+
+  const activeMatches = matches.filter((m) => m.status !== "cancelled");
+  const publishedFixtureCount = activeMatches.filter((m) => m.is_published).length;
+  const unpublishedFixtureCount = activeMatches.length - publishedFixtureCount;
+  const allFixturesPublished = activeMatches.length > 0 && unpublishedFixtureCount === 0;
+  const effectiveCanPublish = canPublishFixtures ?? (canManageSetup || canConfirmResults);
 
   const wizard = deriveTournamentWizardState({
     tournament,
@@ -62,7 +70,7 @@ export function TournamentSetupWizardBar({
 
   const parsedRules = parseTournamentScoringRules(tournament, selectedGame);
 
-  const [configOpen, setConfigOpen] = useState<boolean>(!hasPersistedTournament || matches.length === 0);
+  const [configOpen, setConfigOpen] = useState<boolean>(!hasPersistedTournament || activeMatches.length === 0);
   const [format, setFormat] = useState<TournamentFormat>(tournament.format);
   const [scoringMode, setScoringMode] = useState<TournamentScoringMode>(tournament.scoring_mode);
   const [competitionMode, setCompetitionMode] = useState<CompetitionMode>(
@@ -309,29 +317,36 @@ export function TournamentSetupWizardBar({
     }
   };
 
-  const handlePublishTournament = async () => {
-    if (!canManageSetup || !selectedGame || matches.length === 0) return;
+  const handlePublishFixtures = async () => {
+    if (!effectiveCanPublish || !selectedGame || activeMatches.length === 0) return;
     setPublishing(true);
     try {
-      const realId = await persistSetup(true);
       const { error: mErr } = await supabase
         .from("matches")
         .update({ is_published: true })
-        .eq("game_id", selectedGame.id);
+        .eq("game_id", selectedGame.id)
+        .neq("status", "cancelled");
       if (mErr) throw mErr;
 
-      if (realId) {
-        const nextStatus = tournament.has_started ? "in_progress" : "published";
+      await supabase.from("games").update({ is_published: true }).eq("id", selectedGame.id);
+
+      if (
+        hasPersistedTournament &&
+        !tournament.has_started &&
+        (tournament.status === "draft" || tournament.status === "open")
+      ) {
         const { error: tErr } = await supabase
           .from("tournaments")
-          .update({ status: nextStatus })
-          .eq("id", realId);
+          .update({ status: "published" })
+          .eq("id", tournament.id);
         if (tErr) throw tErr;
       }
 
-      await onRefresh(`Published ${selectedGame.title} fixtures and IST schedule to the Public Live Board.`);
+      await onRefresh(
+        `Published ${activeMatches.length} active ${selectedGame.title} fixture(s) to the Public Live Board.`
+      );
     } catch (err: any) {
-      onError(`Publish failed: ${err?.message || "Database error"}`);
+      onError(`Publish failed: ${formatMatchDatabaseError(err)}`);
     } finally {
       setPublishing(false);
     }
@@ -339,11 +354,15 @@ export function TournamentSetupWizardBar({
 
   const handleStartTournament = async () => {
     if (!canConfirmResults && !canManageSetup) return;
-    if (!selectedGame || matches.length === 0) return;
+    if (!selectedGame || activeMatches.length === 0) return;
     setStarting(true);
     try {
       const realId = await persistSetup(true);
-      await supabase.from("matches").update({ is_published: true }).eq("game_id", selectedGame.id);
+      await supabase
+        .from("matches")
+        .update({ is_published: true })
+        .eq("game_id", selectedGame.id)
+        .neq("status", "cancelled");
       if (realId) {
         const { error } = await supabase
           .from("tournaments")
@@ -353,7 +372,7 @@ export function TournamentSetupWizardBar({
       }
       await supabase
         .from("games")
-        .update({ tournament_status: "in_progress" })
+        .update({ tournament_status: "in_progress", is_published: true })
         .eq("id", selectedGame.id);
 
       await onRefresh(`${selectedGame.title} tournament started! Live scoring and standings are now unlocked.`);
@@ -375,7 +394,7 @@ export function TournamentSetupWizardBar({
         setConfigOpen(true);
         break;
       case "publish_tournament":
-        handlePublishTournament();
+        handlePublishFixtures();
         break;
       case "start_tournament":
         if (!wizard.allCompleted) {
@@ -392,8 +411,26 @@ export function TournamentSetupWizardBar({
       {/* Header & Next Action Bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-500">
-            Step {wizard.currentStepNumber} of 6 · {selectedGame?.title} Workflow
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-slate-500">
+            <span>
+              Step {wizard.currentStepNumber} of 6 · {selectedGame?.title} Workflow
+            </span>
+            {activeMatches.length > 0 && (
+              <span
+                data-testid="fixture-publication-status"
+                className={`px-2 py-0.5 rounded border font-semibold ${
+                  allFixturesPublished
+                    ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                    : "bg-amber-50 text-amber-800 border-amber-200"
+                }`}
+              >
+                {allFixturesPublished
+                  ? `Fixtures Published (${publishedFixtureCount}/${activeMatches.length})`
+                  : publishedFixtureCount > 0
+                  ? `${unpublishedFixtureCount}/${activeMatches.length} Fixtures Unpublished`
+                  : `Fixtures Unpublished (0/${activeMatches.length} Live)`}
+              </span>
+            )}
           </div>
           <h2 className="text-base font-display font-bold text-slate-900 m-0 mt-0.5">
             {wizard.nextActionLabel}
@@ -412,30 +449,38 @@ export function TournamentSetupWizardBar({
             {configOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           </button>
 
-          {matches.length > 0 && !tournament.has_started && (
-            <>
-              <button
-                type="button"
-                disabled={publishing || !canManageSetup}
-                onClick={handlePublishTournament}
-                className="min-h-[38px] px-3.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-900 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-40"
-              >
-                <Globe size={13} />
-                <span>{publishing ? "Publishing..." : "Publish Tournament"}</span>
-              </button>
-              <button
-                type="button"
-                disabled={starting || (!canConfirmResults && !canManageSetup)}
-                onClick={handleStartTournament}
-                className="min-h-[38px] px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-40"
-              >
-                <Play size={13} />
-                <span>{starting ? "Starting..." : "Start Tournament"}</span>
-              </button>
-            </>
+          {activeMatches.length > 0 && unpublishedFixtureCount > 0 && (
+            <button
+              type="button"
+              disabled={publishing || !effectiveCanPublish}
+              onClick={handlePublishFixtures}
+              data-testid="publish-fixtures-btn"
+              className="min-h-[38px] px-3.5 rounded-lg border border-blue-300 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-40"
+            >
+              <Globe size={13} />
+              <span>
+                {publishing
+                  ? "Publishing..."
+                  : publishedFixtureCount > 0
+                  ? `Publish Remaining Fixtures (${unpublishedFixtureCount})`
+                  : "Publish Fixtures"}
+              </span>
+            </button>
           )}
 
-          {(matches.length === 0 || wizard.allCompleted) && (
+          {activeMatches.length > 0 && !tournament.has_started && (
+            <button
+              type="button"
+              disabled={starting || (!canConfirmResults && !canManageSetup)}
+              onClick={handleStartTournament}
+              className="min-h-[38px] px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-40"
+            >
+              <Play size={13} />
+              <span>{starting ? "Starting..." : "Start Tournament"}</span>
+            </button>
+          )}
+
+          {(activeMatches.length === 0 || wizard.allCompleted) && (
             <button
               type="button"
               onClick={handlePrimaryWizardAction}
@@ -458,9 +503,9 @@ export function TournamentSetupWizardBar({
               if (s.id === "select_teams") onNavigate("teams");
               else if (s.id === "choose_format" || s.id === "configure_rules" || s.id === "generate_matches") {
                 setConfigOpen(true);
-              } else if (s.id === "publish_tournament" && matches.length > 0) {
-                handlePublishTournament();
-              } else if (s.id === "start_tournament" && matches.length > 0 && !tournament.has_started) {
+              } else if (s.id === "publish_tournament" && activeMatches.length > 0) {
+                handlePublishFixtures();
+              } else if (s.id === "start_tournament" && activeMatches.length > 0 && !tournament.has_started) {
                 handleStartTournament();
               }
             }}

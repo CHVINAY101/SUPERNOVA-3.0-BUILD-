@@ -4,7 +4,10 @@ import {
   calculateCumulativeBattleRoyaleStandings,
   calculateGroupStandings,
   findDependentDownstreamMatches,
+  isCancelledBracketMatch,
+  normalizeBracketSlot,
   reassignTeamsInMatch,
+  resolveMatchSlotDisplay,
   resolveMatchDispute,
   undoMatchResultAndRewind,
 } from "@/lib/tournamentEngine";
@@ -17,10 +20,14 @@ import {
   parseTournamentScoringRules,
   type EsportsWorkspaceSharedData,
 } from "./types";
+import { resolveLiveTeamName } from "@/lib/esportsFixtureCorrections";
+import { callReplaceEsportsFixtureTeamRpc } from "@/lib/esportsFixtureRpc";
+import { SearchableTeamSelect } from "./SearchableTeamSelect";
 import type { BattleRoyaleTeamResult, Match, MatchDispute } from "@/types/database";
 import {
   ArrowLeftRight,
   Crown,
+  Edit3,
   History,
   RotateCcw,
   X,
@@ -33,6 +40,7 @@ interface SharedTabProps {
   canConfirmResults: boolean;
   canResolveDisputes: boolean;
   canEditEsports: boolean;
+  onEditMatch?: (m: Match) => void;
   onRefresh: (msg?: string) => Promise<void>;
   onError: (msg: string) => void;
 }
@@ -245,7 +253,7 @@ export function StandingsSection({
                           <div key={r.team_id} className="py-1.5 flex items-center justify-between">
                             <span className="font-medium text-slate-800">
                               {r.placement ? `#${r.placement} · ` : ""}
-                              {r.team_name || teamMap.get(r.team_id)?.team_name}
+                              {resolveLiveTeamName(r.team_id, r.team_name, teamMap)}
                             </span>
                             <span className="font-mono tabular-nums text-slate-600">
                               {r.kills}K · <strong className="text-slate-900">{r.total_points} pts</strong>
@@ -336,12 +344,16 @@ export function DisputesAndCorrectionsSection({
   canResolveDisputes,
   canConfirmResults,
   canEditEsports,
+  onEditMatch,
   onRefresh,
   onError,
 }: SharedTabProps) {
-  const { selectedGame, tournament, hasPersistedTournament, matches, disputes, selectedTeams, approvedTeams, teamMap } = data;
+  const { selectedGame, tournament, hasPersistedTournament, matches, disputes, allGameTeams, teamMap } = data;
   const brRules = useMemo(() => parseTournamentScoringRules(tournament, selectedGame), [tournament, selectedGame]);
-  const eligibleTeams = selectedTeams.length > 0 ? selectedTeams : approvedTeams;
+  const teamNameById = useMemo(
+    () => new Map(Array.from(teamMap.entries()).map(([id, team]) => [id, team.team_name])),
+    [teamMap]
+  );
 
   const gameMatchIds = useMemo(() => new Set(matches.map((m) => m.id)), [matches]);
   const gameDisputes = useMemo(
@@ -369,6 +381,7 @@ export function DisputesAndCorrectionsSection({
   const [remapMatchId, setRemapMatchId] = useState("");
   const [remapTeamAId, setRemapTeamAId] = useState("");
   const [remapTeamBId, setRemapTeamBId] = useState("");
+  const [remapReason, setRemapReason] = useState("");
   const [remapping, setRemapping] = useState(false);
 
   const completedOrSubmitted = useMemo(
@@ -380,6 +393,7 @@ export function DisputesAndCorrectionsSection({
     () =>
       matches.filter(
         (m) =>
+          !isCancelledBracketMatch(m) &&
           m.bracket_side !== "battle_royale" &&
           m.match_format !== "BYE" &&
           !["live", "result_submitted", "completed"].includes(m.status)
@@ -473,7 +487,7 @@ export function DisputesAndCorrectionsSection({
             })
             .eq("id", match.id);
           if (!isBr && match.next_match_id && correctedWinner) {
-            const col = match.next_match_slot === "b" ? "team_b_id" : "team_a_id";
+            const col = normalizeBracketSlot(match.next_match_slot) === "b" ? "team_b_id" : "team_a_id";
             await supabase.from("matches").update({ [col]: correctedWinner }).eq("id", match.next_match_id);
           }
         } else {
@@ -576,11 +590,14 @@ export function DisputesAndCorrectionsSection({
     const m = remappableMatches.find((x) => x.id === id);
     setRemapTeamAId(m?.team_a_id || "");
     setRemapTeamBId(m?.team_b_id || "");
+    setRemapReason("");
   };
 
   const handleApplyRemap = async (e: FormEvent) => {
     e.preventDefault();
     if (!remapMatchId || !canEditEsports) return;
+    const matchObj = remappableMatches.find((x) => x.id === remapMatchId);
+    if (!matchObj) return;
     const res = reassignTeamsInMatch({
       matches,
       matchId: remapMatchId,
@@ -591,18 +608,53 @@ export function DisputesAndCorrectionsSection({
       onError(res.error);
       return;
     }
+    if (remapReason.trim().length < 3) {
+      onError("Enter an audit reason (min 3 characters) to remap teams.");
+      return;
+    }
+
+    const nextA = remapTeamAId || null;
+    const nextB = remapTeamBId || null;
+    const changedA = nextA !== (matchObj.team_a_id || null);
+    const changedB = nextB !== (matchObj.team_b_id || null);
+    if (!changedA && !changedB) {
+      onError("Change at least one team slot before applying.");
+      return;
+    }
 
     setRemapping(true);
     try {
-      const { error } = await supabase
-        .from("matches")
-        .update({ team_a_id: remapTeamAId || null, team_b_id: remapTeamBId || null })
-        .eq("id", remapMatchId);
-      if (error) throw error;
+      if (changedA) {
+        const resA = await callReplaceEsportsFixtureTeamRpc({
+          matchId: matchObj.id,
+          slot: "a",
+          expectedTeamId: matchObj.team_a_id,
+          replacementTeamId: nextA,
+          otherSlotTeamId: matchObj.team_b_id,
+          reason: remapReason.trim(),
+        });
+        if (!resA.ok) {
+          onError(resA.error || "Failed to remap Slot A.");
+          return;
+        }
+      }
+      if (changedB) {
+        const resB = await callReplaceEsportsFixtureTeamRpc({
+          matchId: matchObj.id,
+          slot: "b",
+          expectedTeamId: matchObj.team_b_id,
+          replacementTeamId: nextB,
+          otherSlotTeamId: changedA ? nextA : matchObj.team_a_id,
+          reason: remapReason.trim(),
+        });
+        if (!resB.ok) {
+          onError(resB.error || "Failed to remap Slot B.");
+          return;
+        }
+      }
       setRemapMatchId("");
-      await onRefresh("Remapped teams cleanly on unstarted match.");
-    } catch (err: any) {
-      onError(formatMatchDatabaseError(err));
+      setRemapReason("");
+      await onRefresh("Remapped teams cleanly on unstarted match via replace_esports_fixture_team.");
     } finally {
       setRemapping(false);
     }
@@ -656,6 +708,8 @@ export function DisputesAndCorrectionsSection({
                     <div className="text-xs font-semibold text-slate-900">
                       {m?.bracket_side === "battle_royale"
                         ? `${m.round} (BR Lobby)`
+                        : m
+                        ? `${resolveMatchSlotDisplay({ match: m, slot: "a", allMatches: matches, teamNameById }).label} vs ${resolveMatchSlotDisplay({ match: m, slot: "b", allMatches: matches, teamNameById }).label}`
                         : `${tA?.team_name || "TBD"} vs ${tB?.team_name || "TBD"}`}
                     </div>
                     <p className="text-xs text-slate-600 m-0">Reason: {d.reason}</p>
@@ -664,15 +718,28 @@ export function DisputesAndCorrectionsSection({
                     )}
                   </div>
 
-                  {d.status !== "resolved" && canResolveDisputes && (
-                    <button
-                      type="button"
-                      onClick={() => openResolveModal(d)}
-                      className="min-h-[38px] px-4 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold shrink-0 cursor-pointer"
-                    >
-                      Resolve & Finalize
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {m && onEditMatch && (
+                      <button
+                        type="button"
+                        aria-label={`Edit Match ${m.match_code || m.round}`}
+                        onClick={() => onEditMatch(m)}
+                        className="min-h-[38px] px-3 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-900 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Edit3 size={12} />
+                        <span>Edit Match</span>
+                      </button>
+                    )}
+                    {d.status !== "resolved" && canResolveDisputes && (
+                      <button
+                        type="button"
+                        onClick={() => openResolveModal(d)}
+                        className="min-h-[38px] px-4 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold shrink-0 cursor-pointer"
+                      >
+                        Resolve &amp; Finalize
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -712,18 +779,30 @@ export function DisputesAndCorrectionsSection({
                       <div className="text-slate-600 truncate">
                         {m.bracket_side === "battle_royale"
                           ? m.round
-                          : `${tA?.team_name || "TBD"} (${m.score_a}) vs ${tB?.team_name || "TBD"} (${m.score_b})`}
+                          : `${tA?.team_name || resolveMatchSlotDisplay({ match: m, slot: "a", allMatches: matches, teamNameById }).label} (${m.score_a}) vs ${tB?.team_name || resolveMatchSlotDisplay({ match: m, slot: "b", allMatches: matches, teamNameById }).label} (${m.score_b})`}
                       </div>
                     </div>
-                    {canConfirmResults && (
-                      <button
-                        type="button"
-                        onClick={() => triggerUndo(m)}
-                        className="h-8 px-3 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold shrink-0 cursor-pointer"
-                      >
-                        Undo Result
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {onEditMatch && (
+                        <button
+                          type="button"
+                          aria-label={`Edit Match ${m.match_code || m.round}`}
+                          onClick={() => onEditMatch(m)}
+                          className="h-8 px-2.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-900 font-semibold cursor-pointer"
+                        >
+                          Edit Match
+                        </button>
+                      )}
+                      {canConfirmResults && (
+                        <button
+                          type="button"
+                          onClick={() => triggerUndo(m)}
+                          className="h-8 px-3 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold shrink-0 cursor-pointer"
+                        >
+                          Undo Result
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -740,7 +819,7 @@ export function DisputesAndCorrectionsSection({
             </h3>
           </div>
           <p className="text-xs text-slate-500 m-0">
-            Reassign squads on any unstarted H2H fixture after rewinding or adjusting seeding.
+            Reassign squads on any unstarted H2H fixture via <code className="font-mono">replace_esports_fixture_team</code>.
           </p>
 
           <div>
@@ -753,44 +832,54 @@ export function DisputesAndCorrectionsSection({
               <option value="">Choose match to remap...</option>
               {remappableMatches.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.match_code || m.round} — {teamMap.get(m.team_a_id || "")?.team_name || "TBD"} vs{" "}
-                  {teamMap.get(m.team_b_id || "")?.team_name || "TBD"}
+                  {m.match_code || m.round} — {resolveMatchSlotDisplay({ match: m, slot: "a", allMatches: matches, teamNameById }).label} vs{" "}
+                  {resolveMatchSlotDisplay({ match: m, slot: "b", allMatches: matches, teamNameById }).label}
                 </option>
               ))}
             </select>
           </div>
 
-          {remapMatchId && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Team A Slot</label>
-                <select
-                  value={remapTeamAId}
-                  onChange={(e) => setRemapTeamAId(e.target.value)}
-                  className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs"
-                >
-                  <option value="">TBD (Empty Slot)</option>
-                  {eligibleTeams.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.team_name}
-                    </option>
-                  ))}
-                </select>
+          {remapMatchId && selectedGame && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <SearchableTeamSelect
+                  id="remap-slot-a"
+                  label="Team A Slot"
+                  teams={allGameTeams}
+                  gameId={selectedGame.id}
+                  value={remapTeamAId || null}
+                  onChange={(id) => setRemapTeamAId(id || "")}
+                  allowTbd
+                  tbdLabel="TBD (Empty Slot)"
+                  excludeDisqualified
+                  excludeTeamIds={remapTeamBId ? [remapTeamBId] : []}
+                />
+                <SearchableTeamSelect
+                  id="remap-slot-b"
+                  label="Team B Slot"
+                  teams={allGameTeams}
+                  gameId={selectedGame.id}
+                  value={remapTeamBId || null}
+                  onChange={(id) => setRemapTeamBId(id || "")}
+                  allowTbd
+                  tbdLabel="TBD (Empty Slot)"
+                  excludeDisqualified
+                  excludeTeamIds={remapTeamAId ? [remapTeamAId] : []}
+                />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Team B Slot</label>
-                <select
-                  value={remapTeamBId}
-                  onChange={(e) => setRemapTeamBId(e.target.value)}
-                  className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs"
-                >
-                  <option value="">TBD (Empty Slot)</option>
-                  {eligibleTeams.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.team_name}
-                    </option>
-                  ))}
-                </select>
+                <label htmlFor="remap-audit-reason" className="block text-xs font-semibold text-slate-700 mb-1">
+                  Mandatory Audit Reason *
+                </label>
+                <input
+                  id="remap-audit-reason"
+                  type="text"
+                  required
+                  value={remapReason}
+                  onChange={(e) => setRemapReason(e.target.value)}
+                  placeholder="e.g. Seeding remap after withdrawal"
+                  className="w-full h-9 px-3 rounded-lg border border-slate-300 text-xs"
+                />
               </div>
             </div>
           )}
@@ -798,7 +887,7 @@ export function DisputesAndCorrectionsSection({
           <div className="flex justify-end">
             <button
               type="submit"
-              disabled={!remapMatchId || remapping || !canEditEsports}
+              disabled={!remapMatchId || remapping || !canEditEsports || remapReason.trim().length < 3}
               className="min-h-[38px] px-4 rounded-lg bg-[#0B1120] hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer"
             >
               {remapping ? "Remapping..." : "Save Matchup Remap"}
@@ -843,7 +932,7 @@ export function DisputesAndCorrectionsSection({
                     <tbody className="divide-y divide-slate-100">
                       {resBrRows.map((row) => (
                         <tr key={row.team_id}>
-                          <td className="py-1.5 px-3 font-medium">{row.team_name}</td>
+                          <td className="py-1.5 px-3 font-medium">{resolveLiveTeamName(row.team_id, row.team_name, teamMap)}</td>
                           <td className="py-1.5 px-3">
                             <input
                               type="number"

@@ -8,6 +8,8 @@ import {
   calculateGroupStandings,
   canTeamEnterTournament,
   confirmAndAdvanceMatchResult,
+  isCancelledBracketMatch,
+  resolveMatchSlotDisplay,
 } from "@/lib/tournamentEngine";
 import { formatIstDateTime, isMatchScheduled } from "@/lib/scheduling";
 import { formatMatchDatabaseError, MATCH_STATUS_LABELS } from "@/lib/matchOperations";
@@ -47,10 +49,19 @@ import { TournamentSetupWizardBar } from "@/components/admin/esports/TournamentS
 import { ConnectedBracketCanvas } from "@/components/esports/ConnectedBracketCanvas";
 import { BattleRoyaleControlPanel } from "@/components/admin/esports/BattleRoyaleControlPanel";
 import { MatchOperationDrawer } from "@/components/admin/esports/MatchOperationDrawer";
+import { DisqualificationImpactBanner } from "@/components/admin/esports/DisqualificationImpactBanner";
+import {
+  canPerformFixtureCorrection,
+  canPerformTeamRenameOrDisqualify,
+  isConductorOnlyRole,
+  runTournamentIntegrityAudit,
+} from "@/lib/esportsFixtureCorrections";
+import { callSetEsportsTeamDisqualificationRpc } from "@/lib/esportsFixtureRpc";
 import {
   AlertTriangle,
   CalendarClock,
   CheckCircle2,
+  Edit3,
   ExternalLink,
   Gamepad2,
   GitBranch,
@@ -59,6 +70,7 @@ import {
   Play,
   RefreshCw,
   Settings2,
+  ShieldCheck,
   Trophy,
   Users,
   X,
@@ -97,10 +109,12 @@ export default function AdminEsportsControl() {
   const canEditEsports = hasPermission(["esports:edit", "tournament:build_bracket"]);
   const canManageSetup = hasPermission(["tournament:manage_games", "tournament:build_bracket", "esports:edit"]);
   const canSelectTeams = hasPermission(["tournament:select_teams", "esports:approve", "esports:edit"]);
+  const canApproveEsports = hasPermission(["esports:approve", "esports:edit"]);
   const canAssignConductors = hasPermission(["tournament:assign_conductors", "esports:edit"]);
   const canConfirmResults = hasPermission(["tournament:confirm_results", "esports:edit"]);
   const canResolveDisputes = hasPermission(["tournament:resolve_disputes", "esports:edit"]);
-  const canRejectEsports = hasPermission("esports:reject");
+  const canRejectEsports = hasPermission(["esports:reject", "esports:edit"]);
+  const canPublishFixtures = canManageSetup || canConfirmResults || canEditEsports;
 
   const [activeSection, setActiveSection] = useState<EsportsSectionId>("overview");
   const [matchesViewMode, setMatchesViewMode] = useState<MatchesViewMode>("bracket");
@@ -121,17 +135,37 @@ export default function AdminEsportsControl() {
   const [migrationPendingNotice, setMigrationPendingNotice] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  const canEditFixtureTeams = useMemo(
+    () => canPerformFixtureCorrection(permissions) && !isConductorOnlyRole(permissions),
+    [permissions]
+  );
+  const canModifyTeamStatus = useMemo(
+    () => canPerformTeamRenameOrDisqualify(permissions) && !isConductorOnlyRole(permissions),
+    [permissions]
+  );
+
   // Slide-over Match Operation Drawer target
   const [drawerMatchId, setDrawerMatchId] = useState<string | null>(null);
+  const [drawerInitialTab, setDrawerInitialTab] = useState<"operations" | "edit_teams">("operations");
+
+  const openMatchEditor = useCallback(
+    (match: Match, focusTab: "operations" | "edit_teams" = "operations") => {
+      setDrawerInitialTab(focusTab === "edit_teams" && canEditFixtureTeams ? "edit_teams" : "operations");
+      setDrawerMatchId(match.id);
+    },
+    [canEditFixtureTeams]
+  );
 
   // Quick list filters inside Tournament & Matches
   const [matchSearch, setMatchSearch] = useState("");
   const [matchStatusFilter, setMatchStatusFilter] = useState("all");
 
-  // Disqualification modal state
+  // Disqualification & reinstatement modal / impact banner state
   const [disqualifyTarget, setDisqualifyTarget] = useState<Registration | null>(null);
   const [disqualifyReason, setDisqualifyReason] = useState("");
   const [savingDisqualify, setSavingDisqualify] = useState(false);
+  const [recentDisqualifiedTeamId, setRecentDisqualifiedTeamId] = useState<string | null>(null);
+  const [reinstatingTeamId, setReinstatingTeamId] = useState<string | null>(null);
 
   const fetchData = useCallback(async (feedbackMsg?: string) => {
     try {
@@ -156,7 +190,7 @@ export default function AdminEsportsControl() {
         supabase
           .from("user_roles")
           .select("user_id, role")
-          .in("role", ["match_conductor", "esports_manager", "crm_admin", "super_admin"]),
+          .in("role", ["match_conductor", "esports_manager", "score_operator", "crm_admin", "event_admin", "super_admin"]),
         supabase.from("profiles").select("id, email, full_name, account_status"),
         supabase.from("match_result_history").select("*").order("created_at", { ascending: false }).limit(120),
         supabase
@@ -233,6 +267,80 @@ export default function AdminEsportsControl() {
       setLoading(false);
     }
   }, []);
+
+  /**
+   * Targeted incremental refresh: patches only affected match / registration rows
+   * without triggering full-page loading skeletons or resetting scroll/open panels.
+   */
+  const refreshTargetedRecords = useCallback(
+    async (opts: { matchIds?: string[]; registrationIds?: string[]; message?: string }) => {
+      try {
+        const tasks: Promise<void>[] = [];
+
+        if (opts.matchIds && opts.matchIds.length > 0) {
+          tasks.push(
+            (async () => {
+              const { data: mRows, error } = await supabase
+                .from("matches")
+                .select("*")
+                .in("id", opts.matchIds!);
+              if (!error && Array.isArray(mRows)) {
+                const byId = new Map((mRows as Match[]).map((m) => [m.id, m]));
+                setMatches((prev) => prev.map((m) => byId.get(m.id) || m));
+              }
+            })()
+          );
+        } else if (selectedGameId) {
+          tasks.push(
+            (async () => {
+              const { data: mRows, error } = await supabase
+                .from("matches")
+                .select("*")
+                .eq("game_id", selectedGameId)
+                .order("round_number", { ascending: true })
+                .order("match_number", { ascending: true });
+              if (!error && Array.isArray(mRows)) {
+                const patched = (mRows as Match[]).filter((m) => !m.game_id || m.game_id === selectedGameId);
+                setMatches((prev) => {
+                  const merged = new Map<string, Match>();
+                  for (const m of prev) {
+                    if (m.game_id !== selectedGameId) merged.set(m.id, m);
+                  }
+                  for (const m of patched) {
+                    merged.set(m.id, m);
+                  }
+                  return Array.from(merged.values());
+                });
+              }
+            })()
+          );
+        }
+
+        if (opts.registrationIds && opts.registrationIds.length > 0) {
+          tasks.push(
+            (async () => {
+              const { data: rRows, error } = await supabase
+                .from("registrations")
+                .select("*")
+                .in("id", opts.registrationIds!);
+              if (!error && Array.isArray(rRows)) {
+                const byId = new Map((rRows as Registration[]).map((r) => [r.id, r]));
+                setTeams((prev) => prev.map((t) => byId.get(t.id) || t));
+              }
+            })()
+          );
+        }
+
+        await Promise.all(tasks);
+        if (opts.message) {
+          setStatusMsg({ type: "success", text: opts.message });
+        }
+      } catch (err: any) {
+        setStatusMsg({ type: "error", text: `Partial sync failed: ${err?.message || "Unexpected error"}` });
+      }
+    },
+    [selectedGameId]
+  );
 
   const { connectionState, lastEventTime } = useRealtimeSubscription(
     [
@@ -334,18 +442,37 @@ export default function AdminEsportsControl() {
     return disputes.filter((d) => d.status !== "resolved" && ids.has(d.match_id)).length;
   }, [disputes, sharedData.matches]);
 
-  const liveOrConfirmCount = useMemo(
-    () => sharedData.matches.filter((m) => m.status === "live" || m.status === "result_submitted").length,
+  const activeGameMatches = useMemo(
+    () => sharedData.matches.filter((m) => !isCancelledBracketMatch(m)),
     [sharedData.matches]
+  );
+
+  const liveOrConfirmCount = useMemo(
+    () => activeGameMatches.filter((m) => m.status === "live" || m.status === "result_submitted").length,
+    [activeGameMatches]
   );
 
   const filteredListMatches = useMemo(() => {
     const q = matchSearch.trim().toLowerCase();
     return sharedData.matches.filter((m) => {
-      if (matchStatusFilter !== "all" && m.status !== matchStatusFilter) return false;
+      if (matchStatusFilter === "all") {
+        if (isCancelledBracketMatch(m)) return false;
+      } else if (m.status !== matchStatusFilter) {
+        return false;
+      }
       if (!q) return true;
-      const tA = teamNameById.get(m.team_a_id || "") || "";
-      const tB = teamNameById.get(m.team_b_id || "") || "";
+      const tA = resolveMatchSlotDisplay({
+        match: m,
+        slot: "a",
+        allMatches: sharedData.matches,
+        teamNameById,
+      }).label;
+      const tB = resolveMatchSlotDisplay({
+        match: m,
+        slot: "b",
+        allMatches: sharedData.matches,
+        teamNameById,
+      }).label;
       return (
         (m.match_code || "").toLowerCase().includes(q) ||
         (m.round || "").toLowerCase().includes(q) ||
@@ -371,32 +498,96 @@ export default function AdminEsportsControl() {
     );
   }, [sharedData, rules]);
 
+  const integrityAudit = useMemo(() => {
+    if (!selectedGame) return null;
+    return runTournamentIntegrityAudit({
+      game: selectedGame,
+      tournament: sharedData.tournament,
+      matches: sharedData.matches,
+      teams: sharedData.allGameTeams,
+    });
+  }, [selectedGame, sharedData.tournament, sharedData.matches, sharedData.allGameTeams]);
+
+  const recentDisqualifiedTeam = useMemo(() => {
+    if (!recentDisqualifiedTeamId) return null;
+    const found = sharedData.allGameTeams.find(
+      (t) => t.id === recentDisqualifiedTeamId && t.selection_status === "disqualified"
+    );
+    return found || null;
+  }, [recentDisqualifiedTeamId, sharedData.allGameTeams]);
+
   const handleConfirmDisqualify = async (e: FormEvent) => {
     e.preventDefault();
-    if (!disqualifyTarget || !canRejectEsports) return;
-    if (disqualifyReason.trim().length < 4) {
-      setStatusMsg({ type: "error", text: "Disqualification reason must be at least 4 characters." });
+    if (!disqualifyTarget || !canModifyTeamStatus || savingDisqualify) return;
+    if (disqualifyReason.trim().length < 3) {
+      setStatusMsg({ type: "error", text: "Disqualification reason must be at least 3 characters." });
       return;
     }
 
     setSavingDisqualify(true);
     try {
-      const { error } = await supabase
-        .from("registrations")
-        .update({
-          selection_status: "disqualified",
-          rejection_reason: disqualifyReason.trim(),
-        })
-        .eq("id", disqualifyTarget.id);
-      if (error) throw error;
+      const rpcRes = await callSetEsportsTeamDisqualificationRpc({
+        registrationId: disqualifyTarget.id,
+        currentSelectionStatus: disqualifyTarget.selection_status,
+        disqualified: true,
+        reason: disqualifyReason.trim(),
+      });
+      if (!rpcRes.ok) {
+        setStatusMsg({ type: "error", text: rpcRes.error || "Disqualification failed." });
+        return;
+      }
 
+      const targetId = disqualifyTarget.id;
+      const targetName = disqualifyTarget.team_name;
+      const reasonSaved = disqualifyReason.trim();
+      setTeams((prev) =>
+        prev.map((t) =>
+          t.id === targetId
+            ? { ...t, selection_status: "disqualified", selection_reason: reasonSaved }
+            : t
+        )
+      );
+      setRecentDisqualifiedTeamId(targetId);
       setDisqualifyTarget(null);
       setDisqualifyReason("");
-      await fetchData(`Disqualified squad ${disqualifyTarget.team_name}.`);
-    } catch (err: any) {
-      setStatusMsg({ type: "error", text: `Disqualification failed: ${err?.message || "Database error"}` });
+      await refreshTargetedRecords({
+        registrationIds: [targetId],
+        message: `Disqualified squad ${targetName}. Review affected fixtures below.`,
+      });
     } finally {
       setSavingDisqualify(false);
+    }
+  };
+
+  const handleQuickReinstate = async (team: Registration) => {
+    if (!canModifyTeamStatus || reinstatingTeamId === team.id) return;
+    setReinstatingTeamId(team.id);
+    try {
+      const rpcRes = await callSetEsportsTeamDisqualificationRpc({
+        registrationId: team.id,
+        currentSelectionStatus: team.selection_status,
+        disqualified: false,
+        reason: `Reinstated ${team.team_name} via Esports Control Centre`,
+        restoreStatus: "selected",
+      });
+      if (!rpcRes.ok) {
+        setStatusMsg({ type: "error", text: rpcRes.error || "Reinstatement failed." });
+        return;
+      }
+      setTeams((prev) =>
+        prev.map((t) =>
+          t.id === team.id ? { ...t, selection_status: "selected", selection_reason: null } : t
+        )
+      );
+      if (recentDisqualifiedTeamId === team.id) {
+        setRecentDisqualifiedTeamId(null);
+      }
+      await refreshTargetedRecords({
+        registrationIds: [team.id],
+        message: `Reinstated ${team.team_name} to Selected for Bracket status.`,
+      });
+    } finally {
+      setReinstatingTeamId(null);
     }
   };
 
@@ -416,7 +607,7 @@ export default function AdminEsportsControl() {
       overrideBrResults: m.br_results || undefined,
     });
     if (!check.ok) {
-      setDrawerMatchId(m.id);
+      openMatchEditor(m, "operations");
       return;
     }
 
@@ -430,6 +621,12 @@ export default function AdminEsportsControl() {
         p_notes: m.notes || null,
       });
       if (rpcRes.error) {
+        const isMissingFn =
+          rpcRes.error.code === "PGRST202" ||
+          String(rpcRes.error.message || "").includes("Could not find the function");
+        if (!isMissingFn) {
+          throw rpcRes.error;
+        }
         await supabase
           .from("matches")
           .update({
@@ -491,7 +688,9 @@ export default function AdminEsportsControl() {
           {games.map((g) => {
             const active = g.id === selectedGameId;
             const gTeamCount = teams.filter((t) => t.game_id === g.id && t.status === "confirmed").length;
-            const gMatchCount = matches.filter((m) => m.game_id === g.id && m.match_format !== "BYE").length;
+            const gMatchCount = matches.filter(
+              (m) => m.game_id === g.id && !isCancelledBracketMatch(m) && m.match_format !== "BYE"
+            ).length;
             return (
               <button
                 key={g.id}
@@ -599,6 +798,23 @@ export default function AdminEsportsControl() {
         </div>
       ) : (
         <>
+          {recentDisqualifiedTeam && selectedGame && (
+            <DisqualificationImpactBanner
+              team={recentDisqualifiedTeam}
+              gameId={selectedGame.id}
+              matches={sharedData.matches}
+              allGameTeams={sharedData.allGameTeams}
+              teamMap={teamMap}
+              canEdit={canEditFixtureTeams || canModifyTeamStatus}
+              reinstating={reinstatingTeamId === recentDisqualifiedTeam.id}
+              onReinstate={handleQuickReinstate}
+              onOpenResolveForfeit={(m) => openMatchEditor(m, "operations")}
+              onPartialRefresh={refreshTargetedRecords}
+              onError={(msg) => setStatusMsg({ type: "error", text: msg })}
+              onDismiss={() => setRecentDisqualifiedTeamId(null)}
+            />
+          )}
+
           {/* SECTION 1: OVERVIEW */}
           {activeSection === "overview" && (
             <div className="space-y-5">
@@ -607,10 +823,53 @@ export default function AdminEsportsControl() {
                 canManageSetup={canManageSetup}
                 canCreateMatch={canCreateMatch}
                 canConfirmResults={canConfirmResults}
+                canPublishFixtures={canPublishFixtures}
                 onRefresh={(msg) => fetchData(msg)}
                 onError={(msg) => setStatusMsg({ type: "error", text: msg })}
                 onNavigate={setActiveSection}
               />
+
+              {integrityAudit && (integrityAudit.criticalCount > 0 || integrityAudit.warningCount > 0) && (
+                <div
+                  data-testid="tournament-integrity-audit-alert"
+                  className={`rounded-xl border p-4 space-y-2 text-xs ${
+                    integrityAudit.criticalCount > 0
+                      ? "bg-amber-50/90 border-amber-300 text-amber-950"
+                      : "bg-slate-50 border-slate-200 text-slate-800"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold">
+                      <ShieldCheck size={15} className="text-amber-700 shrink-0" />
+                      <span>
+                        Tournament Integrity Audit — {selectedGame.title}: {integrityAudit.criticalCount} critical,{" "}
+                        {integrityAudit.warningCount} warning(s)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveSection("settings");
+                        setSettingsSubTab("disputes_history");
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-xs font-semibold text-slate-800 hover:bg-slate-50 cursor-pointer"
+                    >
+                      Inspect Full Audit
+                    </button>
+                  </div>
+                  <ul className="m-0 pl-4 space-y-1 text-slate-700">
+                    {integrityAudit.findings.slice(0, 4).map((f) => (
+                      <li key={f.id}>
+                        <strong className={f.severity === "critical" ? "text-rose-800" : "text-slate-900"}>
+                          {f.title}:
+                        </strong>{" "}
+                        {f.detail}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <TournamentOverviewSection data={sharedData} onNavigate={setActiveSection} />
             </div>
           )}
@@ -621,13 +880,19 @@ export default function AdminEsportsControl() {
               data={sharedData}
               canEditEsports={canEditEsports}
               canSelectTeams={canSelectTeams}
+              canApproveEsports={canApproveEsports}
               canRejectEsports={canRejectEsports}
+              canModifyTeams={canModifyTeamStatus}
+              reinstatingTeamId={reinstatingTeamId}
               onRefresh={(msg) => fetchData(msg)}
+              onPartialRefresh={refreshTargetedRecords}
               onError={(msg) => setStatusMsg({ type: "error", text: msg })}
               onDisqualify={(team) => {
                 setDisqualifyTarget(team);
                 setDisqualifyReason("");
               }}
+              onReinstate={handleQuickReinstate}
+              onOpenMatchEditor={(m) => openMatchEditor(m, "edit_teams")}
             />
           )}
 
@@ -639,6 +904,7 @@ export default function AdminEsportsControl() {
                 canManageSetup={canManageSetup}
                 canCreateMatch={canCreateMatch}
                 canConfirmResults={canConfirmResults}
+                canPublishFixtures={canPublishFixtures}
                 onRefresh={(msg) => fetchData(msg)}
                 onError={(msg) => setStatusMsg({ type: "error", text: msg })}
                 onNavigate={setActiveSection}
@@ -653,8 +919,11 @@ export default function AdminEsportsControl() {
                     canCreateMatch={canCreateMatch}
                     canEditEsports={canEditEsports}
                     canConfirmResults={canConfirmResults}
-                    onSelectMatchForDrawer={(m) => setDrawerMatchId(m.id)}
+                    canEditFixtureTeams={canEditFixtureTeams}
+                    onSelectMatchForDrawer={(m) => openMatchEditor(m, "operations")}
+                    onEditMatch={(m) => openMatchEditor(m, "edit_teams")}
                     onRefresh={(msg) => fetchData(msg)}
+                    onPartialRefresh={refreshTargetedRecords}
                     onError={(msg) => setStatusMsg({ type: "error", text: msg })}
                   />
 
@@ -675,7 +944,9 @@ export default function AdminEsportsControl() {
                   {showSchedulerPanel && (
                     <MatchSchedulingSection
                       data={sharedData}
-                      canEditEsports={canEditEsports}
+                      canEditEsports={canEditEsports || canManageSetup || canAssignConductors}
+                      canEditMatch={canEditFixtureTeams}
+                      onEditMatch={(m) => openMatchEditor(m, "edit_teams")}
                       onRefresh={(msg) => fetchData(msg)}
                       onError={(msg) => setStatusMsg({ type: "error", text: msg })}
                     />
@@ -708,12 +979,12 @@ export default function AdminEsportsControl() {
                         }`}
                       >
                         <List size={13} />
-                        <span>Match List &amp; IST Schedule ({sharedData.matches.length})</span>
+                        <span>Match List &amp; IST Schedule ({activeGameMatches.length})</span>
                       </button>
                     </div>
 
                     <div className="text-xs text-slate-500">
-                      Click any match card or row to check in squads, enter scores, confirm winners, or correct results.
+                      Click any match card or use <strong>Edit Match</strong> to change teams, swap slots, edit scores, schedule, or conductor.
                     </div>
                   </div>
 
@@ -726,7 +997,9 @@ export default function AdminEsportsControl() {
                         format={sharedData.tournament.format}
                         interactive
                         selectedMatchId={drawerMatchId}
-                        onSelectMatch={(m) => setDrawerMatchId(m.id)}
+                        onSelectMatch={(m) => openMatchEditor(m, "operations")}
+                        canEditMatch={canEditFixtureTeams}
+                        onEditMatch={(m) => openMatchEditor(m, "edit_teams")}
                         title={`${selectedGame.title} Bracket`}
                       />
 
@@ -798,7 +1071,7 @@ export default function AdminEsportsControl() {
                               onChange={(e) => setMatchStatusFilter(e.target.value)}
                               className="h-8 px-2 rounded-lg border border-slate-300 bg-white"
                             >
-                              <option value="all">All Statuses</option>
+                              <option value="all">All Active Statuses</option>
                               <option value="upcoming">Upcoming</option>
                               <option value="scheduled">Scheduled</option>
                               <option value="ready">Ready</option>
@@ -806,6 +1079,7 @@ export default function AdminEsportsControl() {
                               <option value="result_submitted">Submitted</option>
                               <option value="completed">Completed</option>
                               <option value="disputed">Disputed</option>
+                              <option value="cancelled">Cancelled</option>
                             </select>
                           </div>
                         </div>
@@ -824,17 +1098,33 @@ export default function AdminEsportsControl() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                              {filteredListMatches.map((m) => (
+                              {filteredListMatches.map((m) => {
+                                const slotA = resolveMatchSlotDisplay({
+                                  match: m,
+                                  slot: "a",
+                                  allMatches: sharedData.matches,
+                                  teamNameById,
+                                });
+                                const slotB = resolveMatchSlotDisplay({
+                                  match: m,
+                                  slot: "b",
+                                  allMatches: sharedData.matches,
+                                  teamNameById,
+                                });
+                                return (
                                 <tr key={m.id} className="hover:bg-slate-50">
                                   <td className="py-2.5 pr-3 font-mono font-bold text-slate-900 whitespace-nowrap">
                                     {m.match_code || `M${m.match_number ?? 1}`}
                                   </td>
                                   <td className="py-2.5 pr-3 text-slate-600 whitespace-nowrap">{m.round}</td>
                                   <td className="py-2.5 pr-3 font-semibold text-slate-900">
-                                    {teamNameById.get(m.team_a_id || "") || "TBD"} vs{" "}
-                                    {m.match_format === "BYE"
-                                      ? "BYE"
-                                      : teamNameById.get(m.team_b_id || "") || "TBD"}
+                                    <span className={slotA.isPlaceholder ? "italic font-normal text-slate-500" : ""}>
+                                      {slotA.label}
+                                    </span>{" "}
+                                    <span className="text-slate-400 font-normal">vs</span>{" "}
+                                    <span className={slotB.isPlaceholder ? "italic font-normal text-slate-500" : ""}>
+                                      {slotB.label}
+                                    </span>
                                   </td>
                                   <td className="py-2.5 pr-3 font-mono tabular-nums text-slate-600 whitespace-nowrap">
                                     {isMatchScheduled(m) ? formatIstDateTime(m.scheduled_start) : "Unscheduled"}
@@ -846,16 +1136,30 @@ export default function AdminEsportsControl() {
                                     {MATCH_STATUS_LABELS[m.status] || m.status}
                                   </td>
                                   <td className="py-2.5 text-right whitespace-nowrap">
-                                    <button
-                                      type="button"
-                                      onClick={() => setDrawerMatchId(m.id)}
-                                      className="px-3 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 cursor-pointer"
-                                    >
-                                      Manage
-                                    </button>
+                                    <div className="inline-flex items-center gap-1.5">
+                                      {canEditFixtureTeams && (
+                                        <button
+                                          type="button"
+                                          aria-label={`Edit Match ${m.match_code || m.round}`}
+                                          onClick={() => openMatchEditor(m, "edit_teams")}
+                                          className="min-h-[32px] px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-xs font-semibold text-blue-900 inline-flex items-center gap-1 cursor-pointer"
+                                        >
+                                          <Edit3 size={12} />
+                                          <span>Edit Match</span>
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => openMatchEditor(m, "operations")}
+                                        className="min-h-[32px] px-3 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 cursor-pointer"
+                                      >
+                                        Manage
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -863,7 +1167,9 @@ export default function AdminEsportsControl() {
 
                       <MatchSchedulingSection
                         data={sharedData}
-                        canEditEsports={canEditEsports}
+                        canEditEsports={canEditEsports || canManageSetup || canAssignConductors}
+                        canEditMatch={canEditFixtureTeams}
+                        onEditMatch={(m) => openMatchEditor(m, "edit_teams")}
                         onRefresh={(msg) => fetchData(msg)}
                         onError={(msg) => setStatusMsg({ type: "error", text: msg })}
                       />
@@ -900,15 +1206,37 @@ export default function AdminEsportsControl() {
                             <div className="text-xs font-bold text-slate-900 truncate mt-0.5">
                               {m.bracket_side === "battle_royale"
                                 ? `${m.round} · ${m.group_name || "BR Lobby"}`
-                                : `${teamNameById.get(m.team_a_id || "") || "TBD"} (${m.score_a}) vs (${
-                                    m.score_b
-                                  }) ${teamNameById.get(m.team_b_id || "") || "TBD"}`}
+                                : `${
+                                    resolveMatchSlotDisplay({
+                                      match: m,
+                                      slot: "a",
+                                      allMatches: sharedData.matches,
+                                      teamNameById,
+                                    }).label
+                                  } (${m.score_a}) vs (${m.score_b}) ${
+                                    resolveMatchSlotDisplay({
+                                      match: m,
+                                      slot: "b",
+                                      allMatches: sharedData.matches,
+                                      teamNameById,
+                                    }).label
+                                  }`}
                             </div>
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
+                            {canEditFixtureTeams && (
+                              <button
+                                type="button"
+                                aria-label={`Edit Match ${m.match_code || m.round}`}
+                                onClick={() => openMatchEditor(m, "edit_teams")}
+                                className="px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-xs font-semibold text-blue-900 hover:bg-blue-100 cursor-pointer"
+                              >
+                                Edit Match
+                              </button>
+                            )}
                             <button
                               type="button"
-                              onClick={() => setDrawerMatchId(m.id)}
+                              onClick={() => openMatchEditor(m, "operations")}
                               className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
                             >
                               Review
@@ -964,19 +1292,44 @@ export default function AdminEsportsControl() {
                             <div className="text-sm font-bold text-slate-900 truncate mt-1">
                               {m.bracket_side === "battle_royale"
                                 ? `${m.round} (${m.br_results?.length || 0} Squads)`
-                                : `${teamNameById.get(m.team_a_id || "") || "TBD"} ${m.score_a} : ${m.score_b} ${
-                                    teamNameById.get(m.team_b_id || "") || "TBD"
+                                : `${
+                                    resolveMatchSlotDisplay({
+                                      match: m,
+                                      slot: "a",
+                                      allMatches: sharedData.matches,
+                                      teamNameById,
+                                    }).label
+                                  } ${m.score_a} : ${m.score_b} ${
+                                    resolveMatchSlotDisplay({
+                                      match: m,
+                                      slot: "b",
+                                      allMatches: sharedData.matches,
+                                      teamNameById,
+                                    }).label
                                   }`}
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setDrawerMatchId(m.id)}
-                            className="px-3 py-2 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
-                          >
-                            <Play size={12} />
-                            <span>Score &amp; Confirm</span>
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {canEditFixtureTeams && (
+                              <button
+                                type="button"
+                                aria-label={`Edit Match ${m.match_code || m.round}`}
+                                onClick={() => openMatchEditor(m, "edit_teams")}
+                                className="px-2.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Edit3 size={12} />
+                                <span>Edit Match</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => openMatchEditor(m, "operations")}
+                              className="px-3 py-2 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                            >
+                              <Play size={12} />
+                              <span>Score &amp; Confirm</span>
+                            </button>
+                          </div>
                         </div>
                       ))}
                   </div>
@@ -991,7 +1344,9 @@ export default function AdminEsportsControl() {
                   format={sharedData.tournament.format}
                   interactive
                   selectedMatchId={drawerMatchId}
-                  onSelectMatch={(m) => setDrawerMatchId(m.id)}
+                  onSelectMatch={(m) => openMatchEditor(m, "operations")}
+                  canEditMatch={canEditFixtureTeams}
+                  onEditMatch={(m) => openMatchEditor(m, "edit_teams")}
                   title={`${selectedGame.title} Live Bracket`}
                 />
               )}
@@ -1075,6 +1430,69 @@ export default function AdminEsportsControl() {
 
               {settingsSubTab === "disputes_history" && (
                 <div className="space-y-6">
+                  {integrityAudit && (
+                    <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h3 className="text-sm font-display font-bold text-slate-900 m-0 flex items-center gap-2">
+                            <ShieldCheck size={16} className="text-slate-700" />
+                            <span>Tournament Integrity Audit — {selectedGame.title}</span>
+                          </h3>
+                          <p className="text-xs text-slate-500 m-0 mt-0.5">
+                            Format: {integrityAudit.formatLabel} · {integrityAudit.totalMatches} fixtures inspected ·{" "}
+                            <span className="font-mono">{integrityAudit.criticalCount} critical</span>,{" "}
+                            <span className="font-mono">{integrityAudit.warningCount} warning(s)</span>
+                          </p>
+                        </div>
+                        {integrityAudit.criticalCount === 0 && integrityAudit.warningCount === 0 && (
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 font-mono text-xs font-bold">
+                            ALL CHECKS CLEAN
+                          </span>
+                        )}
+                      </div>
+
+                      {integrityAudit.findings.length > 0 && (
+                        <div className="space-y-2">
+                          {integrityAudit.findings.map((f) => (
+                            <div
+                              key={f.id}
+                              className={`p-3 rounded-lg border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                                f.severity === "critical"
+                                  ? "bg-rose-50/70 border-rose-200 text-rose-950"
+                                  : "bg-amber-50/70 border-amber-200 text-amber-950"
+                              }`}
+                            >
+                              <div>
+                                <div className="font-bold">
+                                  [{f.severity.toUpperCase()}] {f.title}
+                                </div>
+                                <div className="text-slate-700 mt-0.5">{f.detail}</div>
+                                {f.category === "tournament_sync" && (
+                                  <div className="text-[11px] font-mono text-slate-600 mt-1">
+                                    Review SQL migration: supabase/migrations/20261130000000_historical_fixture_correction_review.sql
+                                  </div>
+                                )}
+                              </div>
+                              {f.matchIds && f.matchIds[0] && (
+                                <button
+                                  type="button"
+                                  aria-label={`Edit Match ${f.title}`}
+                                  onClick={() => {
+                                    const targetM = sharedData.matches.find((m) => m.id === f.matchIds![0]);
+                                    if (targetM) openMatchEditor(targetM, "edit_teams");
+                                  }}
+                                  className="min-h-[34px] px-3 rounded-lg bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-900 shrink-0 cursor-pointer"
+                                >
+                                  Edit Match
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <DisputesAndCorrectionsSection
                     data={sharedData}
                     actorUserId={user?.id || ""}
@@ -1082,6 +1500,7 @@ export default function AdminEsportsControl() {
                     canConfirmResults={canConfirmResults}
                     canResolveDisputes={canResolveDisputes}
                     canEditEsports={canEditEsports}
+                    onEditMatch={(m) => openMatchEditor(m, "edit_teams")}
                     onRefresh={(msg) => fetchData(msg)}
                     onError={(msg) => setStatusMsg({ type: "error", text: msg })}
                   />
@@ -1105,6 +1524,7 @@ export default function AdminEsportsControl() {
       {/* Slide-Over Match Operation Drawer */}
       <MatchOperationDrawer
         match={drawerMatch}
+        initialFocusTab={drawerInitialTab}
         data={sharedData}
         actorUserId={user?.id || ""}
         permissions={permissions}
@@ -1114,6 +1534,8 @@ export default function AdminEsportsControl() {
         canResolveDisputes={canResolveDisputes}
         onClose={() => setDrawerMatchId(null)}
         onRefresh={(msg) => fetchData(msg)}
+        onPartialRefresh={refreshTargetedRecords}
+        onDisqualifiedTeam={(team) => setRecentDisqualifiedTeamId(team.id)}
         onError={(msg) => setStatusMsg({ type: "error", text: msg })}
       />
 
@@ -1123,7 +1545,7 @@ export default function AdminEsportsControl() {
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
-          onClick={() => setDisqualifyTarget(null)}
+          onClick={() => !savingDisqualify && setDisqualifyTarget(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -1133,31 +1555,34 @@ export default function AdminEsportsControl() {
               Disqualify Squad — {disqualifyTarget.team_name}
             </h3>
             <p className="text-xs text-slate-600 m-0">
-              Marks this squad as disqualified and records the audit reason while preserving historical team and player records.
+              Calls production RPC <code className="font-mono">set_esports_team_disqualification</code>, updates bracket eligibility, and highlights affected upcoming matches for replacement or forfeit resolution.
             </p>
             <form onSubmit={handleConfirmDisqualify} className="space-y-3">
               <textarea
                 required
                 rows={3}
+                disabled={savingDisqualify}
                 value={disqualifyReason}
                 onChange={(e) => setDisqualifyReason(e.target.value)}
-                placeholder="Reason for disqualification (min 4 characters)..."
+                placeholder="Reason for disqualification (min 3 characters)..."
                 className="w-full p-2.5 rounded-lg border border-slate-300 text-xs"
               />
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
+                  disabled={savingDisqualify}
                   onClick={() => setDisqualifyTarget(null)}
-                  className="px-4 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 cursor-pointer"
+                  className="px-4 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={savingDisqualify}
-                  className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer"
+                  disabled={savingDisqualify || disqualifyReason.trim().length < 3}
+                  className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
                 >
-                  {savingDisqualify ? "Saving..." : "Confirm Disqualification"}
+                  {savingDisqualify && <RefreshCw size={12} className="animate-spin" />}
+                  <span>{savingDisqualify ? "Disqualifying..." : "Confirm Disqualification"}</span>
                 </button>
               </div>
             </form>

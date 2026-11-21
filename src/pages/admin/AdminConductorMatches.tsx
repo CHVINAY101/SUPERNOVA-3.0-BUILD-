@@ -7,12 +7,18 @@ import {
   authorizeConductorMatchOperation,
   calculateRoundBasedOutcome,
   escalateMatchDispute,
+  isCancelledBracketMatch,
+  resolveMatchSlotDisplay,
   submitMatchResultDraft,
   validateBattleRoyaleRows,
 } from "@/lib/tournamentEngine";
 import { formatMatchDatabaseError, MATCH_STATUS_LABELS } from "@/lib/matchOperations";
 import { formatIstDateTime, isMatchScheduled } from "@/lib/scheduling";
 import { parseTournamentScoringRules } from "@/components/admin/esports/types";
+import {
+  hydrateBrResultsWithLiveTeamNames,
+  resolveLiveTeamName,
+} from "@/lib/esportsFixtureCorrections";
 import type { BattleRoyaleTeamResult, Game, Match, MatchAttendance, Player, Registration } from "@/types/database";
 import {
   AlertOctagon,
@@ -85,6 +91,8 @@ export default function AdminConductorMatches() {
   const { connectionState, lastEventTime } = useRealtimeSubscription(
     [
       { table: "matches", onRefresh: fetchConductorData },
+      { table: "registrations", onRefresh: fetchConductorData },
+      { table: "tournaments", onRefresh: fetchConductorData },
       { table: "match_attendance", onRefresh: fetchConductorData },
       { table: "match_disputes", onRefresh: fetchConductorData },
     ],
@@ -99,7 +107,7 @@ export default function AdminConductorMatches() {
   const scopedMatches = useMemo(() => {
     if (!user) return [];
     const base = isManagerInspector ? matches : matches.filter((m) => m.conductor_id === user.id);
-    return base.filter((m) => m.match_format !== "BYE");
+    return base.filter((m) => !isCancelledBracketMatch(m) && m.match_format !== "BYE");
   }, [matches, user, isManagerInspector]);
 
   const visibleMatches = useMemo(() => {
@@ -128,6 +136,18 @@ export default function AdminConductorMatches() {
 
   const loadedMatchIdRef = useRef<string | null>(null);
 
+  const teamMap = useMemo(() => {
+    const map = new Map<string, Registration>();
+    teams.forEach((t) => map.set(t.id, t));
+    return map;
+  }, [teams]);
+
+  const teamNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    teams.forEach((t) => map.set(t.id, t.team_name));
+    return map;
+  }, [teams]);
+
   useEffect(() => {
     if (!activeMatch) {
       loadedMatchIdRef.current = null;
@@ -146,9 +166,14 @@ export default function AdminConductorMatches() {
     if (isBr) {
       const existing =
         Array.isArray(activeMatch.br_results) && activeMatch.br_results.length > 0
-          ? activeMatch.br_results
+          ? hydrateBrResultsWithLiveTeamNames(activeMatch.br_results, teamMap)
           : teams
-              .filter((t) => t.game_id === activeMatch.game_id && t.status === "confirmed")
+              .filter(
+                (t) =>
+                  t.game_id === activeMatch.game_id &&
+                  t.status === "confirmed" &&
+                  t.selection_status !== "disqualified"
+              )
               .map((t) => ({
                 team_id: t.id,
                 team_name: t.team_name,
@@ -164,13 +189,24 @@ export default function AdminConductorMatches() {
     } else {
       setDraftBrRows([]);
     }
-  }, [activeMatch, teams]);
+  }, [activeMatch, teams, teamMap]);
 
-  const teamMap = useMemo(() => {
-    const map = new Map<string, Registration>();
-    teams.forEach((t) => map.set(t.id, t));
-    return map;
-  }, [teams]);
+  // Keep draft BR squad names synchronized with live registrations without wiping conductor-entered scores
+  useEffect(() => {
+    setDraftBrRows((prev) => {
+      if (prev.length === 0) return prev;
+      let changed = false;
+      const synced = prev.map((row) => {
+        const live = teamMap.get(row.team_id);
+        if (live && live.team_name && live.team_name !== row.team_name) {
+          changed = true;
+          return { ...row, team_name: live.team_name };
+        }
+        return row;
+      });
+      return changed ? synced : prev;
+    });
+  }, [teamMap]);
 
   const gameMap = useMemo(() => {
     const map = new Map<string, Game>();
@@ -498,8 +534,18 @@ export default function AdminConductorMatches() {
           {/* Left: Assigned Match Queue */}
           <div className="lg:col-span-5 space-y-2.5">
             {visibleMatches.map((m) => {
-              const teamA = teamMap.get(m.team_a_id || "");
-              const teamB = teamMap.get(m.team_b_id || "");
+              const slotA = resolveMatchSlotDisplay({
+                match: m,
+                slot: "a",
+                allMatches: matches,
+                teamNameById,
+              });
+              const slotB = resolveMatchSlotDisplay({
+                match: m,
+                slot: "b",
+                allMatches: matches,
+                teamNameById,
+              });
               const game = gameMap.get(m.game_id || "");
               const isActive = activeMatch?.id === m.id;
               const isBr = m.bracket_side === "battle_royale" || (m.match_format || "").toUpperCase().includes("BR");
@@ -540,11 +586,21 @@ export default function AdminConductorMatches() {
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-2 text-sm font-bold text-slate-900">
-                      <span className="truncate">{teamA?.team_name || "TBD"}</span>
+                      <span
+                        title={slotA.label}
+                        className={`truncate ${slotA.isPlaceholder ? "italic font-medium text-slate-600" : ""}`}
+                      >
+                        {slotA.label}
+                      </span>
                       <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 shrink-0 tabular-nums">
                         {m.score_a} : {m.score_b}
                       </span>
-                      <span className="truncate text-right">{teamB?.team_name || "TBD"}</span>
+                      <span
+                        title={slotB.label}
+                        className={`truncate text-right ${slotB.isPlaceholder ? "italic font-medium text-slate-600" : ""}`}
+                      >
+                        {slotB.label}
+                      </span>
                     </div>
                   )}
 
@@ -576,8 +632,20 @@ export default function AdminConductorMatches() {
                   <h2 className="text-lg font-display font-bold text-slate-900 m-0 mt-0.5">
                     {activeMatchIsBr
                       ? `${activeMatch.round} — ${activeMatch.group_name || "BR Lobby"}`
-                      : `${teamMap.get(activeMatch.team_a_id || "")?.team_name || "TBD"} vs ${
-                          teamMap.get(activeMatch.team_b_id || "")?.team_name || "TBD"
+                      : `${
+                          resolveMatchSlotDisplay({
+                            match: activeMatch,
+                            slot: "a",
+                            allMatches: matches,
+                            teamNameById,
+                          }).label
+                        } vs ${
+                          resolveMatchSlotDisplay({
+                            match: activeMatch,
+                            slot: "b",
+                            allMatches: matches,
+                            teamNameById,
+                          }).label
                         }`}
                   </h2>
                   <p className="text-[11px] font-mono text-slate-500 mt-0.5 m-0">
@@ -630,12 +698,17 @@ export default function AdminConductorMatches() {
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {[activeMatch.team_a_id, activeMatch.team_b_id].map((tid, idx) => {
-                      const team = tid ? teamMap.get(tid) : null;
+                      const slotName = resolveMatchSlotDisplay({
+                        match: activeMatch,
+                        slot: idx === 0 ? "a" : "b",
+                        allMatches: matches,
+                        teamNameById,
+                      }).label;
                       const roster = tid ? players.filter((p) => p.registration_id === tid) : [];
                       return (
                         <div key={idx} className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
                           <div className="text-xs font-bold text-slate-900">
-                            {team?.team_name || (idx === 0 ? "Team A TBD" : "Team B TBD")}
+                            {slotName}
                           </div>
                           {roster.length === 0 ? (
                             <p className="text-[11px] text-slate-500 m-0">No players registered.</p>
@@ -704,17 +777,18 @@ export default function AdminConductorMatches() {
                           {draftBrRows.map((row) => {
                             const isDup = brValidation.duplicateTeamIds.has(row.team_id);
                             const isMissing = brValidation.missingTeamIds.has(row.team_id);
+                            const liveName = resolveLiveTeamName(row.team_id, row.team_name, teamMap);
                             return (
                               <tr key={row.team_id} className={isDup ? "bg-rose-50/60" : ""}>
                                 <td className="py-2 px-3 font-semibold text-slate-900">
-                                  {row.team_name || teamMap.get(row.team_id)?.team_name || row.team_id}
+                                  {liveName}
                                 </td>
                                 <td className="py-1.5 px-3">
                                   <input
                                     type="number"
                                     min={1}
                                     disabled={activeMatch.status === "completed"}
-                                    aria-label={`Placement for ${row.team_name || teamMap.get(row.team_id)?.team_name || row.team_id}`}
+                                    aria-label={`Placement for ${liveName}`}
                                     value={row.placement ?? ""}
                                     placeholder="—"
                                     onChange={(e) => updateConductorBrRow(row.team_id, "placement", e.target.value)}
@@ -732,7 +806,7 @@ export default function AdminConductorMatches() {
                                     type="number"
                                     min={0}
                                     disabled={activeMatch.status === "completed"}
-                                    aria-label={`Kills for ${row.team_name || teamMap.get(row.team_id)?.team_name || row.team_id}`}
+                                    aria-label={`Kills for ${liveName}`}
                                     value={row.kills}
                                     onChange={(e) => updateConductorBrRow(row.team_id, "kills", e.target.value)}
                                     className="w-16 h-8 px-2 rounded border border-slate-300 font-mono text-center tabular-nums"
@@ -752,7 +826,15 @@ export default function AdminConductorMatches() {
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
                     <div>
                       <label htmlFor="cond-score-a" className="block text-xs font-bold text-slate-700 mb-1">
-                        {teamMap.get(activeMatch.team_a_id || "")?.team_name || "Team A"} Score
+                        {
+                          resolveMatchSlotDisplay({
+                            match: activeMatch,
+                            slot: "a",
+                            allMatches: matches,
+                            teamNameById,
+                          }).label
+                        }{" "}
+                        Score
                       </label>
                       <input
                         id="cond-score-a"
@@ -766,7 +848,15 @@ export default function AdminConductorMatches() {
                     </div>
                     <div>
                       <label htmlFor="cond-score-b" className="block text-xs font-bold text-slate-700 mb-1">
-                        {teamMap.get(activeMatch.team_b_id || "")?.team_name || "Team B"} Score
+                        {
+                          resolveMatchSlotDisplay({
+                            match: activeMatch,
+                            slot: "b",
+                            allMatches: matches,
+                            teamNameById,
+                          }).label
+                        }{" "}
+                        Score
                       </label>
                       <input
                         id="cond-score-b"

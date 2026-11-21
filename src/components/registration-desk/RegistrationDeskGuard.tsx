@@ -1,14 +1,37 @@
+import { useEffect } from "react";
 import { Navigate, useLocation, Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { isMisconfigured } from "@/lib/supabase";
 import { canAccessRegistrationDesk } from "@/lib/registrationDesk";
 import { isGateOnlyRole } from "@/lib/gatePortal";
-import { getRoleLabel } from "@/lib/rbac";
-import { ShieldAlert, ServerOff, LogOut, Lock, ArrowRight } from "lucide-react";
+import { getRoleLabel, normalizeRole } from "@/lib/rbac";
+import { ServerOff, LogOut, Lock, ArrowRight } from "lucide-react";
 
 export function RegistrationDeskGuard({ children }: { children: React.ReactNode }) {
-  const { session, loading, role, accountStatus, signOut, refreshRole } = useAuth();
+  const { session, loading, isAdmin, isStaff, isActive, role, accountStatus, signOut } = useAuth();
   const location = useLocation();
+
+  const canonicalRole = normalizeRole(role);
+  const isValidStaffSession = Boolean(
+    session &&
+      isAdmin &&
+      isStaff &&
+      isActive &&
+      accountStatus === "active" &&
+      canonicalRole !== null
+  );
+  const isValidInvitedStaff = Boolean(
+    session &&
+      isStaff &&
+      accountStatus === "invited" &&
+      canonicalRole !== null
+  );
+
+  useEffect(() => {
+    if (!loading && session && !isValidStaffSession && !isValidInvitedStaff) {
+      void signOut();
+    }
+  }, [loading, session, isValidStaffSession, isValidInvitedStaff, signOut]);
 
   if (isMisconfigured) {
     return (
@@ -54,52 +77,14 @@ export function RegistrationDeskGuard({ children }: { children: React.ReactNode 
     return <Navigate to="/registration-desk/login" state={{ from: location }} replace />;
   }
 
-  if (accountStatus === "invited") {
+  if (isValidInvitedStaff) {
     return (
       <Navigate to="/registration-desk/login?type=invite" state={{ from: location }} replace />
     );
   }
 
-  if (accountStatus !== "active") {
-    const isBlockedStatus = accountStatus === "deactivated" || accountStatus === "revoked";
-    return (
-      <div className="flex justify-center items-center min-h-screen bg-[#F8FAFC] p-6">
-        <div className="max-w-md w-full text-center p-8 bg-white rounded-2xl border border-slate-200">
-          <div className="inline-flex p-3.5 rounded-xl bg-rose-50 text-rose-600 mb-4 border border-rose-200">
-            <ShieldAlert size={32} />
-          </div>
-          <h2 className="text-xl font-display font-bold text-slate-900 mb-2">
-            {isBlockedStatus ? "Registration Desk Access Suspended" : "Account Inactive"}
-          </h2>
-          <p className="text-sm text-slate-600 leading-relaxed mb-4">
-            Signed in as <strong className="text-slate-900">{session.user.email}</strong>.
-          </p>
-          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3.5 mb-6 text-rose-800 text-xs font-medium leading-relaxed">
-            {isBlockedStatus
-              ? `Your staff account status is "${accountStatus}". Please contact a Super Admin to restore access.`
-              : "Your account does not currently hold an active Registration Desk role."}
-          </div>
-          <div className="flex flex-col gap-2.5">
-            <button
-              type="button"
-              onClick={() => refreshRole()}
-              className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors cursor-pointer"
-            >
-              Recheck Access Status
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                await signOut();
-              }}
-              className="w-full py-2.5 px-4 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs transition-colors cursor-pointer inline-flex items-center justify-center gap-2"
-            >
-              <LogOut size={14} /> Sign Out
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  if (!isValidStaffSession) {
+    return <Navigate to="/" replace />;
   }
 
   if (isGateOnlyRole(role)) {

@@ -11,6 +11,7 @@ import {
   toIstDateInput,
   toIstTimeInput,
 } from "@/lib/scheduling";
+import { isCancelledBracketMatch, resolveMatchSlotDisplay } from "@/lib/tournamentEngine";
 import { formatMatchDatabaseError } from "@/lib/matchOperations";
 import type { EsportsWorkspaceSharedData } from "./types";
 import type { Match } from "@/types/database";
@@ -20,6 +21,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock,
+  Edit3,
   MapPin,
   Search,
   ShieldAlert,
@@ -30,6 +32,8 @@ import {
 interface SchedulingProps {
   data: EsportsWorkspaceSharedData;
   canEditEsports: boolean;
+  canEditMatch?: boolean;
+  onEditMatch?: (match: Match) => void;
   onRefresh: (msg?: string) => Promise<void>;
   onError: (msg: string) => void;
 }
@@ -37,10 +41,16 @@ interface SchedulingProps {
 export function MatchSchedulingSection({
   data,
   canEditEsports,
+  canEditMatch,
+  onEditMatch,
   onRefresh,
   onError,
 }: SchedulingProps) {
   const { selectedGame, matches, allMatches, selectedTeams, conductors, teamMap, tournament } = data;
+  const teamNameById = useMemo(
+    () => new Map(Array.from(teamMap.entries()).map(([id, team]) => [id, team.team_name])),
+    [teamMap]
+  );
 
   const [viewMode, setViewMode] = useState<"calendar" | "unscheduled">("calendar");
   const [roundFilter, setRoundFilter] = useState("all");
@@ -83,14 +93,14 @@ export function MatchSchedulingSection({
   const scheduledMatches = useMemo(
     () =>
       matches
-        .filter((m) => isMatchScheduled(m))
+        .filter((m) => !isCancelledBracketMatch(m) && isMatchScheduled(m))
         .sort((a, b) => (a.scheduled_start || "").localeCompare(b.scheduled_start || "")),
     [matches]
   );
 
   const roundOptions = useMemo(() => {
     const s = new Set<string>();
-    matches.forEach((m) => m.round && s.add(m.round));
+    matches.filter((m) => !isCancelledBracketMatch(m)).forEach((m) => m.round && s.add(m.round));
     return Array.from(s);
   }, [matches]);
 
@@ -100,6 +110,7 @@ export function MatchSchedulingSection({
 
     return base.filter((m) => {
       if (m.match_format === "BYE") return false;
+      if (statusFilter === "all" && isCancelledBracketMatch(m)) return false;
       if (roundFilter !== "all" && m.round !== roundFilter) return false;
       if (statusFilter !== "all" && m.status !== statusFilter) return false;
       if (teamFilter !== "all") {
@@ -108,14 +119,14 @@ export function MatchSchedulingSection({
       }
       if (q) {
         const code = (m.match_code || "").toLowerCase();
-        const tA = (teamMap.get(m.team_a_id || "")?.team_name || "").toLowerCase();
-        const tB = (teamMap.get(m.team_b_id || "")?.team_name || "").toLowerCase();
+        const tA = resolveMatchSlotDisplay({ match: m, slot: "a", allMatches: matches, teamNameById }).label.toLowerCase();
+        const tB = resolveMatchSlotDisplay({ match: m, slot: "b", allMatches: matches, teamNameById }).label.toLowerCase();
         const rnd = (m.round || "").toLowerCase();
         if (!code.includes(q) && !tA.includes(q) && !tB.includes(q) && !rnd.includes(q)) return false;
       }
       return true;
     });
-  }, [viewMode, unscheduledMatches, matches, roundFilter, statusFilter, teamFilter, searchQuery, teamMap]);
+  }, [viewMode, unscheduledMatches, matches, roundFilter, statusFilter, teamFilter, searchQuery, teamNameById]);
 
   // Group scheduled matches by IST day for Calendar view
   const calendarDays = useMemo(() => {
@@ -394,6 +405,7 @@ export function MatchSchedulingSection({
             <option value="ready">Ready</option>
             <option value="live">Live</option>
             <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
           </select>
         </div>
       </div>
@@ -422,23 +434,44 @@ export function MatchSchedulingSection({
                     <div className="text-xs font-bold text-slate-900 mt-0.5 truncate">
                       {m.bracket_side === "battle_royale"
                         ? `BR Lobby (${m.br_results?.length || 0} squads)`
-                        : `${teamMap.get(m.team_a_id || "")?.team_name || "TBD"} vs ${
-                            teamMap.get(m.team_b_id || "")?.team_name || "TBD"
-                          }`}
+                        : `${resolveMatchSlotDisplay({
+                            match: m,
+                            slot: "a",
+                            allMatches: matches,
+                            teamNameById,
+                          }).label} vs ${resolveMatchSlotDisplay({
+                            match: m,
+                            slot: "b",
+                            allMatches: matches,
+                            teamNameById,
+                          }).label}`}
                     </div>
                     <div className="text-[11px] text-slate-500 mt-0.5">
                       Duration: {m.duration_minutes || 30} min · Format: {m.match_format || "BO1"}
                     </div>
                   </div>
-                  {canEditEsports && (
-                    <button
-                      type="button"
-                      onClick={() => openScheduleModal(m)}
-                      className="min-h-[36px] px-3.5 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer shrink-0 whitespace-nowrap"
-                    >
-                      Assign IST Slot
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {(canEditMatch ?? canEditEsports) && onEditMatch && (
+                      <button
+                        type="button"
+                        aria-label={`Edit Match ${m.match_code || m.round}`}
+                        onClick={() => onEditMatch(m)}
+                        className="min-h-[36px] px-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-900 inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        <Edit3 size={12} />
+                        <span>Edit Match</span>
+                      </button>
+                    )}
+                    {canEditEsports && (
+                      <button
+                        type="button"
+                        onClick={() => openScheduleModal(m)}
+                        className="min-h-[36px] px-3.5 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
+                      >
+                        Assign IST Slot
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -488,9 +521,17 @@ export function MatchSchedulingSection({
                             <div className="text-xs font-bold text-slate-900 mt-0.5 truncate">
                               {isBr
                                 ? `BR Lobby (${m.br_results?.length || 0} teams)`
-                                : `${teamMap.get(m.team_a_id || "")?.team_name || "TBD"} vs ${
-                                    teamMap.get(m.team_b_id || "")?.team_name || "TBD"
-                                  }`}
+                                : `${resolveMatchSlotDisplay({
+                                    match: m,
+                                    slot: "a",
+                                    allMatches: matches,
+                                    teamNameById,
+                                  }).label} vs ${resolveMatchSlotDisplay({
+                                    match: m,
+                                    slot: "b",
+                                    allMatches: matches,
+                                    teamNameById,
+                                  }).label}`}
                             </div>
                             <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-0.5 flex-wrap">
                               {m.station && (
@@ -506,8 +547,19 @@ export function MatchSchedulingSection({
                           </div>
                         </div>
 
-                        {canEditEsports && (
-                          <div className="flex items-center gap-2 shrink-0">
+                        {(canEditEsports || canEditMatch) && (
+                          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                            {(canEditMatch ?? canEditEsports) && onEditMatch && (
+                              <button
+                                type="button"
+                                aria-label={`Edit Match ${m.match_code || m.round}`}
+                                onClick={() => onEditMatch(m)}
+                                className="px-3 py-1.5 rounded-lg bg-[#0B1120] hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Edit3 size={12} />
+                                <span>Edit Match</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => openScheduleModal(m)}
@@ -556,9 +608,17 @@ export function MatchSchedulingSection({
                 <p className="text-xs text-slate-500 m-0 mt-0.5">
                   {editingMatch.bracket_side === "battle_royale"
                     ? `BR Lobby (${editingMatch.br_results?.length || 0} squads)`
-                    : `${teamMap.get(editingMatch.team_a_id || "")?.team_name || "TBD"} vs ${
-                        teamMap.get(editingMatch.team_b_id || "")?.team_name || "TBD"
-                      }`}
+                    : `${resolveMatchSlotDisplay({
+                        match: editingMatch,
+                        slot: "a",
+                        allMatches: matches,
+                        teamNameById,
+                      }).label} vs ${resolveMatchSlotDisplay({
+                        match: editingMatch,
+                        slot: "b",
+                        allMatches: matches,
+                        teamNameById,
+                      }).label}`}
                 </p>
               </div>
               <button type="button" onClick={() => setEditingMatch(null)} className="p-1 cursor-pointer">

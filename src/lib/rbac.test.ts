@@ -575,4 +575,37 @@ describe("CRM Role-Based Access Control (RBAC) Security Matrix", () => {
     assert.equal(adminPerms.has("email_centre:send" as any), false);
     assert.equal(canAccessAdminRoute("/admin/crm-emails", adminPerms, "active"), false);
   });
+
+  it("CRM Admin (crm_admin / event_admin) and Esports Coordinator (esports_manager / score_operator) access operational routes & game registration controls", () => {
+    for (const roleName of ["crm_admin", "event_admin"] as const) {
+      const perms = resolveEffectivePermissions(roleName, "active");
+      assert.equal(canAccessAdminRoute("/admin", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/visitor-registrations", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/esports-registrations", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/esports-control", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/registration-controls", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/games", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/checkin", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/users", perms, "active"), false);
+    }
+
+    for (const coordRole of ["esports_manager", "score_operator"] as const) {
+      const perms = resolveEffectivePermissions(coordRole, "active");
+      assert.equal(canAccessAdminRoute("/admin", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/esports-control", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/esports-registrations", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/games", perms, "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/registration-controls", perms, "active"), true);
+      assert.equal(hasCrmPermission(perms, "esports:approve", "active"), true);
+      assert.equal(hasCrmPermission(perms, "esports:reject", "active"), true);
+      assert.equal(hasCrmPermission(perms, "esports:edit", "active"), true);
+      assert.equal(hasCrmPermission(perms, "tournament:manage_games", "active"), true);
+      assert.equal(hasCrmPermission(perms, "tournament:select_teams", "active"), true);
+      assert.equal(hasCrmPermission(perms, "tournament:build_bracket", "active"), true);
+      assert.equal(hasCrmPermission(perms, "tournament:assign_conductors", "active"), true);
+      assert.equal(hasCrmPermission(perms, "tournament:confirm_results", "active"), true);
+      assert.equal(hasCrmPermission(perms, "tournament:resolve_disputes", "active"), true);
+      assert.equal(canAccessAdminRoute("/admin/users", perms, "active"), false);
+    }
+  });
 });

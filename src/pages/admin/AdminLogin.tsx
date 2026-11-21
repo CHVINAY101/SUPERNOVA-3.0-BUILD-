@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Navigate, useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth, type AuthErrorCategory } from "@/lib/auth";
+import { normalizeRole } from "@/lib/rbac";
 import { resolvePostLoginRoute } from "@/lib/registrationDesk";
 import { StaffPortalSwitcher } from "@/components/auth/StaffPortalSwitcher";
 import {
@@ -250,7 +251,19 @@ function logAuthDiagnosticToConsole(diag: AuthDiagnostic) {
 }
 
 export default function AdminLogin() {
-  const { session, isAdmin, role, permissions, accountStatus, loading: authLoading, signIn, refreshRole } = useAuth();
+  const {
+    session,
+    isAdmin,
+    isStaff,
+    isActive,
+    role,
+    permissions,
+    accountStatus,
+    loading: authLoading,
+    signIn,
+    signOut,
+    refreshRole,
+  } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -267,8 +280,24 @@ export default function AdminLogin() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  // Detect invitation / password recovery flow from URL or invited session
+  // Detect invitation / password recovery flow from URL or valid invited staff session
   const [isInviteFlow, setIsInviteFlow] = useState(false);
+
+  const canonicalRole = normalizeRole(role);
+  const isValidStaffSession = Boolean(
+    session &&
+      isAdmin &&
+      isStaff &&
+      isActive &&
+      accountStatus === "active" &&
+      canonicalRole !== null
+  );
+  const isValidInvitedStaff = Boolean(
+    session &&
+      isStaff &&
+      accountStatus === "invited" &&
+      canonicalRole !== null
+  );
 
   useEffect(() => {
     const hash = window.location.hash || "";
@@ -279,10 +308,19 @@ export default function AdminLogin() {
       hash.includes("type=recovery") ||
       search.includes("type=recovery");
 
-    if (isInviteParam || (session && accountStatus === "invited")) {
+    if (isValidInvitedStaff || (isInviteParam && (!session || (isStaff && canonicalRole !== null)))) {
       setIsInviteFlow(true);
+    } else if (!session) {
+      setIsInviteFlow(false);
     }
-  }, [session, accountStatus]);
+  }, [session, isValidInvitedStaff, isStaff, canonicalRole]);
+
+  useEffect(() => {
+    if (!authLoading && session && !isValidStaffSession && !isValidInvitedStaff) {
+      void signOut();
+      navigate("/", { replace: true });
+    }
+  }, [authLoading, session, isValidStaffSession, isValidInvitedStaff, signOut, navigate]);
 
   const [diagnostic, setDiagnostic] = useState<AuthDiagnostic | null>(null);
   const [showTechDetails, setShowTechDetails] = useState(false);
@@ -299,8 +337,12 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
 
-  // Already active authenticated admin -> redirect to role-appropriate workspace
-  if (!authLoading && session && isAdmin && accountStatus === "active" && !isInviteFlow) {
+  if (!authLoading && session && !isValidStaffSession && !isValidInvitedStaff) {
+    return <Navigate to="/" replace />;
+  }
+
+  // Already active authenticated staff -> redirect to role-appropriate workspace
+  if (!authLoading && isValidStaffSession && !isInviteFlow) {
     const requestedFrom = (location.state as { from?: { pathname: string } })?.from?.pathname;
     const dest = resolvePostLoginRoute({
       portal: "admin",
@@ -378,12 +420,29 @@ export default function AdminLogin() {
       }
 
       const refreshed = await refreshRole();
+      if (!refreshed?.isAdmin || !refreshed?.isStaff || !refreshed?.isActive || !refreshed?.canonicalRole) {
+        await signOut();
+        setIsInviteFlow(false);
+        setLoading(false);
+        if (refreshed?.shouldRedirectToPublic) {
+          navigate("/", { replace: true });
+          return;
+        }
+        setDiagnostic(
+          classifyAuthError(
+            "Staff portal access is not active for this account.",
+            refreshed?.errorCategory || "unauthorized_role"
+          )
+        );
+        return;
+      }
+
       setIsInviteFlow(false);
       setLoading(false);
       const dest = resolvePostLoginRoute({
         portal: "admin",
-        role: refreshed?.role ?? role,
-        permissions: refreshed?.permissions ?? permissions,
+        role: refreshed.role ?? role,
+        permissions: refreshed.permissions ?? permissions,
       });
       navigate(dest, { replace: true });
     } catch (err: any) {
@@ -412,6 +471,10 @@ export default function AdminLogin() {
     setLoading(false);
 
     if (result.error) {
+      if (result.shouldRedirectToPublic) {
+        navigate("/", { replace: true });
+        return;
+      }
       const diag = classifyAuthError(result.rawError || result.error, result.errorCategory);
       setDiagnostic(diag);
       logAuthDiagnosticToConsole(diag);

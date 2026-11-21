@@ -4,33 +4,60 @@ import {
   confirmAndAdvanceMatchResult,
   escalateMatchDispute,
   findDependentDownstreamMatches,
+  isCancelledBracketMatch,
+  normalizeBracketSlot,
   resolveMatchDispute,
+  resolveMatchSlotDisplay,
   undoMatchResultAndRewind,
 } from "@/lib/tournamentEngine";
 import { formatMatchDatabaseError, MATCH_STATUS_LABELS } from "@/lib/matchOperations";
 import { formatIstDateTime, isMatchScheduled, istInputsToIso } from "@/lib/scheduling";
 import type { PermissionKey } from "@/lib/rbac";
+import {
+  buildSupervisedCorrectionAnalysis,
+  canPerformFixtureCorrection,
+  canPerformTeamRenameOrDisqualify,
+  collectDownstreamChain,
+  isConductorOnlyRole,
+  isHistoricalFixture,
+  type SupervisedCorrectionAnalysis,
+} from "@/lib/esportsFixtureCorrections";
+import {
+  callPreviewEsportsFixtureCorrectionRpc,
+  callRenameEsportsTeamRpc,
+  callReplaceEsportsFixtureTeamRpc,
+  callSetEsportsTeamDisqualificationRpc,
+  callSwapEsportsFixtureSlotsRpc,
+} from "@/lib/esportsFixtureRpc";
+import { SearchableTeamSelect } from "./SearchableTeamSelect";
+import { SupervisedHistoricalCorrectionModal } from "./SupervisedHistoricalCorrectionModal";
 import { isBattleRoyaleTournament, type EsportsWorkspaceSharedData } from "./types";
-import type { Match, MatchAttendance, MatchStatus } from "@/types/database";
+import type { Match, MatchAttendance, MatchStatus, Registration } from "@/types/database";
 import {
   AlertOctagon,
   AlertTriangle,
+  ArrowLeftRight,
   CalendarClock,
   CheckCircle2,
+  Edit3,
   Eye,
   EyeOff,
   Play,
+  RefreshCw,
   RotateCcw,
   Save,
   Send,
   ShieldAlert,
+  ShieldOff,
   Trophy,
+  UserCog,
   Users,
   X,
 } from "lucide-react";
 
 interface MatchOperationDrawerProps {
   match: Match | null;
+  initialFocusTab?: "operations" | "edit_teams";
   data: EsportsWorkspaceSharedData;
   actorUserId: string;
   permissions: Set<PermissionKey>;
@@ -40,6 +67,12 @@ interface MatchOperationDrawerProps {
   canResolveDisputes: boolean;
   onClose: () => void;
   onRefresh: (msg?: string) => Promise<void>;
+  onPartialRefresh?: (opts: {
+    matchIds?: string[];
+    registrationIds?: string[];
+    message?: string;
+  }) => Promise<void>;
+  onDisqualifiedTeam?: (team: Registration) => void;
   onError: (msg: string) => void;
 }
 
@@ -55,6 +88,7 @@ function isoToIstDateAndTime(iso: string | null | undefined): { date: string; ti
 
 export function MatchOperationDrawer({
   match,
+  initialFocusTab = "operations",
   data,
   actorUserId,
   permissions,
@@ -64,9 +98,11 @@ export function MatchOperationDrawer({
   canResolveDisputes,
   onClose,
   onRefresh,
+  onPartialRefresh,
+  onDisqualifiedTeam,
   onError,
 }: MatchOperationDrawerProps) {
-  const { selectedGame, tournament, hasPersistedTournament, players, matches, disputes, conductors, teamMap } = data;
+  const { selectedGame, tournament, hasPersistedTournament, players, matches, disputes, conductors, teamMap, allGameTeams } = data;
 
   const [attendance, setAttendance] = useState<MatchAttendance[]>([]);
   const [scoreA, setScoreA] = useState<number>(0);
@@ -91,8 +127,44 @@ export function MatchOperationDrawer({
   const [disputeOpen, setDisputeOpen] = useState<boolean>(false);
   const [disputeReason, setDisputeReason] = useState<string>("");
 
+  // Team & Fixture Correction Studio state (never available to pure Match Conductors)
+  const [correctionOpen, setCorrectionOpen] = useState<boolean>(initialFocusTab === "edit_teams");
+  const [correctionMode, setCorrectionMode] = useState<"replace" | "rename" | "swap" | "status">("replace");
+  const [editTeamAId, setEditTeamAId] = useState<string | null>(null);
+  const [editTeamBId, setEditTeamBId] = useState<string | null>(null);
+  const [correctionReason, setCorrectionReason] = useState<string>("");
+
+  // Rename state
+  const [renameTargetTeamId, setRenameTargetTeamId] = useState<string>("");
+  const [renameNewName, setRenameNewName] = useState<string>("");
+
+  // Cross-match swap state
+  const [swapSourceSlot, setSwapSourceSlot] = useState<"a" | "b">("a");
+  const [swapTargetMatchId, setSwapTargetMatchId] = useState<string>("");
+  const [swapTargetSlot, setSwapTargetSlot] = useState<"a" | "b">("a");
+
+  // Quick DQ / Reinstate inside drawer
+  const [dqActionReason, setDqActionReason] = useState<string>("");
+  const [dqBusyTeamId, setDqBusyTeamId] = useState<string | null>(null);
+
+  // Supervised historical preview modal state
+  const [supervisedModalOpen, setSupervisedModalOpen] = useState<boolean>(false);
+  const [supervisedAnalysis, setSupervisedAnalysis] = useState<SupervisedCorrectionAnalysis | null>(null);
+  const [supervisedTitle, setSupervisedTitle] = useState<string>("");
+  const [supervisedDescription, setSupervisedDescription] = useState<string>("");
+  const [supervisedPreviewLoading, setSupervisedPreviewLoading] = useState<boolean>(false);
+  const [supervisedPreviewError, setSupervisedPreviewError] = useState<string | null>(null);
+  const [supervisedRejectionError, setSupervisedRejectionError] = useState<string | null>(null);
+  const [supervisedNeedsReviewSql, setSupervisedNeedsReviewSql] = useState<boolean>(false);
+  const [pendingRpcPlan, setPendingRpcPlan] = useState<{
+    kind: "replace_a" | "replace_b" | "swap";
+    targetMatch2Id?: string;
+  } | null>(null);
+
   const [busy, setBusy] = useState<boolean>(false);
 
+  const canCorrectFixtures = canPerformFixtureCorrection(permissions) && !isConductorOnlyRole(permissions);
+  const canModifyTeamStatusOrName = canPerformTeamRenameOrDisqualify(permissions) && !isConductorOnlyRole(permissions);
   const isBr = Boolean(
     match &&
       (match.bracket_side === "battle_royale" ||
@@ -106,6 +178,12 @@ export function MatchOperationDrawer({
     tournament.format === "head_to_head";
 
   const loadedMatchIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (initialFocusTab === "edit_teams" && canCorrectFixtures) {
+      setCorrectionOpen(true);
+    }
+  }, [initialFocusTab, match?.id, canCorrectFixtures]);
 
   useEffect(() => {
     if (!match) {
@@ -134,6 +212,20 @@ export function MatchOperationDrawer({
     setDisputeOpen(false);
     setDisputeReason("");
 
+    setEditTeamAId(match.team_a_id || null);
+    setEditTeamBId(match.team_b_id || null);
+    setCorrectionReason("");
+    const firstTeamId = match.team_a_id || match.team_b_id || (Array.isArray(match.br_results) ? match.br_results[0]?.team_id || "" : "");
+    setRenameTargetTeamId(firstTeamId);
+    setRenameNewName(firstTeamId ? teamMap.get(firstTeamId)?.team_name || "" : "");
+    setSwapSourceSlot("a");
+    setSwapTargetMatchId("");
+    setSwapTargetSlot("a");
+    setDqActionReason("");
+    setSupervisedModalOpen(false);
+    setSupervisedRejectionError(null);
+    setSupervisedNeedsReviewSql(false);
+
     supabase
       .from("match_attendance")
       .select("*")
@@ -141,7 +233,7 @@ export function MatchOperationDrawer({
       .then(({ data: rows }) => {
         if (Array.isArray(rows)) setAttendance(rows as MatchAttendance[]);
       });
-  }, [match, supportsDraw]);
+  }, [match, supportsDraw, teamMap]);
 
   useEffect(() => {
     if (!match) return;
@@ -162,10 +254,302 @@ export function MatchOperationDrawer({
     return disputes.filter((d) => d.match_id === match.id && d.status !== "resolved");
   }, [disputes, match]);
 
+  const historicalFixture = useMemo(() => {
+    if (!match) return false;
+    return isHistoricalFixture(match, matches, attendance.length);
+  }, [match, matches, attendance.length]);
+
+  const participatingTeams = useMemo(() => {
+    if (!match) return [] as Registration[];
+    const ids = new Set<string>();
+    if (match.team_a_id) ids.add(match.team_a_id);
+    if (match.team_b_id) ids.add(match.team_b_id);
+    if (Array.isArray(match.br_results)) {
+      match.br_results.forEach((r) => r.team_id && ids.add(r.team_id));
+    }
+    return Array.from(ids)
+      .map((id) => teamMap.get(id))
+      .filter((t): t is Registration => Boolean(t));
+  }, [match, teamMap]);
+
+  const teamNameById = useMemo(
+    () => new Map(Array.from(teamMap.entries()).map(([id, team]) => [id, team.team_name])),
+    [teamMap]
+  );
+
+  const otherGameH2hMatches = useMemo(() => {
+    if (!match) return [] as Match[];
+    return matches.filter(
+      (m) =>
+        !isCancelledBracketMatch(m) &&
+        m.game_id === match.game_id &&
+        m.bracket_side !== "battle_royale" &&
+        m.match_format !== "BYE"
+    );
+  }, [matches, match]);
+
   if (!match) return null;
 
   const teamA = match.team_a_id ? teamMap.get(match.team_a_id) : null;
   const teamB = match.team_b_id ? teamMap.get(match.team_b_id) : null;
+  const slotADisplay = resolveMatchSlotDisplay({ match, slot: "a", allMatches: matches, teamNameById }).label;
+  const slotBDisplay = resolveMatchSlotDisplay({ match, slot: "b", allMatches: matches, teamNameById }).label;
+
+  const triggerSync = async (opts: {
+    matchIds?: string[];
+    registrationIds?: string[];
+    message: string;
+  }) => {
+    if (onPartialRefresh) {
+      await onPartialRefresh(opts);
+    } else {
+      await onRefresh(opts.message);
+    }
+  };
+
+  const executeReplaceSlot = async (slot: "a" | "b", reasonText: string): Promise<boolean> => {
+    const expectedTeamId = slot === "a" ? match.team_a_id : match.team_b_id;
+    const replacementTeamId = slot === "a" ? editTeamAId : editTeamBId;
+    const otherSlotTeamId = slot === "a" ? match.team_b_id : match.team_a_id;
+    const res = await callReplaceEsportsFixtureTeamRpc({
+      matchId: match.id,
+      slot,
+      expectedTeamId,
+      replacementTeamId,
+      otherSlotTeamId,
+      reason: reasonText,
+    });
+    if (!res.ok) {
+      if (supervisedModalOpen) {
+        setSupervisedRejectionError(res.error || "Failed to replace fixture slot.");
+        setSupervisedNeedsReviewSql(Boolean(res.requiresManualReviewSql));
+      } else {
+        onError(res.error || "Failed to replace fixture slot.");
+      }
+      return false;
+    }
+    setSupervisedModalOpen(false);
+    setCorrectionReason("");
+    await triggerSync({
+      matchIds: [match.id, ...(match.next_match_id ? [match.next_match_id] : [])],
+      message: `Updated ${match.match_code || match.round} Slot ${slot.toUpperCase()} cleanly.`,
+    });
+    return true;
+  };
+
+  const executeSwapSlots = async (reasonText: string): Promise<boolean> => {
+    const targetM2 = matches.find((m) => m.id === swapTargetMatchId);
+    if (!targetM2) {
+      onError("Select a target fixture to swap with.");
+      return false;
+    }
+    const exp1 = swapSourceSlot === "a" ? match.team_a_id : match.team_b_id;
+    const exp2 = swapTargetSlot === "a" ? targetM2.team_a_id : targetM2.team_b_id;
+    const res = await callSwapEsportsFixtureSlotsRpc({
+      match1Id: match.id,
+      slot1: swapSourceSlot,
+      expectedTeam1Id: exp1,
+      match2Id: targetM2.id,
+      slot2: swapTargetSlot,
+      expectedTeam2Id: exp2,
+      reason: reasonText,
+    });
+    if (!res.ok) {
+      if (supervisedModalOpen) {
+        setSupervisedRejectionError(res.error || "Failed to swap fixture slots.");
+        setSupervisedNeedsReviewSql(Boolean(res.requiresManualReviewSql));
+      } else {
+        onError(res.error || "Failed to swap fixture slots.");
+      }
+      return false;
+    }
+    setSupervisedModalOpen(false);
+    setCorrectionReason("");
+    await triggerSync({
+      matchIds: [match.id, targetM2.id],
+      message: `Swapped teams between ${match.match_code || match.round} (${swapSourceSlot.toUpperCase()}) and ${targetM2.match_code || targetM2.round} (${swapTargetSlot.toUpperCase()}).`,
+    });
+    return true;
+  };
+
+  const launchCorrectionOrSupervisedPreview = async (
+    kind: "replace_a" | "replace_b" | "swap"
+  ) => {
+    if (!canCorrectFixtures) return;
+    if (correctionReason.trim().length < 3) {
+      onError("Enter an audit reason (min 3 characters) before modifying fixture teams.");
+      return;
+    }
+
+    const targetM2 = kind === "swap" ? matches.find((m) => m.id === swapTargetMatchId) : undefined;
+    const needsSupervision =
+      historicalFixture ||
+      (targetM2 ? isHistoricalFixture(targetM2, matches) : false);
+
+    if (!needsSupervision) {
+      setBusy(true);
+      try {
+        if (kind === "replace_a") await executeReplaceSlot("a", correctionReason);
+        else if (kind === "replace_b") await executeReplaceSlot("b", correctionReason);
+        else await executeSwapSlots(correctionReason);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    // Open Supervised Historical Correction preview modal and query preview_esports_fixture_correction
+    const downstreamIds = collectDownstreamChain(match, matches).map((d) => d.match.id);
+    const previewIds = Array.from(
+      new Set([
+        match.id,
+        ...downstreamIds,
+        ...(targetM2 ? [targetM2.id, ...collectDownstreamChain(targetM2, matches).map((d) => d.match.id)] : []),
+      ])
+    );
+
+    const proposedA =
+      kind === "replace_a"
+        ? editTeamAId
+        : kind === "swap" && swapSourceSlot === "a" && targetM2
+        ? swapTargetSlot === "a"
+          ? targetM2.team_a_id
+          : targetM2.team_b_id
+        : match.team_a_id;
+    const proposedB =
+      kind === "replace_b"
+        ? editTeamBId
+        : kind === "swap" && swapSourceSlot === "b" && targetM2
+        ? swapTargetSlot === "a"
+          ? targetM2.team_a_id
+          : targetM2.team_b_id
+        : match.team_b_id;
+
+    setPendingRpcPlan({ kind, targetMatch2Id: targetM2?.id });
+    setSupervisedTitle(
+      kind === "swap"
+        ? `Swap Slots · ${match.match_code || match.round} ⇄ ${targetM2?.match_code || targetM2?.round || ""}`
+        : `Replace Slot ${kind === "replace_a" ? "A" : "B"} · ${match.match_code || match.round}`
+    );
+    setSupervisedDescription(
+      "This fixture already has results, attendance, BYE status, or downstream progression. Review downstream impact before committing."
+    );
+    setSupervisedRejectionError(null);
+    setSupervisedNeedsReviewSql(false);
+    setSupervisedPreviewError(null);
+    setSupervisedPreviewLoading(true);
+    setSupervisedAnalysis(
+      buildSupervisedCorrectionAnalysis({
+        targetMatch: match,
+        allGameMatches: matches,
+        teamMap,
+        proposedTeamAId: proposedA,
+        proposedTeamBId: proposedB,
+        attendanceCount: attendance.length,
+        serverPreview: null,
+      })
+    );
+    setSupervisedModalOpen(true);
+
+    const prevRes = await callPreviewEsportsFixtureCorrectionRpc(previewIds);
+    setSupervisedPreviewLoading(false);
+    if (!prevRes.ok) {
+      setSupervisedPreviewError(prevRes.error || "Could not load server impact preview.");
+    } else {
+      setSupervisedAnalysis(
+        buildSupervisedCorrectionAnalysis({
+          targetMatch: match,
+          allGameMatches: matches,
+          teamMap,
+          proposedTeamAId: proposedA,
+          proposedTeamBId: proposedB,
+          attendanceCount: attendance.length,
+          serverPreview: prevRes.data || null,
+        })
+      );
+    }
+  };
+
+  const handleConfirmSupervisedModal = async () => {
+    if (!pendingRpcPlan) return;
+    setBusy(true);
+    try {
+      if (pendingRpcPlan.kind === "replace_a") await executeReplaceSlot("a", correctionReason);
+      else if (pendingRpcPlan.kind === "replace_b") await executeReplaceSlot("b", correctionReason);
+      else await executeSwapSlots(correctionReason);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRenameSelectedTeam = async () => {
+    if (!canModifyTeamStatusOrName || !renameTargetTeamId) return;
+    const targetReg = teamMap.get(renameTargetTeamId);
+    if (!targetReg) return;
+    setBusy(true);
+    try {
+      const res = await callRenameEsportsTeamRpc({
+        registrationId: targetReg.id,
+        expectedName: targetReg.team_name,
+        newName: renameNewName,
+        reason: correctionReason,
+      });
+      if (!res.ok) {
+        onError(res.error || "Team rename failed.");
+        return;
+      }
+      setCorrectionReason("");
+      await triggerSync({
+        registrationIds: [targetReg.id],
+        message: `Renamed team "${targetReg.team_name}" to "${renameNewName.trim()}". All views updated.`,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDrawerDisqualifyOrReinstate = async (targetReg: Registration, dq: boolean) => {
+    if (!canModifyTeamStatusOrName) return;
+    if (dqActionReason.trim().length < 3) {
+      onError(
+        dq
+          ? "Enter a disqualification reason (min 3 characters)."
+          : "Enter a reinstatement reason (min 3 characters)."
+      );
+      return;
+    }
+    setDqBusyTeamId(targetReg.id);
+    try {
+      const res = await callSetEsportsTeamDisqualificationRpc({
+        registrationId: targetReg.id,
+        currentSelectionStatus: targetReg.selection_status,
+        disqualified: dq,
+        reason: dqActionReason,
+        restoreStatus: "selected",
+      });
+      if (!res.ok) {
+        onError(res.error || "Could not update team disqualification status.");
+        return;
+      }
+      setDqActionReason("");
+      const updatedReg: Registration = {
+        ...targetReg,
+        selection_status: dq ? "disqualified" : "selected",
+        selection_reason: dq ? dqActionReason.trim() : null,
+      };
+      if (dq && onDisqualifiedTeam) {
+        onDisqualifiedTeam(updatedReg);
+      }
+      await triggerSync({
+        registrationIds: [targetReg.id],
+        message: dq
+          ? `Disqualified ${targetReg.team_name}. Review affected fixtures.`
+          : `Reinstated ${targetReg.team_name} to Selected status.`,
+      });
+    } finally {
+      setDqBusyTeamId(null);
+    }
+  };
 
   const computedWinnerId = (): string | null => {
     if (forfeitTeamId) {
@@ -179,8 +563,15 @@ export function MatchOperationDrawer({
     return null;
   };
 
+  const canOperateMatch = canEditEsports || permissions.has("conductor:start_match");
+  const canVerifyMatchRoster = canEditEsports || permissions.has("conductor:verify_roster");
+  const canSubmitMatchScore =
+    canEditEsports || canConfirmResults || permissions.has("conductor:submit_result");
+  const canFlagMatchDispute =
+    canEditEsports || canResolveDisputes || permissions.has("conductor:report_dispute");
+
   const handleTransition = async (nextStatus: MatchStatus) => {
-    if (!canEditEsports) return;
+    if (!canOperateMatch) return;
     setBusy(true);
     try {
       const { error } = await supabase.from("matches").update({ status: nextStatus }).eq("id", match.id);
@@ -194,7 +585,7 @@ export function MatchOperationDrawer({
   };
 
   const handleTogglePublish = async () => {
-    if (!canEditEsports) return;
+    if (!canEditEsports && !canConfirmResults) return;
     setBusy(true);
     try {
       const nextPub = !match.is_published;
@@ -244,7 +635,7 @@ export function MatchOperationDrawer({
   };
 
   const handleToggleAttendance = async (registrationId: string, playerId: string) => {
-    if (!canEditEsports) return;
+    if (!canVerifyMatchRoster) return;
     const existing = attendance.find((a) => a.match_id === match.id && a.player_id === playerId);
     const nextPresent = !(existing?.present ?? false);
     try {
@@ -268,7 +659,7 @@ export function MatchOperationDrawer({
   };
 
   const handleSubmitResult = async () => {
-    if (!canEditEsports) return;
+    if (!canSubmitMatchScore) return;
     const winnerId = computedWinnerId();
     if (!isBr && !winnerId && !(allowDraw && supportsDraw && scoreA === scoreB)) {
       onError("Enter scores with a clear winner, select a winner, or mark Draw / Forfeit.");
@@ -359,7 +750,13 @@ export function MatchOperationDrawer({
         }
 
         if (rpcRes.error) {
-          // Client fallback if RPC absent or tournament_id missing
+          const isMissingFn =
+            rpcRes.error.code === "PGRST202" ||
+            String(rpcRes.error.message || "").includes("Could not find the function");
+          if (!isMissingFn) {
+            throw rpcRes.error;
+          }
+          // Only fallback if RPC function genuinely does not exist in DB
           const { error: mErr } = await supabase
             .from("matches")
             .update({
@@ -377,7 +774,7 @@ export function MatchOperationDrawer({
           if (mErr) throw mErr;
 
           if (match.next_match_id && winnerId) {
-            const col = match.next_match_slot === "b" ? "team_b_id" : "team_a_id";
+            const col = normalizeBracketSlot(match.next_match_slot) === "b" ? "team_b_id" : "team_a_id";
             await supabase.from("matches").update({ [col]: winnerId }).eq("id", match.next_match_id);
           }
           const loserId =
@@ -387,7 +784,7 @@ export function MatchOperationDrawer({
                 : match.team_a_id
               : null;
           if (match.loser_next_match_id && loserId) {
-            const lCol = match.loser_next_match_slot === "b" ? "team_b_id" : "team_a_id";
+            const lCol = normalizeBracketSlot(match.loser_next_match_slot) === "b" ? "team_b_id" : "team_a_id";
             await supabase.from("matches").update({ [lCol]: loserId }).eq("id", match.loser_next_match_id);
           }
         }
@@ -438,6 +835,12 @@ export function MatchOperationDrawer({
       });
 
       if (rpcRes.error) {
+        const isMissingFn =
+          rpcRes.error.code === "PGRST202" ||
+          String(rpcRes.error.message || "").includes("Could not find the function");
+        if (!isMissingFn) {
+          throw rpcRes.error;
+        }
         const { error: mErr } = await supabase
           .from("matches")
           .update({
@@ -490,6 +893,7 @@ export function MatchOperationDrawer({
   };
 
   const handleFlagDispute = async () => {
+    if (!canFlagMatchDispute) return;
     const esc = escalateMatchDispute({
       match,
       reporterUserId: actorUserId,
@@ -592,7 +996,7 @@ export function MatchOperationDrawer({
             <h2 className="text-lg font-display font-bold text-slate-900 m-0 mt-1 truncate">
               {isBr
                 ? `${match.group_name || match.round} (${match.br_results?.length || 0} Squads)`
-                : `${teamA?.team_name || "TBD"} vs ${teamB?.team_name || (match.match_format === "BYE" ? "BYE" : "TBD")}`}
+                : `${slotADisplay} vs ${slotBDisplay}`}
             </h2>
             <p className="text-xs text-slate-500 m-0 mt-0.5 font-mono tabular-nums">
               {isMatchScheduled(match) ? formatIstDateTime(match.scheduled_start) : "Unscheduled"}
@@ -613,7 +1017,7 @@ export function MatchOperationDrawer({
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {/* Quick Lifecycle & Visibility Bar */}
           <div className="flex flex-wrap items-center gap-2">
-            {canEditEsports && match.status !== "completed" && match.status !== "disputed" && (
+            {canOperateMatch && match.status !== "completed" && match.status !== "disputed" && (
               <>
                 <button
                   type="button"
@@ -643,7 +1047,7 @@ export function MatchOperationDrawer({
               </>
             )}
 
-            {canEditEsports && (
+            {(canEditEsports || canConfirmResults) && (
               <button
                 type="button"
                 disabled={busy}
@@ -655,6 +1059,408 @@ export function MatchOperationDrawer({
               </button>
             )}
           </div>
+
+          {/* Match & Team Corrections Panel (Authorized Coordinators & Admins Only — Denied to Match Conductors) */}
+          {(canCorrectFixtures || canModifyTeamStatusOrName) && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setCorrectionOpen((v) => !v)}
+                aria-expanded={correctionOpen}
+                className="w-full px-4 py-3 flex items-center justify-between gap-2 bg-white hover:bg-slate-50 border-0 border-b border-slate-200 text-left cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <UserCog size={15} className="text-slate-700 shrink-0" />
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">
+                      Edit Teams, Swap Slots, Rename &amp; Disqualify
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {historicalFixture
+                        ? "Supervised Historical Correction active (results/progression detected)"
+                        : "Live production RPC edits with mandatory audit reason"}
+                    </div>
+                  </div>
+                </div>
+                <span className="font-mono text-[11px] font-semibold text-blue-700 shrink-0">
+                  {correctionOpen ? "Hide" : "Open Editor"}
+                </span>
+              </button>
+
+              {correctionOpen && (
+                <div className="p-4 space-y-3.5 text-xs">
+                  {/* Action Mode Pills */}
+                  <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Team correction action">
+                    {!isBr && canCorrectFixtures && (
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={correctionMode === "replace"}
+                        onClick={() => setCorrectionMode("replace")}
+                        className={`min-h-[34px] px-3 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+                          correctionMode === "replace"
+                            ? "bg-[#0B1120] text-white border-[#0B1120]"
+                            : "bg-white text-slate-700 border-slate-300"
+                        }`}
+                      >
+                        <Edit3 size={12} />
+                        <span>Replace Team A / B</span>
+                      </button>
+                    )}
+                    {canModifyTeamStatusOrName && (
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={correctionMode === "rename"}
+                        onClick={() => setCorrectionMode("rename")}
+                        className={`min-h-[34px] px-3 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+                          correctionMode === "rename"
+                            ? "bg-[#0B1120] text-white border-[#0B1120]"
+                            : "bg-white text-slate-700 border-slate-300"
+                        }`}
+                      >
+                        <Edit3 size={12} />
+                        <span>Rename Team</span>
+                      </button>
+                    )}
+                    {!isBr && canCorrectFixtures && (
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={correctionMode === "swap"}
+                        onClick={() => setCorrectionMode("swap")}
+                        className={`min-h-[34px] px-3 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+                          correctionMode === "swap"
+                            ? "bg-[#0B1120] text-white border-[#0B1120]"
+                            : "bg-white text-slate-700 border-slate-300"
+                        }`}
+                      >
+                        <ArrowLeftRight size={12} />
+                        <span>Swap Between Matches</span>
+                      </button>
+                    )}
+                    {canModifyTeamStatusOrName && (
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={correctionMode === "status"}
+                        onClick={() => setCorrectionMode("status")}
+                        className={`min-h-[34px] px-3 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+                          correctionMode === "status"
+                            ? "bg-[#0B1120] text-white border-[#0B1120]"
+                            : "bg-white text-slate-700 border-slate-300"
+                        }`}
+                      >
+                        <ShieldOff size={12} />
+                        <span>Disqualify / Reinstate</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {historicalFixture && (correctionMode === "replace" || correctionMode === "swap") && (
+                    <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 flex items-start gap-2">
+                      <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-700" />
+                      <span>
+                        <strong>Supervised Historical Mode:</strong> Submitting will run{" "}
+                        <code className="font-mono">preview_esports_fixture_correction</code> first and show downstream effects before executing the RPC.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Mode 1: Replace Team A / Team B */}
+                  {correctionMode === "replace" && !isBr && canCorrectFixtures && (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <SearchableTeamSelect
+                            id="drawer-edit-team-a"
+                            label="Edit / Replace Team A"
+                            teams={allGameTeams}
+                            gameId={match.game_id || ""}
+                            value={editTeamAId}
+                            onChange={setEditTeamAId}
+                            allowTbd
+                            excludeDisqualified
+                            excludeTeamIds={editTeamBId ? [editTeamBId] : []}
+                          />
+                          <button
+                            type="button"
+                            disabled={busy || editTeamAId === (match.team_a_id || null) || correctionReason.trim().length < 3}
+                            onClick={() => void launchCorrectionOrSupervisedPreview("replace_a")}
+                            className="w-full min-h-[36px] px-3 rounded-lg bg-[#0B1120] hover:bg-slate-800 disabled:opacity-40 text-white font-semibold cursor-pointer"
+                          >
+                            {historicalFixture ? "Preview & Replace Slot A" : "Apply Slot A Team"}
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          <SearchableTeamSelect
+                            id="drawer-edit-team-b"
+                            label="Edit / Replace Team B"
+                            teams={allGameTeams}
+                            gameId={match.game_id || ""}
+                            value={editTeamBId}
+                            onChange={setEditTeamBId}
+                            allowTbd
+                            excludeDisqualified
+                            excludeTeamIds={editTeamAId ? [editTeamAId] : []}
+                          />
+                          <button
+                            type="button"
+                            disabled={busy || editTeamBId === (match.team_b_id || null) || correctionReason.trim().length < 3}
+                            onClick={() => void launchCorrectionOrSupervisedPreview("replace_b")}
+                            className="w-full min-h-[36px] px-3 rounded-lg bg-[#0B1120] hover:bg-slate-800 disabled:opacity-40 text-white font-semibold cursor-pointer"
+                          >
+                            {historicalFixture ? "Preview & Replace Slot B" : "Apply Slot B Team"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label htmlFor="drawer-replace-reason" className="block font-semibold text-slate-700 mb-1">
+                          Mandatory Audit Reason (`p_reason`) *
+                        </label>
+                        <input
+                          id="drawer-replace-reason"
+                          type="text"
+                          value={correctionReason}
+                          onChange={(e) => setCorrectionReason(e.target.value)}
+                          placeholder="e.g. Disqualified squad replaced with standby team"
+                          className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Mode 2: Rename Team */}
+                  {(correctionMode === "rename" || (isBr && correctionMode === "replace")) && canModifyTeamStatusOrName && (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="drawer-rename-target" className="block font-semibold text-slate-700 mb-1">
+                            Select Participating Team
+                          </label>
+                          <select
+                            id="drawer-rename-target"
+                            value={renameTargetTeamId}
+                            onChange={(e) => {
+                              const id = e.target.value;
+                              setRenameTargetTeamId(id);
+                              setRenameNewName(teamMap.get(id)?.team_name || "");
+                            }}
+                            className="w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white"
+                          >
+                            <option value="">Choose team...</option>
+                            {participatingTeams.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.team_name} ({t.registration_ref})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="drawer-rename-input" className="block font-semibold text-slate-700 mb-1">
+                            New Official Team Name
+                          </label>
+                          <input
+                            id="drawer-rename-input"
+                            type="text"
+                            value={renameNewName}
+                            onChange={(e) => setRenameNewName(e.target.value)}
+                            placeholder="Enter corrected squad name"
+                            className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="drawer-rename-reason" className="block font-semibold text-slate-700 mb-1">
+                          Mandatory Audit Reason (`p_reason`) *
+                        </label>
+                        <input
+                          id="drawer-rename-reason"
+                          type="text"
+                          value={correctionReason}
+                          onChange={(e) => setCorrectionReason(e.target.value)}
+                          placeholder="e.g. Captain verified tag correction at check-in"
+                          className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white"
+                        />
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          disabled={busy || !renameTargetTeamId || renameNewName.trim().length < 2 || correctionReason.trim().length < 3}
+                          onClick={handleRenameSelectedTeam}
+                          className="min-h-[36px] px-4 rounded-lg bg-[#0B1120] hover:bg-slate-800 disabled:opacity-40 text-white font-semibold cursor-pointer"
+                        >
+                          {busy ? "Renaming..." : "Rename Team Everywhere"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Mode 3: Swap Teams Between Matches */}
+                  {correctionMode === "swap" && !isBr && canCorrectFixtures && (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div>
+                          <label htmlFor="drawer-swap-slot1" className="block font-semibold text-slate-700 mb-1">
+                            From {match.match_code || match.round}
+                          </label>
+                          <select
+                            id="drawer-swap-slot1"
+                            value={swapSourceSlot}
+                            onChange={(e) => setSwapSourceSlot(e.target.value as "a" | "b")}
+                            className="w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white"
+                          >
+                            <option value="a">Slot A ({slotADisplay})</option>
+                            <option value="b">Slot B ({slotBDisplay})</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="drawer-swap-match2" className="block font-semibold text-slate-700 mb-1">
+                            With Fixture
+                          </label>
+                          <select
+                            id="drawer-swap-match2"
+                            value={swapTargetMatchId}
+                            onChange={(e) => setSwapTargetMatchId(e.target.value)}
+                            className="w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white"
+                          >
+                            <option value="">Choose fixture...</option>
+                            {otherGameH2hMatches.map((m2) => (
+                              <option key={m2.id} value={m2.id}>
+                                {m2.match_code || m2.round} ·{" "}
+                                {resolveMatchSlotDisplay({ match: m2, slot: "a", allMatches: matches, teamNameById }).label} vs{" "}
+                                {resolveMatchSlotDisplay({ match: m2, slot: "b", allMatches: matches, teamNameById }).label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="drawer-swap-slot2" className="block font-semibold text-slate-700 mb-1">
+                            Target Slot
+                          </label>
+                          <select
+                            id="drawer-swap-slot2"
+                            value={swapTargetSlot}
+                            onChange={(e) => setSwapTargetSlot(e.target.value as "a" | "b")}
+                            className="w-full h-9 px-2.5 rounded-lg border border-slate-300 bg-white"
+                          >
+                            <option value="a">
+                              Slot A (
+                              {(() => {
+                                const t = matches.find((m2) => m2.id === swapTargetMatchId);
+                                return t
+                                  ? resolveMatchSlotDisplay({ match: t, slot: "a", allMatches: matches, teamNameById }).label
+                                  : "TBD";
+                              })()}
+                              )
+                            </option>
+                            <option value="b">
+                              Slot B (
+                              {(() => {
+                                const t = matches.find((m2) => m2.id === swapTargetMatchId);
+                                return t
+                                  ? resolveMatchSlotDisplay({ match: t, slot: "b", allMatches: matches, teamNameById }).label
+                                  : "TBD";
+                              })()}
+                              )
+                            </option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="drawer-swap-reason" className="block font-semibold text-slate-700 mb-1">
+                          Mandatory Audit Reason (`p_reason`) *
+                        </label>
+                        <input
+                          id="drawer-swap-reason"
+                          type="text"
+                          value={correctionReason}
+                          onChange={(e) => setCorrectionReason(e.target.value)}
+                          placeholder="e.g. Correcting same-college first round pairing"
+                          className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white"
+                        />
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          disabled={busy || !swapTargetMatchId || correctionReason.trim().length < 3}
+                          onClick={() => void launchCorrectionOrSupervisedPreview("swap")}
+                          className="min-h-[36px] px-4 rounded-lg bg-[#0B1120] hover:bg-slate-800 disabled:opacity-40 text-white font-semibold cursor-pointer"
+                        >
+                          {historicalFixture ? "Preview & Swap Slots" : "Swap Teams Between Matches"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Mode 4: Disqualify / Reinstate Participating Teams */}
+                  {correctionMode === "status" && canModifyTeamStatusOrName && (
+                    <div className="space-y-2.5">
+                      <div>
+                        <label htmlFor="drawer-dq-reason" className="block font-semibold text-slate-700 mb-1">
+                          Disqualification / Reinstatement Reason (`p_reason`) *
+                        </label>
+                        <input
+                          id="drawer-dq-reason"
+                          type="text"
+                          value={dqActionReason}
+                          onChange={(e) => setDqActionReason(e.target.value)}
+                          placeholder="e.g. Unverified player substitution / Appeal verified"
+                          className="w-full h-9 px-3 rounded-lg border border-slate-300 bg-white"
+                        />
+                      </div>
+                      {participatingTeams.length === 0 ? (
+                        <p className="text-slate-500 m-0">No teams assigned to this fixture yet.</p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {participatingTeams.map((pt) => {
+                            const isDq = pt.selection_status === "disqualified";
+                            const isBusyHere = dqBusyTeamId === pt.id;
+                            return (
+                              <div
+                                key={pt.id}
+                                className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-white border border-slate-200"
+                              >
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-slate-900 truncate">{pt.team_name}</div>
+                                  <div className="text-[10px] font-mono text-slate-500">
+                                    {pt.registration_ref} · Status: {(pt.selection_status || "awaiting").replace(/_/g, " ")}
+                                  </div>
+                                </div>
+                                {isDq ? (
+                                  <button
+                                    type="button"
+                                    disabled={isBusyHere || dqActionReason.trim().length < 3}
+                                    onClick={() => void handleDrawerDisqualifyOrReinstate(pt, false)}
+                                    className="min-h-[34px] px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-45 text-white font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                                  >
+                                    {isBusyHere ? <RefreshCw size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                                    <span>{isBusyHere ? "Saving..." : "Reinstate Team"}</span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={isBusyHere || dqActionReason.trim().length < 3}
+                                    onClick={() => void handleDrawerDisqualifyOrReinstate(pt, true)}
+                                    className="min-h-[34px] px-3 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-45 text-white font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                                  >
+                                    {isBusyHere ? <RefreshCw size={12} className="animate-spin" /> : <ShieldOff size={12} />}
+                                    <span>{isBusyHere ? "Saving..." : "Disqualify Team"}</span>
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Open Disputes Banner */}
           {openDisputesForMatch.length > 0 && (
@@ -775,7 +1581,7 @@ export function MatchOperationDrawer({
                   return (
                     <div key={idx} className="p-3 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
                       <div className="text-xs font-bold text-slate-900 truncate">
-                        {team?.team_name || (idx === 0 ? "Slot A TBD" : "Slot B TBD")}
+                        {team?.team_name || (idx === 0 ? slotADisplay : slotBDisplay)}
                       </div>
                       {roster.length === 0 ? (
                         <p className="text-[11px] text-slate-500 m-0">No players registered.</p>
@@ -788,7 +1594,7 @@ export function MatchOperationDrawer({
                               <button
                                 key={p.id}
                                 type="button"
-                                disabled={!canEditEsports}
+                                disabled={!canVerifyMatchRoster}
                                 onClick={() => tid && handleToggleAttendance(tid, p.id)}
                                 className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer ${
                                   present
@@ -830,7 +1636,7 @@ export function MatchOperationDrawer({
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
                   <label htmlFor="drawer-score-a" className="block font-semibold text-slate-700 mb-1 truncate">
-                    {teamA?.team_name || "Team A"} Score
+                    {slotADisplay} Score
                   </label>
                   <input
                     id="drawer-score-a"
@@ -844,7 +1650,7 @@ export function MatchOperationDrawer({
                 </div>
                 <div>
                   <label htmlFor="drawer-score-b" className="block font-semibold text-slate-700 mb-1 truncate">
-                    {teamB?.team_name || "Team B"} Score
+                    {slotBDisplay} Score
                   </label>
                   <input
                     id="drawer-score-b"
@@ -935,7 +1741,7 @@ export function MatchOperationDrawer({
 
               {match.status !== "completed" && match.status !== "disputed" && (
                 <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-                  {canEditEsports && (
+                  {canSubmitMatchScore && (
                     <button
                       type="button"
                       disabled={busy}
@@ -1038,7 +1844,7 @@ export function MatchOperationDrawer({
           )}
 
           {/* Flag Dispute */}
-          {match.status !== "disputed" && (
+          {match.status !== "disputed" && canFlagMatchDispute && (
             <div className="pt-2 border-t border-slate-200 space-y-2.5">
               {!disputeOpen ? (
                 <button
@@ -1085,6 +1891,26 @@ export function MatchOperationDrawer({
           )}
         </div>
       </div>
+
+      {/* Supervised Historical Fixture Correction Preview Modal */}
+      <SupervisedHistoricalCorrectionModal
+        open={supervisedModalOpen}
+        title={supervisedTitle}
+        actionDescription={supervisedDescription}
+        analysis={supervisedAnalysis}
+        previewLoading={supervisedPreviewLoading}
+        previewError={supervisedPreviewError}
+        reason={correctionReason}
+        onReasonChange={setCorrectionReason}
+        submitting={busy}
+        rejectionError={supervisedRejectionError}
+        requiresManualReviewSql={supervisedNeedsReviewSql}
+        onCancel={() => {
+          setSupervisedModalOpen(false);
+          setSupervisedRejectionError(null);
+        }}
+        onConfirm={() => void handleConfirmSupervisedModal()}
+      />
     </div>
   );
 }

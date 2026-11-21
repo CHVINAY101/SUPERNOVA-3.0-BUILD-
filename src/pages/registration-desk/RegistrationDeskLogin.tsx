@@ -9,7 +9,7 @@ import {
 } from "@/lib/supabase";
 import { canAccessRegistrationDesk, resolvePostLoginRoute } from "@/lib/registrationDesk";
 import { isGateOnlyRole } from "@/lib/gatePortal";
-import { getRoleLabel } from "@/lib/rbac";
+import { getRoleLabel, normalizeRole } from "@/lib/rbac";
 import {
   Eye,
   EyeOff,
@@ -161,6 +161,9 @@ function classifyDeskAuthError(
 export default function RegistrationDeskLogin() {
   const {
     session,
+    isAdmin,
+    isStaff,
+    isActive,
     role,
     permissions,
     accountStatus,
@@ -187,6 +190,22 @@ export default function RegistrationDeskLogin() {
   const [testingConnection, setTestingConnection] = useState(false);
   const [pingResult, setPingResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  const canonicalRole = normalizeRole(role);
+  const isValidStaffSession = Boolean(
+    session &&
+      isAdmin &&
+      isStaff &&
+      isActive &&
+      accountStatus === "active" &&
+      canonicalRole !== null
+  );
+  const isValidInvitedStaff = Boolean(
+    session &&
+      isStaff &&
+      accountStatus === "invited" &&
+      canonicalRole !== null
+  );
+
   useEffect(() => {
     const hash = window.location.hash || "";
     const search = window.location.search || "";
@@ -196,20 +215,32 @@ export default function RegistrationDeskLogin() {
       hash.includes("type=recovery") ||
       search.includes("type=recovery");
 
-    if (isInviteParam || (session && accountStatus === "invited")) {
+    if (isValidInvitedStaff || (isInviteParam && (!session || (isStaff && canonicalRole !== null)))) {
       setIsInviteFlow(true);
+    } else if (!session) {
+      setIsInviteFlow(false);
     }
-  }, [session, accountStatus]);
+  }, [session, isValidInvitedStaff, isStaff, canonicalRole]);
+
+  useEffect(() => {
+    if (!authLoading && session && !isValidStaffSession && !isValidInvitedStaff) {
+      void signOut();
+      navigate("/", { replace: true });
+    }
+  }, [authLoading, session, isValidStaffSession, isValidInvitedStaff, signOut, navigate]);
+
+  if (!authLoading && session && !isValidStaffSession && !isValidInvitedStaff) {
+    return <Navigate to="/" replace />;
+  }
 
   // Authorized user already signed in -> redirect straight to /registration-desk
-  if (!authLoading && session && canAccessRegistrationDesk(role, accountStatus) && !isInviteFlow) {
+  if (!authLoading && isValidStaffSession && canAccessRegistrationDesk(role, accountStatus) && !isInviteFlow) {
     return <Navigate to="/registration-desk" replace />;
   }
 
   const hasNonDeskSignedInRole =
     !authLoading &&
-    Boolean(session) &&
-    accountStatus === "active" &&
+    isValidStaffSession &&
     !canAccessRegistrationDesk(role, accountStatus) &&
     !isInviteFlow;
 
@@ -254,12 +285,29 @@ export default function RegistrationDeskLogin() {
       }
 
       const refreshed = await refreshRole();
+      if (!refreshed?.isAdmin || !refreshed?.isStaff || !refreshed?.isActive || !refreshed?.canonicalRole) {
+        await signOut();
+        setIsInviteFlow(false);
+        setLoading(false);
+        if (refreshed?.shouldRedirectToPublic) {
+          navigate("/", { replace: true });
+          return;
+        }
+        setAuthError(
+          classifyDeskAuthError(
+            "Registration desk access is not active for this account.",
+            refreshed?.errorCategory || "unauthorized_role"
+          )
+        );
+        return;
+      }
+
       setIsInviteFlow(false);
       setLoading(false);
       const dest = resolvePostLoginRoute({
         portal: "registration_desk",
-        role: refreshed?.role ?? role,
-        permissions: refreshed?.permissions ?? permissions,
+        role: refreshed.role ?? role,
+        permissions: refreshed.permissions ?? permissions,
       });
       navigate(dest, { replace: true });
     } catch (err: any) {
@@ -284,6 +332,10 @@ export default function RegistrationDeskLogin() {
     setLoading(false);
 
     if (result.error) {
+      if (result.shouldRedirectToPublic) {
+        navigate("/", { replace: true });
+        return;
+      }
       setAuthError(classifyDeskAuthError(result.rawError || result.error, result.errorCategory));
     } else {
       const dest = resolvePostLoginRoute({

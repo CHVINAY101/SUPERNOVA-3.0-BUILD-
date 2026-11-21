@@ -11,11 +11,14 @@ import { formatMatchDatabaseError, MATCH_STATUS_LABELS } from "@/lib/matchOperat
 import { formatIstDateTime, isMatchScheduled, istInputsToIso } from "@/lib/scheduling";
 import type { PermissionKey } from "@/lib/rbac";
 import { parseTournamentScoringRules, type EsportsWorkspaceSharedData } from "./types";
+import { hydrateBrResultsWithLiveTeamNames, resolveLiveTeamName } from "@/lib/esportsFixtureCorrections";
+import { SearchableTeamSelect } from "./SearchableTeamSelect";
 import type { BattleRoyaleTeamResult, Match } from "@/types/database";
 import {
   AlertTriangle,
   CheckCircle2,
   Crown,
+  Edit3,
   Play,
   Plus,
   RotateCcw,
@@ -34,8 +37,11 @@ interface BattleRoyaleControlPanelProps {
   canCreateMatch: boolean;
   canEditEsports: boolean;
   canConfirmResults: boolean;
+  canEditFixtureTeams?: boolean;
   onSelectMatchForDrawer: (match: Match) => void;
+  onEditMatch?: (match: Match) => void;
   onRefresh: (msg?: string) => Promise<void>;
+  onPartialRefresh?: (opts: { matchIds?: string[]; registrationIds?: string[]; message?: string }) => Promise<void>;
   onError: (msg: string) => void;
 }
 
@@ -46,11 +52,16 @@ export function BattleRoyaleControlPanel({
   canCreateMatch,
   canEditEsports,
   canConfirmResults,
+  canEditFixtureTeams = false,
   onSelectMatchForDrawer,
+  onEditMatch,
   onRefresh,
   onError,
 }: BattleRoyaleControlPanelProps) {
-  const { selectedGame, tournament, hasPersistedTournament, approvedTeams, selectedTeams, matches, teamMap } = data;
+  const { selectedGame, tournament, hasPersistedTournament, approvedTeams, selectedTeams, allGameTeams, matches, teamMap } = data;
+  const canStartLobby = canEditEsports || permissions.has("conductor:start_match");
+  const canCheckInBr = canEditEsports || permissions.has("conductor:verify_roster");
+  const canScoreBr = canEditEsports || canConfirmResults || permissions.has("conductor:submit_result");
   const rules = useMemo(() => parseTournamentScoringRules(tournament, selectedGame), [tournament, selectedGame]);
   const roster = selectedTeams.length > 0 ? selectedTeams : approvedTeams;
 
@@ -70,6 +81,7 @@ export function BattleRoyaleControlPanel({
   const [draftRows, setDraftRows] = useState<BattleRoyaleTeamResult[]>([]);
   const [notes, setNotes] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+  const [addSquadId, setAddSquadId] = useState<string | null>(null);
 
   // Create Lobby modal
   const [createOpen, setCreateOpen] = useState<boolean>(false);
@@ -119,23 +131,45 @@ export function BattleRoyaleControlPanel({
             kill_points: 0,
             total_points: 0,
           }));
-    setDraftRows(base.map((r) => ({ ...r })));
+    setDraftRows(hydrateBrResultsWithLiveTeamNames(base, teamMap));
     setNotes(activeLobby.notes || "");
-  }, [activeLobby, roster]);
+  }, [activeLobby, roster, teamMap]);
+
+  // Keep draftRows team names synced if a live rename occurs via rename_esports_team
+  useEffect(() => {
+    setDraftRows((prev) => {
+      if (prev.length === 0) return prev;
+      let changed = false;
+      const next = prev.map((row) => {
+        const live = teamMap.get(row.team_id);
+        if (live && live.team_name && live.team_name !== row.team_name) {
+          changed = true;
+          return { ...row, team_name: live.team_name };
+        }
+        return row;
+      });
+      return changed ? next : prev;
+    });
+  }, [teamMap]);
 
   const validation = useMemo(() => validateBattleRoyaleRows(draftRows), [draftRows]);
 
   const roundLeaderboard = useMemo(() => {
-    return [...draftRows].sort((a, b) => {
-      if ((b.total_points || 0) !== (a.total_points || 0)) {
-        return (b.total_points || 0) - (a.total_points || 0);
-      }
-      const pA = a.placement ?? 999;
-      const pB = b.placement ?? 999;
-      if (pA !== pB) return pA - pB;
-      return (b.kills || 0) - (a.kills || 0);
-    });
-  }, [draftRows]);
+    return [...draftRows]
+      .map((row) => ({
+        ...row,
+        team_name: resolveLiveTeamName(row.team_id, row.team_name, teamMap),
+      }))
+      .sort((a, b) => {
+        if ((b.total_points || 0) !== (a.total_points || 0)) {
+          return (b.total_points || 0) - (a.total_points || 0);
+        }
+        const pA = a.placement ?? 999;
+        const pB = b.placement ?? 999;
+        if (pA !== pB) return pA - pB;
+        return (b.kills || 0) - (a.kills || 0);
+      });
+  }, [draftRows, teamMap]);
 
   const cumulativeStandings = useMemo(
     () =>
@@ -196,7 +230,7 @@ export function BattleRoyaleControlPanel({
   };
 
   const toggleSquadCheckIn = async (teamId: string) => {
-    if (!canEditEsports) return;
+    if (!canCheckInBr) return;
     const t = teamMap.get(teamId);
     if (!t) return;
     const nextStatus = t.check_in_status === "checked_in" ? "not_checked_in" : "checked_in";
@@ -350,7 +384,7 @@ export function BattleRoyaleControlPanel({
   };
 
   const handleSaveDraftOrSubmit = async (submitForConfirm: boolean) => {
-    if (!activeLobby || !canEditEsports) return;
+    if (!activeLobby || !canScoreBr) return;
     if (submitForConfirm && !validation.isValid) {
       onError(validation.errors.join(" "));
       return;
@@ -407,19 +441,26 @@ export function BattleRoyaleControlPanel({
 
     setBusy(true);
     try {
+      const hydratedDrafts = hydrateBrResultsWithLiveTeamNames(draftRows, teamMap);
       const rpcRes = await supabase.rpc("confirm_match_result_and_advance", {
         p_match_id: activeLobby.id,
         p_winner_id: top?.team_id || null,
         p_score_a: 0,
         p_score_b: 0,
         p_detailed_scores: activeLobby.detailed_scores || {},
-        p_br_results: draftRows,
+        p_br_results: hydratedDrafts,
       });
       if (rpcRes.error) {
+        const isMissingFn =
+          rpcRes.error.code === "PGRST202" ||
+          String(rpcRes.error.message || "").includes("Could not find the function");
+        if (!isMissingFn) {
+          throw rpcRes.error;
+        }
         const { error: uErr } = await supabase
           .from("matches")
           .update({
-            br_results: draftRows,
+            br_results: hydratedDrafts,
             winner_id: top?.team_id || null,
             status: "completed",
             result_status: "confirmed",
@@ -468,6 +509,12 @@ export function BattleRoyaleControlPanel({
         p_force_cascade: true,
       });
       if (rpcRes.error) {
+        const isMissingFn =
+          rpcRes.error.code === "PGRST202" ||
+          String(rpcRes.error.message || "").includes("Could not find the function");
+        if (!isMissingFn) {
+          throw rpcRes.error;
+        }
         await supabase
           .from("matches")
           .update({
@@ -555,43 +602,66 @@ export function BattleRoyaleControlPanel({
           {brLobbies.map((lobby) => {
             const selected = lobby.id === activeLobby?.id;
             return (
-              <button
+              <div
                 key={lobby.id}
-                type="button"
-                onClick={() => setSelectedLobbyId(lobby.id)}
-                className={`min-w-[170px] text-left px-3.5 py-2.5 rounded-xl border transition-colors cursor-pointer shrink-0 ${
+                className={`min-w-[185px] rounded-xl border transition-colors shrink-0 flex flex-col ${
                   selected
                     ? "bg-[#0B1120] border-[#0B1120] text-white"
                     : "bg-white border-slate-200 text-slate-800 hover:bg-slate-50"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase">
-                  <span className={selected ? "text-slate-300" : "text-slate-500"}>
-                    {lobby.match_code || lobby.round}
-                  </span>
-                  <span
-                    className={`font-bold ${
-                      lobby.status === "completed"
-                        ? selected
-                          ? "text-emerald-300"
-                          : "text-emerald-700"
-                        : lobby.status === "live"
-                        ? "text-orange-400"
-                        : selected
-                        ? "text-slate-300"
-                        : "text-slate-500"
+                <button
+                  type="button"
+                  onClick={() => setSelectedLobbyId(lobby.id)}
+                  className="w-full text-left px-3.5 pt-2.5 pb-2 bg-transparent border-0 text-inherit cursor-pointer"
+                >
+                  <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase">
+                    <span className={selected ? "text-slate-300" : "text-slate-500"}>
+                      {lobby.match_code || lobby.round}
+                    </span>
+                    <span
+                      className={`font-bold ${
+                        lobby.status === "completed"
+                          ? selected
+                            ? "text-emerald-300"
+                            : "text-emerald-700"
+                          : lobby.status === "live"
+                          ? "text-orange-400"
+                          : selected
+                          ? "text-slate-300"
+                          : "text-slate-500"
+                      }`}
+                    >
+                      {MATCH_STATUS_LABELS[lobby.status] || lobby.status}
+                    </span>
+                  </div>
+                  <div className="text-xs font-bold mt-1 truncate">
+                    {lobby.round} · {lobby.group_name || "Lobby"}
+                  </div>
+                  <div className={`text-[11px] font-mono mt-0.5 ${selected ? "text-slate-300" : "text-slate-500"}`}>
+                    {lobby.br_results?.length || 0} squads
+                  </div>
+                </button>
+                {canEditFixtureTeams && onEditMatch && (
+                  <div
+                    className={`px-3.5 py-1.5 border-t flex justify-end ${
+                      selected ? "border-slate-800" : "border-slate-100"
                     }`}
                   >
-                    {MATCH_STATUS_LABELS[lobby.status] || lobby.status}
-                  </span>
-                </div>
-                <div className="text-xs font-bold mt-1 truncate">
-                  {lobby.round} · {lobby.group_name || "Lobby"}
-                </div>
-                <div className={`text-[11px] font-mono mt-0.5 ${selected ? "text-slate-300" : "text-slate-500"}`}>
-                  {lobby.br_results?.length || 0} squads
-                </div>
-              </button>
+                    <button
+                      type="button"
+                      aria-label={`Edit Match ${lobby.match_code || lobby.round}`}
+                      onClick={() => onEditMatch(lobby)}
+                      className={`text-[10px] font-semibold inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer ${
+                        selected ? "text-sky-300 hover:text-white" : "text-blue-700 hover:underline"
+                      }`}
+                    >
+                      <Edit3 size={10} />
+                      <span>Edit Match</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
@@ -617,7 +687,7 @@ export function BattleRoyaleControlPanel({
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {canEditEsports && activeLobby.status !== "completed" && activeLobby.status !== "live" && (
+                {canStartLobby && activeLobby.status !== "completed" && activeLobby.status !== "live" && (
                   <button
                     type="button"
                     disabled={busy}
@@ -629,6 +699,17 @@ export function BattleRoyaleControlPanel({
                   >
                     <Play size={12} />
                     <span>Start Lobby</span>
+                  </button>
+                )}
+                {canEditFixtureTeams && onEditMatch && (
+                  <button
+                    type="button"
+                    aria-label={`Edit Match ${activeLobby.match_code || activeLobby.round}`}
+                    onClick={() => onEditMatch(activeLobby)}
+                    className="min-h-[34px] px-3 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-xs font-semibold text-blue-900 inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Edit3 size={12} />
+                    <span>Edit Match</span>
                   </button>
                 )}
                 <button
@@ -653,13 +734,44 @@ export function BattleRoyaleControlPanel({
               </div>
             )}
 
-            {/* Squad Allocation & Check-in Drawer Inline */}
-            {activeLobby.status !== "completed" && roster.length > 0 && (
+            {/* Squad Allocation & Searchable Add/Substitute Inline */}
+            {activeLobby.status !== "completed" && allGameTeams.length > 0 && (
               <details className="rounded-lg border border-slate-200 bg-slate-50/70 p-3 text-xs">
                 <summary className="font-semibold text-slate-800 cursor-pointer flex items-center gap-1.5">
                   <Users size={13} />
-                  <span>Manage Squads in Lobby ({draftRows.length} / {roster.length} available)</span>
+                  <span>Manage Squads in Lobby ({draftRows.length} active · click to add/remove)</span>
                 </summary>
+                {selectedGame && (
+                  <div className="mt-3 pt-2 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+                    <div className="sm:col-span-9">
+                      <SearchableTeamSelect
+                        id="br-add-squad-search"
+                        label="Add Registered Squad to Lobby"
+                        teams={allGameTeams}
+                        gameId={selectedGame.id}
+                        value={addSquadId}
+                        onChange={setAddSquadId}
+                        excludeDisqualified
+                        excludeTeamIds={draftRows.map((r) => r.team_id)}
+                        placeholder="Search registered squad by name or ref..."
+                      />
+                    </div>
+                    <div className="sm:col-span-3">
+                      <button
+                        type="button"
+                        disabled={!addSquadId}
+                        onClick={() => {
+                          if (!addSquadId) return;
+                          toggleSquadMembership(addSquadId);
+                          setAddSquadId(null);
+                        }}
+                        className="w-full h-[42px] px-3 rounded-lg bg-[#0B1120] hover:bg-slate-800 disabled:opacity-40 text-white font-semibold cursor-pointer"
+                      >
+                        Add Squad
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-3 max-h-44 overflow-y-auto">
                   {roster.map((t) => {
                     const included = draftRows.some((r) => r.team_id === t.id);
@@ -702,6 +814,7 @@ export function BattleRoyaleControlPanel({
                 <tbody className="divide-y divide-slate-100">
                   {draftRows.map((row) => {
                     const reg = teamMap.get(row.team_id);
+                    const liveTeamName = resolveLiveTeamName(row.team_id, row.team_name, teamMap);
                     const isDup = validation.duplicateTeamIds.has(row.team_id);
                     const isMissing = validation.missingTeamIds.has(row.team_id);
                     const checkedIn = reg?.check_in_status === "checked_in";
@@ -711,16 +824,17 @@ export function BattleRoyaleControlPanel({
                       <tr key={row.team_id} className={isDup ? "bg-rose-50/60" : ""}>
                         <td className="py-2 px-3">
                           <div className="font-semibold text-slate-900">
-                            {row.team_name || reg?.team_name || row.team_id}
+                            {liveTeamName}
                           </div>
                           <div className="text-[11px] text-slate-500 font-mono">
-                            {row.registration_ref || reg?.registration_ref || ""}
+                            {reg?.registration_ref || row.registration_ref || ""}
+                            {reg?.selection_status === "disqualified" ? " · DISQUALIFIED" : ""}
                           </div>
                         </td>
                         <td className="py-2 px-3">
                           <button
                             type="button"
-                            disabled={!canEditEsports}
+                            disabled={!canCheckInBr}
                             onClick={() => toggleSquadCheckIn(row.team_id)}
                             className={`px-2 py-1 rounded border text-[11px] font-medium cursor-pointer ${
                               checkedIn
@@ -801,7 +915,7 @@ export function BattleRoyaleControlPanel({
                   )
                 ) : (
                   <>
-                    {canEditEsports && (
+                    {canScoreBr && (
                       <>
                         <button
                           type="button"

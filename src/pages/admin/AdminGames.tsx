@@ -78,7 +78,7 @@ export default function AdminGames() {
         supabase
           .from("user_roles")
           .select("user_id, role")
-          .in("role", ["match_conductor", "esports_manager", "crm_admin", "super_admin"]),
+          .in("role", ["match_conductor", "esports_manager", "score_operator", "crm_admin", "event_admin", "super_admin"]),
         supabase.from("profiles").select("id, email, full_name, account_status"),
       ]);
 
